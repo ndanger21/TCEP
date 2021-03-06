@@ -69,59 +69,7 @@ take_down_swarm() {
     done
 }
 
-setup_instance() {
-    echo "Setting up instance $1"
 
-    setUser $1
-    echo "logged in $u"
-    ssh-keyscan -H $1 >> ~/.ssh/known_hosts
-    ssh -t -p $port $u@$1 "sudo hostname node$2"
-    #ssh -T -p $port $u@$1 "grep -q -F '127.0.0.1 $2' /etc/hosts || sudo bash -c \"echo '127.0.0.1 $2' >> /etc/hosts\""
-    ssh -T -p $port $u@$1 <<-'ENDSSH'
-        mkdir -p ~/src && mkdir -p ~/logs
-
-    if ! [ -x "$(command -v docker)" ]; then
-        # Update the apt package index
-        sudo apt-get update
-
-        # Install packages to allow apt to use a repository over HTTPS
-        sudo apt-get install -y \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        software-properties-common
-
-        # Add Docker’s official GPG key
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-
-        # Use the following command to set up the stable repository
-        sudo add-apt-repository \
-        "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
-        $(lsb_release -cs) \
-        stable"
-
-        # Update the apt package index
-        sudo apt-get update
-
-        # Install the latest version of Docker CE
-        sudo apt-get install docker-ce -y
-
-        # Create the docker group.
-        sudo groupadd docker
-
-        # Add your user to the docker group.
-        sudo usermod -aG docker $USER
-
-	#Install docker-compose version 1.17
-	sudo curl -L https://github.com/docker/compose/releases/download/1.17.0/docker-compose-`uname -s`-`uname -m` -o /usr/local/bin/docker-compose
-	sudo chmod +x /usr/local/bin/docker-compose
-
-    else
-        echo "Docker already installed on $1"
-        sudo usermod -a -G docker $USER
-    fi
-ENDSSH
-}
 
 setup() {
   if [ ${#workers[@]} -le $((n_publisher_nodes_total)) ]; then
@@ -133,10 +81,10 @@ setup() {
     do
       count=$((count+1))
       setUser $i
-      setup_instance $i $count #> /dev/null
+      setup_docker $i $u $count #> /dev/null
     done
     setUser $manager
-    setup_instance $manager 0
+    setup_docker $manager $u 0
     res=`wait` # wait for all setup_instance calls to finish
     echo "$(date +%H:%M:%S) setup done"
   fi

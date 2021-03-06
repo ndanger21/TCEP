@@ -28,7 +28,6 @@ build_local() {
   cp -r $work_dir/mobility_traces $work_dir/dockerbuild/
   docker build -t $registry_user/$tcep_image $work_dir/dockerbuild && \
 
-  sed -i -r "s#const SERVER = \"(.*?)\"#const SERVER = \"$(hostname -i)\"#" ${work_dir}/gui/src/graph.js
   printf "\nBuilding GUI image\n" && \
   cd $work_dir/gui && \
   docker build -t $registry_user/$gui_image . && \

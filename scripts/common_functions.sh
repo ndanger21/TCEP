@@ -1,3 +1,7 @@
+if [ -z $port ];
+then port=22
+fi
+
 setup_docker_remote() {
   ssh $1 "docker --version" || ssh $1 -tt <<-'ENDSSH'
     if ! [ -x "$(command -v docker)" ]; then
@@ -85,4 +89,56 @@ adjust_config() {
    	  sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://gui:3000\"#" ${work_dir}/src/main/resources/application.conf
     fi
 
+}
+
+
+setup_docker() {
+    echo "Setting up docker on instance $1"
+    ssh-keyscan -H $1 >> ~/.ssh/known_hosts
+    ssh -t -p $port $2@$1 "sudo hostname node$3"
+    #ssh -T -p $port $2@$1 "grep -q -F '127.0.0.1 $3' /etc/hosts || sudo bash -c \"echo '127.0.0.1 $3' >> /etc/hosts\""
+    ssh -T -p $port $2@$1 <<-'ENDSSH'
+        mkdir -p ~/src && mkdir -p ~/logs
+
+    if ! [ -x "$(command -v docker)" ]; then
+        # Update the apt package index
+        sudo apt-get update
+
+        # Install packages to allow apt to use a repository over HTTPS
+        sudo apt-get install -y \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        software-properties-common
+
+        # Add Docker’s official GPG key
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+
+        # Use the following command to set up the stable repository
+        sudo add-apt-repository \
+        "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+        $(lsb_release -cs) \
+        stable"
+
+        # Update the apt package index
+        sudo apt-get update
+
+        # Install the latest version of Docker CE
+        sudo apt-get install docker-ce -y
+
+        # Create the docker group.
+        sudo groupadd docker
+
+        # Add your user to the docker group.
+        sudo usermod -aG docker $USER
+
+	#Install docker-compose version 1.17
+	sudo curl -L https://github.com/docker/compose/releases/download/1.17.0/docker-compose-`uname -s`-`uname -m` -o /usr/local/bin/docker-compose
+	sudo chmod +x /usr/local/bin/docker-compose
+
+    else
+        echo "Docker already installed on $1"
+        sudo usermod -a -G docker $USER
+    fi
+ENDSSH
 }
