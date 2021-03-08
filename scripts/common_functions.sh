@@ -60,6 +60,10 @@ adjust_config() {
     local gui_host=$4
     local mininet=$5
     local wifi=$6
+    local gui_port=$7
+    if [ -z $7 ]; then
+      gui_port=3000
+    fi
     echo "configuring application.conf for $nSpeedPublishers speed publishers and $nNodesTotal nodes total"
     sed -i -r "s#mininet-simulation = .*#mininet-simulation = ${mininet}#" ${work_dir}/src/main/resources/application.conf
     sed -i -r "s#min-nr-of-members = [0-9]*#min-nr-of-members = $nNodesTotal#" ${work_dir}/src/main/resources/application.conf
@@ -67,9 +71,13 @@ adjust_config() {
     sed -i -r "s#number-of-road-sections = [0-9]*#number-of-road-sections = $sections#" ${work_dir}/src/main/resources/application.conf
     sed -i -r 's| \"akka\.tcp://tcep@| #\"akka.tcp://tcep@|' ${work_dir}/src/main/resources/application.conf
     sed -i -r "s#const SERVER = \"(.*?)\"#const SERVER = \"${gui_host}\"#" ${work_dir}/gui/src/graph.js
+    sed -i -r "s#const GUI_PORT = .*#const GUI_PORT = ${gui_port}#" ${work_dir}/gui/src/graph.js
+    sed -i -r "s#const GUI_PORT = .*#const GUI_PORT = ${gui_port}#" ${work_dir}/gui/constants.js
+    # use perl since sed is a pia to use for multi-line matching
+    perl -0777 -i -pe "s/tcep-gui\n\s+.*\n\s+-\s[0-9]+:[0-9]+/tcep-gui\n    ports:\n      - ${gui_port}:${gui_port}/igs" ${work_dir}/docker-stack.yml
 
     if [[ $mininet == "true" ]]; then # mininet simulation
-      sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://${gui_host}:3000\"#" ${work_dir}/src/main/resources/application.conf
+      sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://${gui_host}:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
       if [[ $wifi == "true" ]]; then
         sed -i -r 's| #\"akka\.tcp://tcep@20\.0\.0\.15:\"\$\{\?constants\.base-port\}\"\"| \"akka.tcp://tcep@20.0.0.15:\"${?constants.base-port}\"\"|' ${work_dir}/src/main/resources/application.conf
         sed -i -r "s#const TCEP_SERVER = \"(.*?)\"#const TCEP_SERVER = \"20.0.0.15\"#" ${work_dir}/gui/constants.js
@@ -86,7 +94,7 @@ adjust_config() {
       sed -i -r "s#const TCEP_SERVER = \"(.*?)\"#const TCEP_SERVER = \"simulator\"#" ${work_dir}/gui/constants.js
       sed -i -r "s#const INTERACTIVE_SIMULATION_ENABLED = (.*?)#const INTERACTIVE_SIMULATION_ENABLED = true#" ${work_dir}/gui/src/graph.js
       sed -i -r "s#const INTERACTIVE_SIMULATION_ENABLED = (.*?)#const INTERACTIVE_SIMULATION_ENABLED = true#" ${work_dir}/gui/constants.js
-   	  sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://gui:3000\"#" ${work_dir}/src/main/resources/application.conf
+   	  sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://gui:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
     fi
 
 }

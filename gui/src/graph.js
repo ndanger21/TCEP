@@ -1,6 +1,6 @@
 // this must be the same as manager ip since requests are handled by route.js
-const SERVER = "localhost"
-const GUI_PORT = 3000
+const SERVER = "217.160.60.42"
+const GUI_PORT = 80
 const INTERACTIVE_SIMULATION_ENABLED = true
 
 // Holds the current data received from the GUI server

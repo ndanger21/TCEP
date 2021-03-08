@@ -19,7 +19,7 @@ services:
   gui:
     image: nieda2018/tcep-gui
     ports:
-       - 3000:3000
+      - 80:80
     networks:
        - main
     deploy:

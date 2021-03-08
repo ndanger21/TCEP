@@ -2,7 +2,7 @@
 // set server name to simulator for docker stack deployment -> requests to TCEPSocket must go to simulator container, not gui container
 const TCEP_SERVER = "simulator"
 const TCEP_PORT = "25001"
-const GUI_PORT = 3000
+const GUI_PORT = 80
 const INTERACTIVE_SIMULATION_ENABLED = true
 
 module.exports = {

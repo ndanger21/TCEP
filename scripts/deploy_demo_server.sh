@@ -6,6 +6,7 @@ source "$work_dir/scripts/common_functions.sh"
 U=${user}
 HOST=$manager
 REMOTE=$U@${HOST}
+GUI_PORT=80
 
 setup_docker ${HOST} $U 0
 ssh ${REMOTE} 'docker swarm init'
@@ -15,7 +16,7 @@ ssh ${REMOTE} 'docker node update --label-add worker=true node0'
 scp ../docker-stack.yml ${REMOTE}:~
 nNodesTotal=$(($n_speed_streams + 2 + 1 + 1)) # speedPublishers, 2workers, 1densityPublisher, simulator
 echo "number of containers: ${nNodesTotal}"
-adjust_config $n_speed_streams $n_speed_streams $nNodesTotal $HOST "false" "false"
+adjust_config $n_speed_streams $n_speed_streams $nNodesTotal $HOST "false" "false" ${GUI_PORT}
 ./build.sh
 rm -rf $work_dir/dockerbuild
 ssh ${REMOTE} "docker pull $registry_user/$tcep_image"
