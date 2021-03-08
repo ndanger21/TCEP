@@ -16,6 +16,8 @@ import tcep.utils.{SpecialStats, TCEPUtils}
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
+import scala.sys.process._
+import scala.util.{Failure, Success}
 
 
 /**
@@ -27,21 +29,44 @@ import scala.concurrent.{ExecutionContext, Future}
 class DistVivaldiActor extends ClusterActor with ActorLogging {
 
   private val errorThreshold = ConfigFactory.load().getDouble("constants.coordinates-error-threshold")
-  //private val pool = Executors.newCachedThreadPool()
-  //protected implicit val ec = ExecutionContext.fromExecutorService(pool)
   implicit val timeout = Timeout(ConfigFactory.load().getInt("constants.coordinate-request-timeout"), TimeUnit.SECONDS)
   private val refreshInterval = ConfigFactory.load().getInt("constants.coordinates-refresh-interval")
   private var updatesStarted = false
   private var coordsInitialized = false
 
   val refreshTask: Runnable = () => {
-
     val activeMembers = cluster.state.members.filter(m => m.status == MemberStatus.up && !m.equals(cluster.selfMember) && !m.address.equals(cluster.selfAddress))
     activeMembers.foreach(m => TCEPUtils.selectDistVivaldiOn(cluster, m.address) ! VivaldiPing(System.currentTimeMillis()))
 
     if (DistVivaldiActor.localPos.localConfidence >= errorThreshold)
       context.system.scheduler.scheduleOnce(refreshInterval / 5.0 seconds, refreshTask)
     else context.system.scheduler.scheduleOnce(refreshInterval seconds, refreshTask)
+  }
+
+  def ping: Runnable = () => {
+    implicit val ec: ExecutionContext = blockingIoDispatcher
+    val members = cluster.state.members.filter(m => m.status == MemberStatus.Up && m != cluster.selfMember)
+    val pings = Future { members.toList.map(m => {
+      try {
+        val res = s"ping -c 1 ${m.address.host.getOrElse("localhost")}".!!
+        val received = "[\\d]*\\sreceived,".r.findAllIn(res).toList.last.split(" ")(0)
+        // min/avg/max/mdev = 0.015/0.015/0.015/0.000
+        val ping = "min/avg/max/mdev = .+/.+/".r.findAllIn(res).toList.head.split(" ")(2).split("/")(1)
+        SpecialStats.log(this.toString, "pings", s"${m.address};$received;${ping}ms")
+        received.toInt
+      } catch {
+        case e: Throwable =>
+          SpecialStats.log(this.toString, "pings", s"${m.address};FAILED, cause: $e")
+          0
+      }
+    })}
+    pings.onComplete {
+      case Success(value) =>
+        SpecialStats.log(this.toString, "pings", s"${value.count(_ == 1)} of ${members.size};${value.mkString(";")}\n")
+        SpecialStats.log(this.toString, "pings", s"cluster state: ${cluster.state.members.count(_.status == MemberStatus.up)} up, ${cluster.state.unreachable.size} unreachable: ${cluster.state.unreachable}; ${cluster.state.members.mkString(";")}")
+        context.system.scheduler.scheduleOnce(refreshInterval seconds, ping)
+      case Failure(exception) => context.system.scheduler.scheduleOnce(refreshInterval seconds, ping)
+    }
   }
 
   override def preStart(): Unit = {
@@ -55,6 +80,7 @@ class DistVivaldiActor extends ClusterActor with ActorLogging {
       if(!updatesStarted) {
         log.info("starting periodic coordinate updates")
         context.system.scheduler.scheduleOnce(0 seconds, refreshTask)
+        //if(transitionLogEnabled) context.system.scheduler.scheduleOnce(1 seconds, ping)
         updatesStarted = true
       }
 
@@ -77,17 +103,19 @@ class DistVivaldiActor extends ClusterActor with ActorLogging {
           if (updateResult) {
             DistVivaldiActor.updates += 1
             if(DistVivaldiActor.localPos.localConfidence <= errorThreshold && !coordsInitialized) {
-              TCEPUtils.selectSimulator(cluster) ! VivaldiCoordinatesEstablished()
-              coordsInitialized = true
+              for {
+                simulator <- TCEPUtils.selectSimulator(cluster).resolveOne()
+                delivery <- TCEPUtils.guaranteedDelivery(context, simulator, VivaldiCoordinatesEstablished()).mapTo[ACK]
+              } yield coordsInitialized = true
             }
-            val vivaldiDistance = DistVivaldiActor.localPos.coordinates.distance(pong.receiverPosition.coordinates)
-            SpecialStats.log(s"${this.self}", "DistVivaldi", s"updated coordinates to ${DistVivaldiActor.localPos.coordinates}" +
-              s"; ${s.path.address} : pos: ${pong.receiverPosition.coordinates} latency ${latency}ms | vivaldi distance: ${vivaldiDistance} -> absolute error ${math.abs(vivaldiDistance - latency)} relative error ${(vivaldiDistance - latency) / latency}")
+            //val vivaldiDistance = DistVivaldiActor.localPos.coordinates.distance(pong.receiverPosition.coordinates)
+            //SpecialStats.log(s"${this.self}", "DistVivaldi", s"updated coordinates to ${DistVivaldiActor.localPos.coordinates}" +
+            //  s"; ${s.path.address} : pos: ${pong.receiverPosition.coordinates} latency ${latency}ms | vivaldi distance: ${vivaldiDistance} -> absolute error ${math.abs(vivaldiDistance - latency)} relative error ${(vivaldiDistance - latency) / latency}")
           }
         } catch {
           case e: Throwable =>
             DistVivaldiActor.failedUpdates += 1
-            log.info(s"failed to update coordinates with $pong from ${s}, \n cause: ${e.getMessage} ")
+            log.info(s"failed to update coordinates with $pong from ${s} (latency: $latency), cause: ${e} ")
             //e.printStackTrace()
         }
       } else log.info(s"ignoring vivaldi pong from local actor, rtt was $rtt")
@@ -98,22 +126,17 @@ class DistVivaldiActor extends ClusterActor with ActorLogging {
     case _: MemberEvent => // ignore
   }
 
-  def currentClusterState(state: CurrentClusterState): Unit = {
+  override def currentClusterState(state: CurrentClusterState): Unit = {
     val vivMembers = state.members.filter(m => m.status == MemberStatus.Up)
     for (member <- vivMembers) {
       val vivaldiRefActor = TCEPUtils.selectDistVivaldiOn(cluster, member.address)
-      save(member, vivaldiRefActor)
+      DistVivaldiActor.upMembers = DistVivaldiActor.upMembers.updated(member, vivaldiRefActor)
     }
   }
 
-  def memberUp(member: Member): Unit = {
-    //Thread.sleep(5000)
+  override def memberUp(member: Member): Unit = {
     val vivaldiRefActor = TCEPUtils.selectDistVivaldiOn(cluster, member.address)
-    save(member, vivaldiRefActor)
-  }
-
-  def save(member: Member, selection: ActorSelection) = {
-    DistVivaldiActor.upMembers = DistVivaldiActor.upMembers.updated(member, selection)
+    DistVivaldiActor.upMembers = DistVivaldiActor.upMembers.updated(member, vivaldiRefActor)
   }
 
 }
@@ -122,13 +145,12 @@ object DistVivaldiActor {
 
   private var distVivRef: ActorRef = _
   lazy val logger = LoggerFactory.getLogger(getClass)
-  implicit val ec = ExecutionContext.Implicits.global // TODO which to use?
   implicit val timeout = Timeout(ConfigFactory.load().getInt("constants.coordinate-request-timeout"), TimeUnit.SECONDS)
 
   @volatile var localPos = VivaldiPosition.create()
   //val upMembers: ListBuffer[ActorSelection] = ListBuffer.empty
   var upMembers: Map[Member, ActorSelection] = Map()
-  var initialized = false
+  @volatile var initialized = false
   var updates: Int = 0
   var failedUpdates: Int = 0
   var coordinatesMap: Map[Address, Coordinates] = Map()
@@ -137,7 +159,6 @@ object DistVivaldiActor {
     initialized = true
     distVivRef = actorSystem.actorOf(Props(new DistVivaldiActor).withMailbox("prio-mailbox"), "DistVivaldiRef")
     logger.info(s"generated distributed vivaldi actor $distVivRef")
-    SpecialStats.debug(s"$this", s"generated distributed vivaldi actor $distVivRef")
     distVivRef
   } else distVivRef
 
@@ -155,19 +176,17 @@ object DistVivaldiActor {
   }
 
   def getCoordinatesLocally(cluster: Cluster, address: Address): Option[Coordinates] = {
-
     if (address.equals(cluster.selfAddress) || address.host.isEmpty) Some(this.localPos.coordinates)
     else if (this.coordinatesMap.contains(address)) Some(this.coordinatesMap(address))
     else None
   }
 
-    def getCoordinates(cluster: Cluster, address: Address): Future[CoordinatesResponse] = {
-
+    def getCoordinates(cluster: Cluster, address: Address)(implicit ec: ExecutionContext): Future[CoordinatesResponse] = {
       val startTime = System.currentTimeMillis()
       val localRequest = this.getCoordinatesLocally(cluster, address)
       if(localRequest.isDefined) Future { CoordinatesResponse(localRequest.get) }
       else { // no coordinates of remote node available
-        SpecialStats.debug(s"$this", s"received coord request for $address, no entry exists -> asking explicitly")
+        implicit val ec: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
         logger.warn(s"coordinate request for  $address failed since no local entry is available yet, asking explicitly")
         val remoteRequest = for {
           distViv <- TCEPUtils.selectDistVivaldiOn(cluster, address).resolveOne()
@@ -179,9 +198,9 @@ object DistVivaldiActor {
 
         remoteRequest.onComplete {
           case scala.util.Success(coords) =>
-            SpecialStats.debug(s"$this", s"retrieving coordinates from $address  took ${System.currentTimeMillis() - startTime}ms")
+            logger.debug(s"explicitly retrieving coordinates from $address  took ${System.currentTimeMillis() - startTime}ms")
           case scala.util.Failure(exception) =>
-            SpecialStats.debug(s"$this", s"failed to retrieve coordinates from $address after ${System.currentTimeMillis() - startTime}ms \n $exception")
+            logger.error(s"failed to explicitly retrieve coordinates from $address after ${System.currentTimeMillis() - startTime}ms", exception)
         }
         remoteRequest
       }

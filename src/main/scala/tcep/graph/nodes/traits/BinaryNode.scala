@@ -1,16 +1,11 @@
 package tcep.graph.nodes.traits
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorRef, PoisonPill}
-import akka.util.Timeout
-import com.typesafe.config.ConfigFactory
 import tcep.data.Events._
 import tcep.data.Queries._
 import tcep.graph.nodes.ShutDown
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, Subscribe}
 import tcep.graph.transition.{TransferredState, TransitionRequest, TransitionStats}
-import tcep.machinenodes.helper.actors.ACK
 import tcep.placement.PlacementStrategy
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.utils.TCEPUtils
@@ -25,10 +20,9 @@ trait BinaryNode extends Node {
   override val query: BinaryQuery
   var parentNode1: ActorRef
   var parentNode2: ActorRef
+  //can have multiple active parents due to SMS mode (we could receive messages from previous parent instances during transition)
   val p1List: ListBuffer[ActorRef] = ListBuffer()
   val p2List: ListBuffer[ActorRef] = ListBuffer()
-  var childNode1Created: Boolean = false
-  var childNode2Created: Boolean = false
 
   private var parent1TransitInProgress = false
   private var parent2TransitInProgress = false
@@ -43,15 +37,18 @@ trait BinaryNode extends Node {
     p2List += parentNode2
   }
 
-  override def subscribeToParents(): Unit = {
-    implicit val resolveTimeout = Timeout(15, TimeUnit.SECONDS)
-    for {
-      sub1 <- TCEPUtils.guaranteedDelivery(context, parentNode1, Subscribe(self))(blockingIoDispatcher).mapTo[AcknowledgeSubscription]
-      sub2 <- TCEPUtils.guaranteedDelivery(context, parentNode2, Subscribe(self))(blockingIoDispatcher).mapTo[AcknowledgeSubscription]
-    } yield {
-      log.info(s"$self \n subscribed for events from \n${parentNode1.toString()} and \n${parentNode2.toString()} \n parent list: \n ${p1List} \n ${p2List}")
-      transitionLog(s"successfully subscribed to ${p1List.size + p2List.size} parents ")
-    }
+  private def updateParent1(oldParent: ActorRef, newParent: ActorRef): Unit = {
+    p1List += newParent
+    p1List -= oldParent
+    parentNode1 = newParent
+    updateParentOperatorMap(oldParent, newParent)
+  }
+
+  private def updateParent2(oldParent: ActorRef, newParent: ActorRef): Unit = {
+    p2List += newParent
+    p2List -= oldParent
+    parentNode2 = newParent
+    updateParentOperatorMap(oldParent, newParent)
   }
 
   // child receives control back from parent that has completed their transition
@@ -59,43 +56,32 @@ trait BinaryNode extends Node {
     implicit val ec: ExecutionContext = blockingIoDispatcher
     if(!selfTransitionStarted) {
       transitionConfig.transitionExecutionMode match {
-        case TransitionExecutionModes.CONCURRENT_MODE => {
-
+        case TransitionExecutionModes.CONCURRENT_MODE =>
           if (p1List.contains(oldParent)) {
-            p1List += newParent
-            p1List -= oldParent
-            parentNode1 = newParent
+            updateParent1(oldParent, newParent)
             parent1TransitInProgress = false
           } else if (p2List.contains(oldParent)) {
-            p2List += newParent
-            p2List -= oldParent
-            parentNode2 = newParent
+            updateParent2(oldParent, newParent)
             parent2TransitInProgress = false
           } else {
             transitionLog(s"received TransferState msg from non-parent: ${oldParent}; parents: ${p1List.map(_.path.name)} ${p2List.map(_.path.name)}")
             log.error(new IllegalStateException(s"received TransferState msg from non-parent: ${oldParent}; \n parents: \n $p1List \n $p2List"), "TRANSITION ERROR")
           }
-        }
 
-        case TransitionExecutionModes.SEQUENTIAL_MODE => {
+        case TransitionExecutionModes.SEQUENTIAL_MODE =>
           if (p1List.contains(oldParent)) {
-            p1List += newParent
-            p1List -= oldParent
+            updateParent1(oldParent, newParent)
             parent1TransitInProgress = false
-            parentNode1 = newParent
             TCEPUtils.guaranteedDelivery(context, p2List.last, TransitionRequest(algorithm, self, stats), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
             parent2TransitInProgress = true
 
           } else if (p2List.contains(oldParent)) {
-            p2List += newParent
-            p2List -= oldParent
+            updateParent2(oldParent, newParent)
             parent2TransitInProgress = false
-            parentNode2 = newParent
           } else {
             transitionLog(s"received TransferState msg from non-parent: ${oldParent}; parents: ${p1List.map(_.path.name)} ${p2List.map(_.path.name)}")
             log.error(new IllegalStateException(s"received TransferState msg from non-parent: ${oldParent}; \n parents: \n $p1List \n $p2List"), "TRANSITION ERROR")
           }
-        }
       }
 
       accumulateTransitionStats(stats)
@@ -111,35 +97,19 @@ trait BinaryNode extends Node {
 
   override def childNodeReceive: Receive = {
     case DependenciesRequest => sender ! DependenciesResponse(Seq(p1List.last, p2List.last))
-    case Created if p1List.contains(sender()) => {
-      childNode1Created = true
-      log.info("received Created from parent1")
-      if (childNode2Created) emitCreated()
-    }
-    case Created if p2List.contains(sender()) => {
-      childNode2Created = true
-      log.info("received Created from parent2")
-      if (childNode1Created) emitCreated()
-    }
 
     //parent has transited to the new node
-    case TransferredState(algorithm, newParent, oldParent, stats) => {
-      sender() ! ACK()
+    case TransferredState(algorithm, newParent, oldParent, stats, lastOperator) =>
       handleTransferredState(algorithm, newParent, oldParent, stats)
-    }
 
     case OperatorMigrationNotice(oldOperator, newOperator) => { // received from migrating parent (oldParent)
       if(p1List.contains(oldOperator)) {
-        p1List -= oldOperator
-        p1List += newOperator
-        parentNode1 = newOperator
+        updateParent1(oldOperator, newOperator)
       }
       if(p2List.contains(oldOperator)) {
-        p2List -= oldOperator
-        p2List += newOperator
-        parentNode2 = newOperator
+        updateParent2(oldOperator, newOperator)
       }
-      TCEPUtils.guaranteedDelivery(context, newOperator, Subscribe(self))(blockingIoDispatcher).mapTo[AcknowledgeSubscription]
+      TCEPUtils.guaranteedDelivery(context, newOperator, Subscribe(self, query))(blockingIoDispatcher).mapTo[AcknowledgeSubscription]
       log.info(s"received operator migration notice from ${oldOperator}, \n new operator is $newOperator \n updated parents $p1List $p2List")
     }
 
@@ -185,6 +155,6 @@ trait BinaryNode extends Node {
     transitionStatsAcc
   }
 
-  def getParentOperators(): Seq[ActorRef] = Seq(p1List.last, p2List.last)
+  override def getParentActors(): List[ActorRef] = List(p1List.last, p2List.last)
 
 }

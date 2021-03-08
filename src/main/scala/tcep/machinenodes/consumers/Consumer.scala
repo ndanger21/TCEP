@@ -3,10 +3,11 @@ package tcep.machinenodes.consumers
 import akka.actor.ActorLogging
 import tcep.data.Events.Event
 import tcep.data.Queries.{Query, Stream1}
-import tcep.graph.qos.{AverageFrequencyMonitorFactory, LoadMonitorFactory, MessageHopsMonitorFactory, Monitor, MonitorFactory, NetworkUsageMonitorFactory, PathLatencyMonitorFactory, MessageOverheadMonitorFactory, PublishingRateMonitorFactory, TransitionMonitorFactory}
-import tcep.machinenodes.consumers.Consumer.{GetAllRecords, GetMonitorFactories, GetQuery, GetRequirementChange, SetQosMonitors, SetStatus, SetStreams}
+import tcep.graph.qos._
+import tcep.machinenodes.consumers.Consumer._
+import tcep.machinenodes.helper.actors.Message
 import tcep.placement.vivaldi.VivaldiCoordinates
-import tcep.simulation.tcep.{AllRecords, MobilityData}
+import tcep.simulation.tcep.AllRecords
 
 abstract class Consumer extends VivaldiCoordinates with ActorLogging {
 
@@ -81,5 +82,5 @@ object Consumer {
   case class SetStatus(status: Int)
   case object SetQosMonitors
   //case class SetStreams(streams: (Vector[Stream1[MobilityData]],Vector[Stream1[Int]]))
-  case class SetStreams(streams: Seq[Any])
+  case class SetStreams(streams: Seq[Any]) extends Message
 }

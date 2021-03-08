@@ -3,20 +3,25 @@ package tcep.graph.nodes
 import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.ConverterQuery
-import tcep.factories.NodeFactory
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
 import tcep.graph.{CreatedCallback, EventCallback}
 import tcep.placement.HostInfo
 
-case class ConverterNode(transitionConfig: TransitionConfig, hostInfo: HostInfo, backupMode: Boolean, mainNode: Option[ActorRef], query: ConverterQuery, createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback], isRootOperator: Boolean, _parentNode: ActorRef*) extends UnaryNode {
-
-  var parentNode: ActorRef = _parentNode.head
+case class ConverterNode(transitionConfig: TransitionConfig,
+                         hostInfo: HostInfo,
+                         backupMode: Boolean,
+                         mainNode: Option[ActorRef],
+                         query: ConverterQuery,
+                         createdCallback: Option[CreatedCallback],
+                         eventCallback: Option[EventCallback],
+                         isRootOperator: Boolean,
+                         publisherEventRate: Double,
+                         _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
       val s = sender()
-      if (parentsList.contains(s)) {
+      if (parentActor.contains(s)) {
         val eventList: List[Any] = event match {
           case Event1(e1) =>
             this.handle(e1)
@@ -34,7 +39,7 @@ case class ConverterNode(transitionConfig: TransitionConfig, hostInfo: HostInfo,
         }
         val convertedEvent = Event1(eventList)
         convertedEvent.monitoringData = event.monitoringData
-        emitEvent(convertedEvent)
+        emitEvent(convertedEvent, eventCallback)
       }
     case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
   }

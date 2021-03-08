@@ -8,7 +8,7 @@ import akka.pattern.ask
 import akka.util.Timeout
 import tcep.data.Events.{DependenciesRequest, DependenciesResponse}
 import tcep.data.Queries._
-import tcep.graph.nodes.traits.{TransitionConfig, TransitionModeNames}
+import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 
@@ -28,9 +28,9 @@ class System(context: ActorContext) {
   def runQuery(query: Query, publishers: Map[String, ActorRef], createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback]) = {
     val monitorFactories: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query, Option.empty),
       DummyMonitorFactory(query))
-    val graphFactory = new QueryGraph(this.context, Cluster(context.system), query, TransitionConfig(), publishers, None, createdCallback, monitorFactories)
+    val graphFactory = new QueryGraph(query, TransitionConfig(), publishers, None, createdCallback)(context, Cluster(context.system), 1.0)
 
-    roots += graphFactory.createAndStart(null)(eventCallback)
+    roots += graphFactory.createAndStart(eventCallback)
   }
 
   def consumers: Seq[Operator] = {

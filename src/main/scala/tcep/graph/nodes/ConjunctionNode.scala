@@ -14,8 +14,16 @@ import tcep.placement.HostInfo
   *
   * @see [[QueryGraph]]
   **/
-case class ConjunctionNode(transitionConfig: TransitionConfig, hostInfo: HostInfo, backupMode: Boolean, mainNode: Option[ActorRef], query: ConjunctionQuery, createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback], isRootOperator: Boolean,  parents: ActorRef*)
-  extends BinaryNode with EsperEngine {
+case class ConjunctionNode(transitionConfig: TransitionConfig,
+                           hostInfo: HostInfo,
+                           backupMode: Boolean,
+                           mainNode: Option[ActorRef],
+                           query: ConjunctionQuery,
+                           createdCallback: Option[CreatedCallback],
+                           eventCallback: Option[EventCallback],
+                           isRootOperator: Boolean,
+                           publisherEventRate: Double,
+                           parents: ActorRef*) extends BinaryNode with EsperEngine {
 
   var parentNode1 = parents.head
   var parentNode2 = parents.last
@@ -29,10 +37,11 @@ case class ConjunctionNode(transitionConfig: TransitionConfig, hostInfo: HostInf
 
   override def preStart(): Unit = {
     super.preStart()
-
-    val type1 = addEventType("sq1", createArrayOfNames(query.sq1), createArrayOfClasses(query.sq1))
-    val type2 = addEventType("sq2", createArrayOfNames(query.sq2), createArrayOfClasses(query.sq2))
-    val epStatement: EPStatement = createEpStatement("select * from pattern [every (sq1=sq1 and sq2=sq2)]")
+    for {
+      type1 <- addEventType("sq1", createArrayOfNames(query.sq1), createArrayOfClasses(query.sq1))(blockingIoDispatcher)
+      type2 <- addEventType("sq2", createArrayOfNames(query.sq2), createArrayOfClasses(query.sq2))(blockingIoDispatcher)
+      epStatement: EPStatement <- createEpStatement("select * from pattern [every (sq1=sq1 and sq2=sq2)]")(blockingIoDispatcher)
+    } yield {
     val updateListener: UpdateListener = (newEventBeans: Array[EventBean], _) => newEventBeans.foreach(eventBean => {
       /**
         * @author Niels
@@ -62,7 +71,7 @@ case class ConjunctionNode(transitionConfig: TransitionConfig, hostInfo: HostInf
             val res = Event6(values(0), values(1), values(2), values(3), values(4), values(5))
             mergeMonitoringData(res, monitoringData1, monitoringData2, log)
         }
-        emitEvent(event)
+        emitEvent(event, eventCallback)
       } catch {
         case e: Throwable => log.error(e, s"failed to merge events from event beans: \n $values1 \n $values2")
       }
@@ -71,8 +80,9 @@ case class ConjunctionNode(transitionConfig: TransitionConfig, hostInfo: HostInf
     epStatement.addListener(updateListener)
     esperInitialized = true
     log.info(s"created $self with parents \n $parentNode1 and \n $parentNode2")
+    }
   }
-
+//TODO move send to blocking dispatcher? http://esper.espertech.com/release-5.3.0/esper-reference/html/performance.html
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event if p1List.contains(sender()) => event match {
       case Event1(e1) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))

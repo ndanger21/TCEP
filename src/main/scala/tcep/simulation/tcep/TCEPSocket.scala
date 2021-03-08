@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory
 
 import scala.collection.JavaConversions._
 import scala.collection.mutable.ListBuffer
-import scala.concurrent.Future
 import scala.util.parsing.json.{JSON, JSONArray, JSONObject}
 
 class TCEPSocket(actorSystem: ActorSystem) {
@@ -37,7 +36,7 @@ class TCEPSocket(actorSystem: ActorSystem) {
       ))
     })
 
-    val modes: List[String] = List("MFGS", "SMS")
+    val modes: List[String] = List("MFGS", "SMS", "NMS", "NSMS")
     val mapeks: List[String] = ConfigFactory.load().getStringList("constants.mapek.availableTypes").toList
 
     val algorithmsResponse = JSONObject(Map(

@@ -1,0 +1,16 @@
+Index: mininet/nodelib.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- ../mininet/mininet/nodelib.py	(revision 2b8d254cc0c99f823fdea91c442cf0365761d469)
++++ ../mininet/mininet/nodelib.py	(date 1585846941593)
+@@ -126,7 +126,7 @@
+                 f.write( line )
+         # Probably need to restart network-manager to be safe -
+         # hopefully this won't disconnect you
+-        self.cmd( 'service network-manager restart' )
++        #self.cmd( 'service network-manager restart' )
+
+     def terminate( self ):
+         "Stop NAT/forwarding between Mininet and external network"

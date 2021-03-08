@@ -13,7 +13,6 @@ import tcep.data.Structures.MachineLoad
 import tcep.dsl.Dsl._
 import tcep.graph.QueryGraph
 import tcep.graph.nodes.traits.{TransitionConfig, TransitionExecutionModes, TransitionModeNames}
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.machinenodes.consumers.Consumer.SetStreams
 import tcep.machinenodes.helper.actors._
 import tcep.placement.manets.StarksAlgorithm
@@ -22,27 +21,24 @@ import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.placement.vivaldi.VivaldiCoordinates
 import tcep.placement.{GlobalOptimalBDPAlgorithm, MobilityTolerantAlgorithm, PlacementStrategy, RandomAlgorithm}
 import tcep.publishers.Publisher.StartStreams
-import tcep.utils.{SizeEstimator, SpecialStats, TCEPUtils}
+import tcep.utils.{SpecialStats, TCEPUtils}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success}
 
 class SimulationSetup(directory: Option[File], mode: Int, transitionMode: TransitionConfig, durationInMinutes: Option[Int] = None,
                       startingPlacementAlgorithm: String = PietzuchAlgorithm.name, overridePublisherPorts: Option[Set[Int]] = None,
-                      queryString: String = "AccidentDetection", eventRate: String = "1", fixedSimulationProperties: Map[Symbol, Int] = Map(),
+                      queryString: String = "AccidentDetection", fixedSimulationProperties: Map[Symbol, Int] = Map(),
                       mapek: String = "requirementBased", requirementStr: String = "latency", loadTestMax: Int = 1
-                     ) extends VivaldiCoordinates with ActorLogging {
+                     )(implicit val baseEventRate: Double) extends VivaldiCoordinates with ActorLogging {
 
-
-  type StreamData = MobilityData
-  val transitionTesting = false
-  val isMininetSim: Boolean = ConfigFactory.load().getBoolean("constants.mininet-simulation")
+  val transitionTesting = true
   val nSpeedPublishers = ConfigFactory.load().getInt("constants.number-of-speed-publisher-nodes")
   val nSections = ConfigFactory.load().getInt("constants.number-of-road-sections")
   val minNumberOfMembers = ConfigFactory.load().getInt("akka.cluster.min-nr-of-members")
+  private def minNumberOfTaskManagers = minNumberOfMembers - cluster.state.members.count(_.hasRole("Consumer"))
   val publisherBasePort = ConfigFactory.load().getInt("constants.base-port") + 1
   val densityPublisherNodePort = publisherBasePort + nSpeedPublishers // base port to distinguish densityPublisher nodes from SpeedPublishers -> last publisher is density publisher
   val speedPublisherNodePorts = publisherBasePort until publisherBasePort + nSpeedPublishers
@@ -50,16 +46,10 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
   var publishers: Map[String, ActorRef] = Map.empty[String, ActorRef]
   val publisherPorts: Set[Int] = if(overridePublisherPorts.isDefined && overridePublisherPorts.get.size >= 2) overridePublisherPorts.get // for unit/integration testing
                        else densityPublisherNodePort :: speedPublisherNodePorts.toList toSet
-  var consumers: Vector[ActorRef] = Vector()
+  var consumers: Set[ActorRef] = Set()
   var taskManagerActorRefs: Map[Member, ActorRef] = Map()
-  val minimumBandwidthMeasurements = if(isMininetSim) 0 else minNumberOfMembers * (minNumberOfMembers - 1)   // n * (n-1) measurements between n nodes
-  var bandwidthMeasurementsStarted = false
-  var measuredLinks: mutable.Map[(Address, Address), Double] = mutable.Map[(Address, Address), Double]()
-  var bandwidthMeasurementsCompleted = 0
-  var coordinatesEstablishedCount = 0
-  var coordinatesEstablished = false
-  var publisherActorRefsBroadcastComplete = false
-  var publisherActorBroadcastAcks = 0
+  var coordinatesEstablished: Set[Address] = Set()
+  var publisherActorBroadcastAcks: Set[Address] = Set()
   var simulationStarted = false
   val defaultDuration: Long = ConfigFactory.load().getLong("constants.simulation-time")
   val startTime = System.currentTimeMillis()
@@ -77,7 +67,7 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
 
   log.info(s"publisher ports: speed ($speedPublisherNodePorts) density: $densityPublisherNodePort \n $publisherPorts")
   lazy val speedPublishers: Vector[(String, ActorRef)] = publishers.toVector.filter(p => speedPublisherNodePorts.contains(p._2.path.address.port.getOrElse(-1)))
-  def speedStreams(nSpeedStreamOperators: Int): Vector[Stream1[StreamData]] = {
+  def speedStreams(nSpeedStreamOperators: Int): Vector[Stream1[MobilityData]] = {
     log.info(s"speedPublishers: ${speedPublishers.size} for $nSpeedStreamOperators operators \n ${speedPublishers.mkString("\n")}")
     // enough speed publisher nodes for the query
     if(speedPublishers.size >= nSpeedStreamOperators)
@@ -129,36 +119,19 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
 
   override def receive: Receive = {
     super.receive orElse {
-
-      case BandwidthMeasurementComplete(source: Address, target: Address, bw: Double) =>
-        //if(!measuredLinks.contains((target, source)))
-        measuredLinks += (source, target) -> bw
-        bandwidthMeasurementsCompleted += 1
-        log.info(s"${System.currentTimeMillis() - startTime}ms passed, received bandwidthMeasurementComplete message from $source to $target: $bw")
-
-      case SetMissingBandwidthMeasurementDefaults => // called as a fallback for missing bandwidth measurements 3 minutes after starting measurements
-        val defaultRate = ConfigFactory.load().getDouble("constants.default-data-rate")
-        cluster.state.members.flatMap(m => cluster.state.members.filter(m != _).map(o => (m.address, o.address)))
-          .foreach(pair => measuredLinks.getOrElseUpdate(pair, defaultRate))
-
       case VivaldiCoordinatesEstablished() =>
-        coordinatesEstablishedCount += 1
-        if (coordinatesEstablishedCount >= minNumberOfMembers) {
-          log.info("all nodes established their coordinates")
-          coordinatesEstablished = true
-        }
+        sender() ! ACK()
+        coordinatesEstablished = coordinatesEstablished.+(sender().path.address)
 
       case SetPublisherActorRefsACK() =>
-        publisherActorBroadcastAcks += 1
-        if(publisherActorBroadcastAcks >= minNumberOfMembers) {
-          log.info("all nodes received the publisher actorRefs")
-          publisherActorRefsBroadcastComplete = true
-        }
+        publisherActorBroadcastAcks = publisherActorBroadcastAcks.+(sender().path.address)
+        //if(publisherActorBroadcastAcks.size >= minNumberOfTaskManagers)
+          log.info(s"${sender().path.address} received the publisher actorRefs")
 
       case TaskManagerFound(member, ref) =>
-        log.info(s"found taskManager on node $member, ${taskManagerActorRefs.size} of $minNumberOfMembers")
+        log.info(s"found taskManager on node $member, ${taskManagerActorRefs.size} of $minNumberOfTaskManagers")
         taskManagerActorRefs = taskManagerActorRefs.updated(member, ref)
-        if(taskManagerActorRefs.size >= minNumberOfMembers) {
+        if(taskManagerActorRefs.size >= minNumberOfTaskManagers) {
           taskManagerActorRefs.foreach(_._2 ! AllTaskManagerActors(taskManagerActorRefs))
         }
 
@@ -252,7 +225,7 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
           subref.onComplete {
             case Success(actorRef) =>
               log.info(s"SUBSCRIBER found: ${actorRef.path}")
-              this.consumers = this.consumers:+ actorRef
+              saveConsumer(actorRef)
             case Failure(exception) =>
               log.info(s"Failed to get SUBSCRIBER cause of $exception")
           }
@@ -274,7 +247,7 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
           publisherActorRef.onComplete {
             case Success(ref) =>
               val name = ref.toString.split("/").last.split("#").head
-              log.info(s"saving publisher ${ref} as $name")
+              log.info(s"saving density publisher ${ref} as $name")
               this.savePublisher(name -> ref)
             case Failure(exception) =>
               log.warning(s"failed to resolve publisher actor on member $member, due to ${exception.getMessage}, retrying")
@@ -300,10 +273,9 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
         }
       }
   }
-
-  def savePublisher(publisher: (String, ActorRef)) = publishers.synchronized { // avoid insert being lost when both resolve futures complete at the same time
-    publishers += publisher
-  }
+  // avoid insert being lost when both resolve futures complete at the same time
+  def savePublisher(publisher: (String, ActorRef)): Unit = publishers.synchronized { publishers += publisher }
+  def saveConsumer(consumer: ActorRef): Unit = consumers.synchronized { consumers = consumers + consumer }
 
   //If
   // 1. all publishers required in the query are available and the minimum number of members is up
@@ -311,66 +283,52 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
   // 3. all nodes have established their coordinates
   // ... then run the simulation
   def checkAndRunQuery(): Unit = {
+    try {
+      val timeSinceStart = System.currentTimeMillis() - startTime
+      val upMembers = cluster.state.members.filter(m => m.status == MemberStatus.up && !m.hasRole("VivaldiRef"))
+      val foundPublisherPorts = publishers.values.map(_.path.address.port.getOrElse(-1)).toSet
+      log.info(s"checking if ready, time since init: ${timeSinceStart}ms," +
+        s" taskManagers found: ${taskManagerActorRefs.size} of $minNumberOfTaskManagers," +
+        s" upMembers: (${upMembers.size} of $minNumberOfMembers), (joining or other state: ${cluster.state.members.size}), " +
+        s" publishers: ${publishers.keySet.size} of ${nSpeedPublishers + nSections}, missing publisher port numbers: ${publisherPorts.diff(foundPublisherPorts)}" +
+        s" coordinates established: ${coordinatesEstablished.size} of $minNumberOfTaskManagers " +
+        s" publisherActorBroadcastsAcks complete: ${publisherActorBroadcastAcks.size} of $minNumberOfTaskManagers" +
+        s" num of subscribers: ${consumers.size} of $loadTestMax" +
+        s" started: $simulationStarted")
 
-    val timeSinceStart = System.currentTimeMillis() - startTime
-    val upMembers = cluster.state.members.filter(m => m.status == MemberStatus.up && !m.hasRole("VivaldiRef"))
-    val foundPublisherPorts = publishers.values.map(_.path.address.port.getOrElse(-1)).toSet
-    log.info(s"checking if ready, time since init: ${timeSinceStart}ms," +
-      s" taskManagers found: ${taskManagerActorRefs.size} of $minNumberOfMembers," +
-      s" completed bandwidthMeasurements: (${measuredLinks.size} of $minimumBandwidthMeasurements)," +
-      s" upMembers: (${upMembers.size} of $minNumberOfMembers), (joining or other state: ${cluster.state.members.size}), " +
-      s" publishers: ${publishers.keySet.size} of ${nSpeedPublishers + nSections}, missing publisher port numbers: ${publisherPorts.diff(foundPublisherPorts)}" +
-      s" coordinates established: ${coordinatesEstablished} " +
-      s" actorrefbroadcast complete: ${publisherActorRefsBroadcastComplete} " +
-      s" num of subscribers: ${consumers.size} of $loadTestMax" +
-      s" started: $simulationStarted")
-
-    if(taskManagerActorRefs.size < minNumberOfMembers) {
-      for {
-        pairs <- upMembers.map(m => for { ref <- TCEPUtils.getTaskManagerOfMember(cluster, m) } yield (m, ref))
-      } yield pairs.onComplete {
-        case Success(pair) => self ! TaskManagerFound(pair._1, pair._2)
-        case _ =>
+      if(taskManagerActorRefs.size < minNumberOfTaskManagers) {
+        upMembers.filter(!_.hasRole("Consumer")).diff(taskManagerActorRefs.keys.toSet)
+          .map(m => {
+            log.info(s"retrieving Taskmanager of $m")
+            TCEPUtils.getTaskManagerOfMember(cluster, m)
+              .map(taskM => self ! TaskManagerFound(m, taskM))
+          })
       }
-    } else if(upMembers.size >= minNumberOfMembers && !bandwidthMeasurementsStarted) { // notify all TaskManagers to start bandwidth measurements once all nodes are up
-      upMembers.foreach(m => TCEPUtils.selectTaskManagerOn(cluster, m.address) ! InitialBandwidthMeasurementStart())
-      context.system.scheduler.scheduleOnce(FiniteDuration(3, TimeUnit.MINUTES), self, SetMissingBandwidthMeasurementDefaults)
-      bandwidthMeasurementsStarted = true
-    }
 
-    if (measuredLinks.size >= minimumBandwidthMeasurements) {
       cluster.state.members.foreach(m => TCEPUtils.selectDistVivaldiOn(cluster, m.address) ! StartVivaldiUpdates())
       // broadcast publisher actorRefs to all nodes so that when transitioning, not every placement algorithm instance has to retrieve them for themselves
-    }
-    // distinguish publishers by ports since they're easier to generalize and set up for mininet, geni and testing than hostnames
-    if(publisherPorts.subsetOf(foundPublisherPorts) && taskManagerActorRefs.size >= minNumberOfMembers && publishers.size >= nSpeedPublishers + nSections)
-      upMembers.foreach(m => TCEPUtils.selectTaskManagerOn(cluster, m.address) ! SetPublisherActorRefs(publishers))
+      // distinguish publishers by ports since they're easier to generalize and set up for mininet, geni and testing than hostnames
+      if(publisherPorts.subsetOf(foundPublisherPorts) && taskManagerActorRefs.size >= minNumberOfTaskManagers && publishers.size >= nSpeedPublishers + nSections)
+        upMembers.foreach(m => if(!m.hasRole("Consumer")) TCEPUtils.selectTaskManagerOn(cluster, m.address) ! SetPublisherActorRefs(publishers))
 
-    // publishers found (speed publisher nodes with 1 speed publisher actors, 1 density publisher node with nSections densityPublisher actors
-    if (publisherPorts.subsetOf(foundPublisherPorts) && publishers.size >= nSpeedPublishers + nSections &&
-      upMembers.size >= minNumberOfMembers && // nodes up
-      taskManagerActorRefs.size >= minNumberOfMembers && // taskManager ActorRefs have been found and broadcast to all other taskManagers      measuredLinks.size >= minimumBandwidthMeasurements && // all links bandwidth measured
-      coordinatesEstablished && // all nodes have established their coordinates
-      publisherActorRefsBroadcastComplete &&
-      consumers.size >= loadTestMax &&
-      !simulationStarted
-    ){
-      simulationStarted = true
-      SpecialStats.debug(s"$this", s"ready to start after $timeSinceStart, setting up simulation...")
-      log.info(s"measured bandwidths: \n ${measuredLinks.toList.sorted.map(e => s"\n ${e._1._1} <-> ${e._1._2} : ${e._2} Mbit/s")}")
-      log.info(s"telling publishers to start streams...")
-      publishers.foreach(p => p._2 ! StartStreams())
-      this.consumers.foreach(c => c ! SetStreams(this.getStreams()))
-      this.executeSimulation()
+      // publishers found (speed publisher nodes with 1 speed publisher actors, 1 density publisher node with nSections densityPublisher actors
+      if (publisherPorts.subsetOf(foundPublisherPorts) && publishers.size >= nSpeedPublishers + nSections && upMembers.size >= minNumberOfMembers && // nodes up
+        taskManagerActorRefs.size >= minNumberOfTaskManagers && // taskManager ActorRefs have been found and broadcast to all other taskManagers
+        coordinatesEstablished.size >= minNumberOfTaskManagers && // all nodes have established their coordinates
+        publisherActorBroadcastAcks.size >= minNumberOfTaskManagers &&
+        consumers.size >= loadTestMax && !simulationStarted) {
+        simulationStarted = true
+        SpecialStats.debug(s"$this", s"ready to start after $timeSinceStart, setting up simulation...")
+        log.info(s"telling publishers to start streams...")
+        publishers.foreach(p => p._2 ! StartStreams())
+        this.consumers.foreach(c => TCEPUtils.guaranteedDelivery(context, c, SetStreams(this.getStreams())))
+        this.executeSimulation()
 
-    } else {
-      SpecialStats.debug(s"$this", s"$timeSinceStart ms since start, waiting for initialization to finish; " +
-        s"measured links: (${measuredLinks.size} of $minimumBandwidthMeasurements);" +
-        s"coordinates established: ($coordinatesEstablishedCount of $minNumberOfMembers); " +
-        s"publishers: ${publishers.mkString(";")}" +
-        s"publisher actorRefs broadcast: $publisherActorBroadcastAcks of $minNumberOfMembers " +
-        s"Subscribers are $consumers")
-      context.system.scheduler.scheduleOnce(new FiniteDuration(5, TimeUnit.SECONDS))(checkAndRunQuery)
+      } else {
+        context.system.scheduler.scheduleOnce(new FiniteDuration(5, TimeUnit.SECONDS))(checkAndRunQuery)
+      }
+    } catch {
+      case e: Throwable => log.error(e, "failed to start simulation")
     }
   }
 
@@ -382,19 +340,20 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
     * @param initialRequirements query to be executed
     * @param finishedCallback   callback to apply when simulation is finished
     * @param requirementChanges  requirement to change to after requirementChangeDelay
+    * @param splcDataCollection boolean to collect additional data for CONTRAST MAPEK implementation (machine learning data)
     * @return queryGraph of the running simulation
     */
   def runSimulation(i: Int, placementStrategy: PlacementStrategy, transitionConfig: TransitionConfig, finishedCallback: () => Any,
                     initialRequirements: Set[Requirement], requirementChanges: Option[Set[Requirement]] = None,
-                    queryStr: String = queryString): QueryGraph = {
+                    splcDataCollection: Boolean = false): QueryGraph = {
 
-      val query = queryStr match {
-      case "Stream" => stream[StreamData](speedPublishers(0)._1, initialRequirements.toSeq: _*)
-      case "Filter" => stream[StreamData](speedPublishers(0)._1, initialRequirements.toSeq: _*).where(_ => true)
-      case "Conjunction" => stream[StreamData](speedPublishers(0)._1).and(stream[StreamData](speedPublishers(1)._1), initialRequirements.toSeq: _*)
-      case "Disjunction" => stream[StreamData](speedPublishers(0)._1).or(stream[StreamData](speedPublishers(1)._1), initialRequirements.toSeq: _*)
-      case "Join" => stream[StreamData](speedPublishers(0)._1).join(stream[StreamData](speedPublishers(1)._1), slidingWindow(1.seconds), slidingWindow(1.seconds)).where((_, _) => true, initialRequirements.toSeq: _*)
-      case "SelfJoin" => stream[StreamData](speedPublishers(0)._1).selfJoin(slidingWindow(1.seconds), slidingWindow(1.seconds), initialRequirements.toSeq: _*)
+      val query = queryString match {
+      case "Stream" => stream[MobilityData](speedPublishers(0)._1, initialRequirements.toSeq: _*)
+      case "Filter" => stream[MobilityData](speedPublishers(0)._1, initialRequirements.toSeq: _*).where(_ => true)
+      case "Conjunction" => stream[MobilityData](speedPublishers(0)._1).and(stream[MobilityData](speedPublishers(1)._1), initialRequirements.toSeq: _*)
+      case "Disjunction" => stream[MobilityData](speedPublishers(0)._1).or(stream[MobilityData](speedPublishers(1)._1), initialRequirements.toSeq: _*)
+      case "Join" => stream[MobilityData](speedPublishers(0)._1).join(stream[MobilityData](speedPublishers(1)._1), slidingWindow(1.seconds), slidingWindow(1.seconds)).where((_, _) => true, initialRequirements.toSeq: _*)
+      case "SelfJoin" => stream[MobilityData](speedPublishers(0)._1).selfJoin(slidingWindow(1.seconds), slidingWindow(1.seconds), initialRequirements.toSeq: _*)
       case "AccidentDetection" => accidentQuery(initialRequirements.toSeq: _*)
     }
 
@@ -409,15 +368,21 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
         if(count < depth) Average2(debugQueryTree(depth, count + 1).and(debugQueryTree(depth, count + 1)))
         else averageSpeedQuery() // 18 operators
       }
-      log.info(s"starting $transitionMode ${placementStrategy.name} algorithm simulation number $i with requirementChanges $requirementChanges \n and query $query")
 
-      val sim = new Simulation(cluster, name = s"${transitionMode}-${placementStrategy.name}-${queryStr}-${mapek}-${requirementStr}-$i", directory = directory,
-        query = query, transitionConfig = transitionConfig, publishers = publishers, consumer = consumers(i),
-        startingPlacementStrategy = Some(placementStrategy), allRecords = AllRecords(), context = this.context,
-        mapekType = this.mapek)
+      val sim = if (splcDataCollection) {
+        new SPLCDataCollectionSimulation(
+          name = s"${transitionMode}-${placementStrategy.name}-${queryString}-${mapek}-${requirementStr}-$i", directory = directory,
+          query = query, transitionConfig = transitionConfig, publishers = publishers, consumer = consumers.toVector(i),
+          startingPlacementAlgorithm = Some(placementStrategy), allRecords = AllRecords(), mapekType = this.mapek)
+        } else {
+            new Simulation(name = s"${transitionMode}-${placementStrategy.name}-${queryString}-${mapek}-${requirementStr}-$i", directory = directory,
+            query = query, transitionConfig = transitionConfig, publishers = publishers, consumer = consumers.toVector(i),
+            startingPlacementStrategy = Some(placementStrategy), allRecords = AllRecords(), mapekType = this.mapek)
+        }
 
-      val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
-      val graph = sim.startSimulation(percentage, placementStrategy.name, queryStr, eventRate, startDelay, samplingInterval, totalDuration)(finishedCallback) // (start simulation time, interval, end time (s))
+    val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
+      log.info(s"starting $transitionMode ${placementStrategy.name} algorithm simulation number $i (progress: $percentage with requirementChanges $requirementChanges \n and query $query")
+      val graph = sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback) // (start simulation time, interval, end time (s))
       graphs = graphs.+(i -> graph)
       context.system.scheduler.scheduleOnce(totalDuration)(this.shutdown())
       if (requirementChanges.isDefined && requirementChanges.get.nonEmpty) {
@@ -480,6 +445,8 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
         val mode = transitionMode match {
           case "MFGS" => TransitionModeNames.MFGS
           case "SMS" => TransitionModeNames.SMS
+          case "NMS" => TransitionModeNames.NaiveMovingState
+          case "NSMS" => TransitionModeNames.NaiveStopMoveStart
         }
         var currentQuery: Query = null
 
@@ -494,26 +461,25 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
 
         //globalOptimalBDPQuery = stream[Int](pNames(0)).join(stream[Int](pNames(1)), slidingWindow(windowSize.seconds), slidingWindow(windowSize.seconds)).where((_, _) => true, newReqs:_*)
         currentQuery = query match {
-          case "Stream" => stream[StreamData](speedPublishers(0)._1, newReqs: _*)
-          case "Filter" => stream[StreamData](speedPublishers(0)._1, newReqs: _*).where(_ => true)
-          case "Conjunction" => stream[StreamData](speedPublishers(0)._1).and(stream[StreamData](speedPublishers(1)._1), newReqs: _*)
-          case "Disjunction" => stream[StreamData](speedPublishers(0)._1).or(stream[StreamData](speedPublishers(1)._1), newReqs: _*)
-          case "Join" => stream[StreamData](speedPublishers(0)._1).join(stream[StreamData](speedPublishers(1)._1), slidingWindow(windowSize.seconds), slidingWindow(windowSize.seconds)).where((_, _) => true, newReqs: _*)
-          case "SelfJoin" => stream[StreamData](speedPublishers(0)._1).selfJoin(slidingWindow(windowSize.seconds), slidingWindow(windowSize.seconds), newReqs: _*)
+          case "Stream" => stream[MobilityData](speedPublishers(0)._1, newReqs: _*)
+          case "Filter" => stream[MobilityData](speedPublishers(0)._1, newReqs: _*).where(_ => true)
+          case "Conjunction" => stream[MobilityData](speedPublishers(0)._1).and(stream[MobilityData](speedPublishers(1)._1), newReqs: _*)
+          case "Disjunction" => stream[MobilityData](speedPublishers(0)._1).or(stream[MobilityData](speedPublishers(1)._1), newReqs: _*)
+          case "Join" => stream[MobilityData](speedPublishers(0)._1).join(stream[MobilityData](speedPublishers(1)._1), slidingWindow(windowSize.seconds), slidingWindow(windowSize.seconds)).where((_, _) => true, newReqs: _*)
+          case "SelfJoin" => stream[MobilityData](speedPublishers(0)._1).selfJoin(slidingWindow(windowSize.seconds), slidingWindow(windowSize.seconds), newReqs: _*)
           case "AccidentDetection" => accidentQuery(newReqs: _*)
         }
 
         val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
-        val mfgsSim = new Simulation(cluster, name = transitionMode, directory = directory, query = currentQuery,
+        val mfgsSim = new Simulation(name = transitionMode, directory = directory, query = currentQuery,
           TransitionConfig(mode, TransitionExecutionModes.CONCURRENT_MODE),
-          publishers = publishers, consumers(i),
+          publishers = publishers, consumers.toVector(i),
           startingPlacementStrategy = Some(PlacementStrategy.getStrategyByName(strategyName)),
-          allRecords = AllRecords(), fixedSimulationProperties = fixedSimulationProperties,
-          context = this.context, mapekType = mapekName)
+          allRecords = AllRecords(), fixedSimulationProperties = fixedSimulationProperties, mapekType = mapekName)
         mfgsSims += mfgsSim
 
         //start at 20th second, and keep recording data for 5 minutes
-        val graph = mfgsSim.startSimulation(percentage, s"$transitionMode-Strategy", query, eventRate, startDelay, samplingInterval, FiniteDuration.apply(0, TimeUnit.SECONDS))(null)
+        val graph = mfgsSim.startSimulation(query, startDelay, samplingInterval, FiniteDuration.apply(0, TimeUnit.SECONDS))(null)
         graphs += graph
 
         currentTransitionMode = transitionMode
@@ -653,6 +619,12 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
         this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), TransitionConfig(TransitionModeNames.MFGS, TransitionExecutionModes.SEQUENTIAL_MODE),
           () => log.info(s"MFGS transition $startingPlacementAlgorithm algorithm Simulation ended"),
           Set(latencyRequirement), Some(Set(reqChange)))
+
+      case Mode.SPLC_DATACOLLECTION =>
+        val used_mapek = ConfigFactory.load().getString("constants.mapek.type")
+        this.runSimulation(1, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), TransitionConfig(TransitionModeNames.SMS, TransitionExecutionModes.CONCURRENT_MODE),
+                           () => log.info(s"MFGS $startingPlacementAlgorithm algorithm Simulation with SPLC data collection enabled ended"),
+                           Set(latencyRequirement), Some(Set(messageHopsRequirement)), used_mapek == "CONTRAST")
 
       case Mode.TEST_GUI => this.testGUI(0, 0, 1)
       case Mode.DO_NOTHING => log.info("simulation ended!")

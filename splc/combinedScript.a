@@ -1,0 +1,5 @@
+script ./learnLatency.a
+script ./learnLoad.a
+script ./learnFrequency.a
+script ./learnMsgHops.a
+script splc_parameter_optimization.a

@@ -18,7 +18,7 @@ object SubscriberApp extends App with ConfigurationParser {
   val actorSystem: ActorSystem = ActorSystem(config.getString("clustering.cluster.name") , config)
   actorSystem.actorOf(Props[Subscriber],"subscriber")
 
-  actorSystem.actorOf(Props(new TaskManagerActor()), "TaskManager")
+  actorSystem.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
 
   override def getRole: String = "Subscriber"
   override def getArgs: Array[String] = args

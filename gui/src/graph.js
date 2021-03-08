@@ -1,6 +1,6 @@
 // this must be the same as manager ip since requests are handled by route.js
 const SERVER = "217.160.60.42"
-const GUI_PORT = 80
+const GUI_PORT = 3000
 const INTERACTIVE_SIMULATION_ENABLED = true
 
 // Holds the current data received from the GUI server
@@ -14,6 +14,7 @@ const SERVER_URL = `http://${SERVER}:${GUI_PORT}/data`;
 var fontSize = 18;
 var fontColor = "#000";
 var greenColor = '#00cc00';
+
 
 function setNodePositions(nodes, consumerData) {
     const y = 250
@@ -338,7 +339,7 @@ function createGraph(json, links) {
         if (!d.hardLink && d.source && d.source.operators) {
             let metadata = getMetadataForLink(links, d, json.previousNodes);
             if (metadata && metadata.bandwidthDelayProduct !== undefined && metadata.bandwidthDelayProduct !== null) {
-                return `BDP ${metadata.bandwidthDelayProduct.toFixed(2)} Mbit`
+                return `BDP ${metadata.bandwidthDelayProduct.toFixed(2)} Byte`
             }
         }
         return ""
@@ -472,7 +473,7 @@ function getLatencyForLink(consumerData, source, destination) {
     consumerData.latencyValues.forEach(val => {
         if (val.source == source.name && val.destination == destination.name) {
             value = val.distance.toFixed(2);
-            console.log(val.source, source.name, val.destination, destination.name, value)
+            //console.log(val.source, source.name, val.destination, destination.name, value)
         }
     });
     return value;

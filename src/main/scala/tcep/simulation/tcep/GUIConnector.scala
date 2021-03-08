@@ -61,7 +61,10 @@ object GUIConnector {
       } else shrinkOperatorName(parent.path.name)
       JSONObject(Map(
         "operatorName" -> pName,
-        "bandwidthDelayProduct" -> newHostInfo.operatorMetrics.operatorToParentBDP.getOrElse(parent.toString(), -1.0),
+        "bandwidthDelayProduct" -> newHostInfo.operatorMetrics.operatorToParentBDP.getOrElse(parent, {
+          log.warn(s"could not find bdp for parent $parent in \n ${newHostInfo.operatorMetrics.operatorToParentBDP}")
+          -1.0
+        }),
         "messageOverhead" -> newHostInfo.operatorMetrics.accPlacementMsgOverhead,
         "timestamp" -> timestamp
       ))
@@ -181,7 +184,7 @@ object GUIConnector {
 
   /**
     * Sends the overall Bandwidth Delay Product and vivaldi coordinates to the GUI server
-    * @param bdp - the accumulated bandwidth delay product of the operator graph
+    * @param bdp - the accumulated bandwidth delay product of the operator graph in [Bytes]
     * @param latencyDistances - List of distances and vivaldi coordinates
     */
   def sendBDPUpdate(bdp: Double, latencyDistances: List[LatencyDistance])(implicit selfAddress: Address, ec: ExecutionContext): Future[Unit] = Future {

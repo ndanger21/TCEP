@@ -22,7 +22,7 @@ do
   do
     for q in ${queries[@]}
     do
-        python set_properties.py ${mapek} ${req} ${q} 12
+        python set_properties.py ${mapek} ${req} ${q} 12 100
         for i in {1..5}
         do
           echo "$(date '+%H-%M-%S' ) starting simulation run $i with $q $req $mapek"

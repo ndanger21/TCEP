@@ -5,9 +5,8 @@ import java.util.concurrent.TimeUnit
 import akka.actor.{ActorRef, Address}
 import akka.event.LoggingAdapter
 import com.typesafe.config.ConfigFactory
-import tcep.machinenodes.helper.actors.PlacementMessage
+import tcep.machinenodes.helper.actors.{MySerializable, PlacementMessage}
 import tcep.placement.HostInfo
-import tcep.simulation.tcep.MobilityData
 import tcep.utils.SizeEstimator
 
 import scala.concurrent.ExecutionContext
@@ -17,10 +16,8 @@ import scala.concurrent.duration.FiniteDuration
   * Helpers object for conversions and representation of different events in terms of
   * case classes.
   * */
-@SerialVersionUID(15L)
-object Events extends java.io.Serializable {
+object Events {
 
-  case object Created extends PlacementMessage
   case object DependenciesRequest extends PlacementMessage
   case class DependenciesResponse(dependencies: Seq[ActorRef]) extends PlacementMessage
   val eventIntervalMicroseconds: Int = ConfigFactory.load().getInt("constants.event-interval-microseconds")
@@ -40,7 +37,7 @@ object Events extends java.io.Serializable {
                                   var creationTimestamp: Long = System.currentTimeMillis()
                                   )
 
-  sealed abstract class Event(var monitoringData: MonitoringData = MonitoringData()) {
+  sealed abstract class Event(var monitoringData: MonitoringData = MonitoringData()) extends MySerializable {
 
     def init()(implicit creatorAddress: Address): Unit =  {
       monitoringData.predecessorHost = List(creatorAddress)
@@ -63,10 +60,14 @@ object Events extends java.io.Serializable {
       //log.debug(s"$hostInfo \n $event \n ${event.monitoringData.map("\n"+_)}")
       if (event.monitoringData == null) throw new IllegalArgumentException(s"received empty monitoringData of ${event} ${event.monitoringData}")
       if (hostInfo == null) throw new IllegalArgumentException(s"updateMonitoringData called with null hostInfo")
-
-      val parents = event.monitoringData.predecessorHost
-      if (parents.exists(!_.equals(hostInfo.member.address)))
+      // increment some monitoringData items only when event has a parent on a different host, i.e. had to go over the network
+      if (event.monitoringData.predecessorHost.exists(!_.equals(hostInfo.member.address))) {
         event.monitoringData.messageHops = event.monitoringData.messageHops + 1
+        val accumulatedBDP = event.monitoringData.networkUsage.sum
+        event.monitoringData.networkUsage = List(hostInfo.operatorMetrics.operatorToParentBDP.values.sum + accumulatedBDP)
+        // overhead for sending the event over the network
+        event.monitoringData.eventOverhead += SizeEstimator.estimate(event)
+      }
 
       event.monitoringData.operatorHops += 1
       val hops = event.monitoringData.operatorHops
@@ -76,12 +77,10 @@ object Events extends java.io.Serializable {
       val now = System.currentTimeMillis()
       assert(lastUpdates.nonEmpty, s"event monitoringData item lastUpdates was not initialized! $event")
       event.monitoringData.latency = math.max(now - lastUpdates.head._2, now - lastUpdates.last._2)
-      val accumulatedBDP = event.monitoringData.networkUsage.sum
-      event.monitoringData.networkUsage = List(hostInfo.operatorMetrics.operatorToParentBDP.values.sum + accumulatedBDP)
-      event.monitoringData.placementOverhead += hostInfo.operatorMetrics.accPlacementMsgOverhead
-      event.monitoringData.eventOverhead += SizeEstimator.estimate(event)
       event.monitoringData.predecessorHost = List(hostInfo.member.address)
       event.monitoringData.lastUpdate = List((hostInfo.member.address, System.currentTimeMillis()))
+      event.monitoringData.placementOverhead += hostInfo.operatorMetrics.accPlacementMsgOverhead
+
       //log.debug(s"updating MonitoringData complete \n $event")
     } catch {
       case e: Throwable => log.error(e, s"failed to update monitoringData of event ${event.monitoringData}")
@@ -108,8 +107,8 @@ object Events extends java.io.Serializable {
     event.monitoringData.networkUsage = List(a.networkUsage.sum, b.networkUsage.sum)
     event.monitoringData.placementOverhead = a.placementOverhead + b.placementOverhead
     event.monitoringData.eventOverhead = a.eventOverhead + b.eventOverhead
-    event.monitoringData.predecessorHost = List(a.predecessorHost.head, b.predecessorHost.head)
-    event.monitoringData.lastUpdate = List(a.lastUpdate.head, b.lastUpdate.head)
+    event.monitoringData.predecessorHost = List(a.predecessorHost.headOption, b.predecessorHost.headOption).flatten // treat empty list with option + flatten
+    event.monitoringData.lastUpdate = List(a.lastUpdate.headOption, b.lastUpdate.headOption).flatten
     event.monitoringData.creationTimestamp = math.min(a.creationTimestamp, b.creationTimestamp)
     //log.debug(s"DEBUG mergeMonitoringData complete ${event.monitoringData}")
     event

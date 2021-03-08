@@ -107,3 +107,5 @@ fabric.properties
 project/project/
 /scripts/mininetSim/mininet-wifi/prevBuildHash.sha
 /foo.sc
+/logs_backup/
+/cplex/

@@ -8,37 +8,43 @@ import tcep.data.Events._
 import tcep.data.Queries._
 import tcep.graph.nodes.JoinNode._
 import tcep.graph.nodes.traits.EsperEngine._
-import tcep.graph.nodes.traits.TransitionModeNames.{apply => _, _}
+import tcep.graph.nodes.traits.Node.GetWindowStateEvents
+import tcep.graph.nodes.traits.TransitionModeNames.{apply => _}
 import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
-
-import scala.concurrent.duration._
-import scala.concurrent.duration.FiniteDuration
 
 /**
   * Handling of [[tcep.data.Queries.JoinQuery]] is done by JoinNode.
   *
   * @see [[QueryGraph]]
   **/
-
-case class JoinNode(transitionConfig: TransitionConfig, hostInfo: HostInfo, backupMode: Boolean, mainNode: Option[ActorRef], query: JoinQuery, createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback], isRootOperator: Boolean, parents: ActorRef*)
-  extends BinaryNode with EsperEngine {
+case class JoinNode(transitionConfig: TransitionConfig,
+                    hostInfo: HostInfo,
+                    backupMode: Boolean,
+                    mainNode: Option[ActorRef],
+                    query: JoinQuery,
+                    createdCallback: Option[CreatedCallback],
+                    eventCallback: Option[EventCallback],
+                    isRootOperator: Boolean,
+                    publisherEventRate: Double,
+                    parents: ActorRef*) extends BinaryNode with EsperEngine {
 
   var parentNode1 = parents.head
   var parentNode2 = parents.last
   override val esperServiceProviderUri: String = name
   var esperInitialized = false
+  var epStatement: EPStatement = _
 
   override def preStart(): Unit = {
     super.preStart()
-
-    val type1 = addEventType("sq1", createArrayOfNames(query.sq1), createArrayOfClasses(query.sq1))
-    val type2 = addEventType("sq2", createArrayOfNames(query.sq2), createArrayOfClasses(query.sq2))
-    val epStatement: EPStatement = createEpStatement(s"select * from " +
+    for {
+      type1 <- addEventType("sq1", createArrayOfNames(query.sq1), createArrayOfClasses(query.sq1))(blockingIoDispatcher)
+      type2 <- addEventType("sq2", createArrayOfNames(query.sq2), createArrayOfClasses(query.sq2))(blockingIoDispatcher)
+      epStatement: EPStatement <- createEpStatement(s"select * from " +
       s"sq1.${createWindowEplString(query.w1)} as sq1," +
-      s"sq2.${createWindowEplString(query.w2)} as sq2 ")
-
+        s"sq2.${createWindowEplString(query.w2)} as sq2 ")(blockingIoDispatcher)
+    } yield {
     val updateListener: UpdateListener = (newEventBeans: Array[EventBean], _) => newEventBeans.foreach(eventBean => {
       /**
         * @author Niels
@@ -70,11 +76,11 @@ case class JoinNode(transitionConfig: TransitionConfig, hostInfo: HostInfo, back
           mergeMonitoringData(res, monitoringData1, monitoringData2, log)
       }
       log.debug(s"creating new event $event with merged monitoringData")
-      emitEvent(event)
+      emitEvent(event, eventCallback)
     })
     epStatement.addListener(updateListener)
     esperInitialized = true
-
+    }
 
   }
 
@@ -96,6 +102,8 @@ case class JoinNode(transitionConfig: TransitionConfig, hostInfo: HostInfo, back
       case Event5(e1, e2, e3, e4, e5) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5)))
       case Event6(e1, e2, e3, e4, e5, e6) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5), toAnyRef(e6)))
     }
+
+    case GetWindowStateEvents => getWindowStateEvents()
     case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}, esper initialized: $esperInitialized")
   }
 
@@ -110,6 +118,28 @@ case class JoinNode(transitionConfig: TransitionConfig, hostInfo: HostInfo, back
     val w1 = windowTime(query.w1)
     val w2 = windowTime(query.w2)
     if (w1.compareTo(w2) > 0) w1 else w2
+  }
+
+  // TODO unused; currently using eventqueue as in MFGS; see if this works out
+  override def getWindowStateEvents(): List[Any] = {
+    var windowEvents: Array[Any] = Array()
+    val beanIterator = epStatement.safeIterator()
+    beanIterator.forEachRemaining { bean =>
+      val values1 = bean.get("sq1").asInstanceOf[Array[Any]]
+      val values2 = bean.get("sq2").asInstanceOf[Array[Any]]
+      log.info(values1.mkString("\n"))
+      log.info(values2.mkString("\n"))
+      windowEvents = windowEvents ++ values1 ++ values2
+    }
+    beanIterator.close()
+    log.info("runtime.getDataFlowRuntime.getDataFlows: " + runtime.getDataFlowRuntime.getDataFlows)
+    log.info("runtime.getDataFlowRuntime.getSavedInstances: " + runtime.getDataFlowRuntime.getSavedInstances)
+    log.info(s"window events (${windowEvents.length}: \n $windowEvents")
+    windowEvents.toList
+  }
+
+  override def insertWindowStateEvents(data: List[Any]): Unit = {
+    //TODO try to insert into esper directly (currently inserting events directly -> timing information is lost for slidingTime window as they are re-inserted)
   }
 
   override def postStop(): Unit = {

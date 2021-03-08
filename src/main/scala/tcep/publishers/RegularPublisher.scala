@@ -29,11 +29,12 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
   var sched = Executors.newSingleThreadScheduledExecutor()
 
   override def preStart() = {
-    log.info(s"stating regular publisher with roles ${cluster.getSelfRoles}")
+    log.info(s"starting regular publisher with interval $waitTime microseconds (${1e6 / waitTime }/s) and roles ${cluster.getSelfRoles}")
     super.preStart()
   }
   override def postStop(): Unit = {
-    emitEventTask.cancel(true)
+    if(emitEventTask != null)
+      emitEventTask.cancel(true)
     super.postStop()
   }
 
@@ -51,7 +52,7 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
       case SendEventTick =>
         val event: Event = createEventFromId(id.incrementAndGet())
         event.init()(cluster.selfAddress)
-        subscribers.foreach(_ ! event)
+        subscribers.keys.foreach(_ ! event)
 
       case LogEventsSentTick => SpecialStats.log(self.toString(), "eventsSent", s"total: ${id.get()}")
 

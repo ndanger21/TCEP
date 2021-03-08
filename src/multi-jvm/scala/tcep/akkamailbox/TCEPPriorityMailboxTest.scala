@@ -6,10 +6,11 @@ import tcep.machinenodes.helper.actors.{MeasurementMessage, TransitionControlMes
 import tcep.utils.SpecialStats
 import tcep.{MultiJVMTestSetup, TCEPMultiNodeConfig}
 
-class TCEPPriorityMailboxMultiJvmNode1 extends TCEPPriorityMailboxMultiNodeTestSpec
-class TCEPPriorityMailboxMultiJvmNode2 extends TCEPPriorityMailboxMultiNodeTestSpec
+class TCEPPriorityMailboxMultiJvmClient extends TCEPPriorityMailboxMultiNodeTestSpec
+class TCEPPriorityMailboxMultiJvmPublisher1 extends TCEPPriorityMailboxMultiNodeTestSpec
+class TCEPPriorityMailboxMultiJvmPublisher2 extends TCEPPriorityMailboxMultiNodeTestSpec
 
-abstract class TCEPPriorityMailboxMultiNodeTestSpec extends MultiJVMTestSetup(2) {
+abstract class TCEPPriorityMailboxMultiNodeTestSpec extends MultiJVMTestSetup(3) {
 
   import TCEPMultiNodeConfig._
 
@@ -31,19 +32,18 @@ abstract class TCEPPriorityMailboxMultiNodeTestSpec extends MultiJVMTestSetup(2)
 
     def receive = {
 
-      case x ⇒ {
+      case x ⇒
         val s = sender()
         println(SpecialStats.getTimestamp + ": " + this.context.props.mailbox + " sender: " + s + " " + x.toString)
-        Thread.sleep(500)
+        //Thread.sleep(500)
         s ! x
-      }
     }
   }
 
   "TCEPPriorityMailbox" must {
     "deliver messages to local actor according to priority" in {
-      runOn(node1) {
-        println("<-- this is node1")
+      runOn(publisher1) {
+        println("<-- this is publisher1")
         val withPrio = system.actorOf(Props(new Printer).withMailbox("prio-mailbox"), "withPrio")
 
         withPrio ! eventMsg
@@ -81,7 +81,8 @@ abstract class TCEPPriorityMailboxMultiNodeTestSpec extends MultiJVMTestSetup(2)
         withPrio ! transitionMsg
         expectMsg(transitionMsg)
         expectMsg(measurementMsg)
-        expectMsg(eventMsg)      }
+        expectMsg(eventMsg)
+      }
 
       testConductor.enter("test2 complete")
     }

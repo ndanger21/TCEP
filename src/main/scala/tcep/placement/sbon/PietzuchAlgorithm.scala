@@ -9,17 +9,17 @@ import org.discovery.vivaldi.Coordinates
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.placement._
-import tcep.utils.SpecialStats
-import tcep.utils.TCEPUtils.makeMapFuture
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 
 
 /**
-  * Created by Raheel on 04/08/2017.
-  * updated by Niels 15/06/2018
+  * Implementation of Relaxation algorithm introduced by Pietzuch et al. in
+  * https://www.researchgate.net/publication/220965454_Network-Aware_Operator_Placement_for_Stream-Processing_Systems
+  * Aims to place an operator on a host in the cluster so that the resulting network usage (bandwidth-delay-product, BDP) is minimized
+  * Differences to RizouAlgorithm: see RizouAlgorithm
   */
-object PietzuchAlgorithm extends PlacementStrategy {
+object PietzuchAlgorithm extends SpringRelaxationLike {
 
   val stepAdjustmentEnabled: Boolean = ConfigFactory.load().getBoolean("constants.placement.relaxation-step-adjustment-enabled")
   val iterationLimit = ConfigFactory.load().getInt("constants.placement.max-single-operator-iterations")
@@ -32,13 +32,21 @@ object PietzuchAlgorithm extends PlacementStrategy {
   override def hasPeriodicUpdate(): Boolean = ConfigFactory.load().getBoolean("constants.placement.update.relaxation")
 
   // this should only be called during transitions or in case of missing operators during the initial placement
-  def findOptimalNode(context: ActorContext, cluster: Cluster, dependencies: Dependencies, askerInfo: HostInfo, operator: Query): Future[HostInfo] = {
-    applyRelaxationAlgorithm(cluster, dependencies, operator)
+  override def findOptimalNode(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] = {
+    try {
+      collectInformationAndExecute(operator, dependencies)
+    } catch {
+      case e: Throwable =>
+        log.error(s"failed to find host for $operator", e)
+        throw e
+    }
   }
 
-  def findOptimalNodes(context: ActorContext, cluster: Cluster, dependencies: Dependencies, askerInfo: HostInfo, operator: Query): Future[(HostInfo, HostInfo)] = {
+  override def findOptimalNodes(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                               (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, HostInfo)] = {
     for {
-      mainNode <- applyRelaxationAlgorithm(cluster, dependencies, operator)
+      mainNode <- collectInformationAndExecute(operator, dependencies)
     } yield {
       val backup = HostInfo(cluster.selfMember, operator, OperatorMetrics())
       (mainNode, backup)
@@ -46,137 +54,84 @@ object PietzuchAlgorithm extends PlacementStrategy {
   }
 
   /**
-    * Applies Pietzuch's algorithm to find the optimal node for a single operator
-    * https://www.researchgate.net/publication/220965454_Network-Aware_Operator_Placement_for_Stream-Processing_Systems
-    *
-    * @param dependencies   parent nodes on which query is dependent (parent and children operators; caller is responsible for completeness!)
-    * @return the address of member where operator will be deployed
+    * Applies Relaxation algorithm to find the optimal virtual coordinates for a single operator
     */
-
-  def applyRelaxationAlgorithm(cluster: Cluster, dependencies: Dependencies, operator: Query): Future[HostInfo] = {
-
-    val res = for {
-      init <- this.initialize(cluster)
-    } yield {
-
-      val candidateCoordRequest = getCoordinatesOfMembers(cluster, findPossibleNodesToDeploy(cluster), Some(operator))
-      val dependencyCoordRequest = getCoordinatesOfNodes(cluster, dependencies.parents ++ dependencies.subscribers, Some(operator))
-      val hostRequest = for {
-        candidateCoordinates <- candidateCoordRequest
-        dependencyCoordinates <- dependencyCoordRequest
-        optimalVirtualCoordinates <- calculateVCSingleOperator(cluster, operator, Coordinates.origin, dependencyCoordinates.values.toList, candidateCoordinates)
-        host <- findHost(optimalVirtualCoordinates, candidateCoordinates, operator, dependencies.parents)
-      } yield {
-
-        log.info(s"found node to host operator: ${host.toString}")
-        SpecialStats.debug(name, s"found node: ${host.member}")
-        val hostCoords = candidateCoordinates.find(e => e._1.equals(host.member))
-        if (hostCoords.isDefined) log.info(s"with distance to virtual coords: ${hostCoords.get._2.distance(optimalVirtualCoordinates)}")
-        else log.warn("found node, but coordinatesMap does not contain its coords")
-        host
-      }
-      hostRequest
-    }
-    res.flatten
-  }
-
-  /**
-    * determine the optimal position of a single operator in the virtual vivaldi coordinate space
-    * uses a spring-relaxation technique:
-    * edges on the operator tree are modeled as springs; the length of a spring corresponds to the latency between the operators on its ends,
-    * the spring constant corresponds to the bandwidth on that link. Now the goal is to solve for the minimum energy state in all springs
-    * by iteratively moving operators in the latency space in small steps into the direction of the force exerted by the springs connected to them.
-    *
-    * @param dependencyCoordinates the coordinates of all operator hosts that are connected to this operator (child and parents)
-    * @param nnCandidates cluster members that can host operators (used for bandwidth estimation)
-    * @return the optimal vivaldi coordinates for the operator
-    */
-  def calculateVCSingleOperator(cluster: Cluster, operator: Query, startCoordinates: Coordinates, dependencyCoordinates: List[Coordinates], nnCandidates: Map[Member, Coordinates]): Future[Coordinates] = {
-
-    // check if there is any significant distance between the dependency coordinates (> 0.001)
-    if(Coordinates.areAllEqual(dependencyCoordinates)) {
-      Future { dependencyCoordinates.head }
-    } else {
-      this.cluster = cluster
-      val previousRoundBDP = Double.MaxValue
-      val startCoordinates = Coordinates.origin
-      val resultVC = for {
-        bwToDependenciesRequest <- makeMapFuture(dependencyCoordinates.map(dependency => dependency -> getBandwidthBetweenCoordinates(dependency, startCoordinates, nnCandidates, Some(operator))).toMap)
-        bandwidthsToDependencies = bwToDependenciesRequest.map(dependency => dependency._1 -> math.max(dependency._2, defaultBandwidth) / 1000.0d)
-      } yield makeVCStep(startCoordinates, stepSize, previousRoundBDP, dependencyCoordinates, nnCandidates, bandwidthsToDependencies)
-      resultVC.flatten
-    }
-  }
-
-  def makeVCStep(vc: Coordinates, stepSize: Double, previousRoundForce: Double,
-                 dependencyCoordinates: List[Coordinates], nnCandidates: Map[Member, Coordinates],
-                 currentVCToDependenciesBandwidths: Map[Coordinates, Double],
-                 iteration: Int = 0): Future[Coordinates] = {
-
-    //SpecialStats.debug(s"$this", s"virtual coordinate iteration $iteration start")
-
-    // Relaxation minimizes SUM( datarate(p, v) * latency(p, v)^2 )
-    // reason according to paper: 'additional squared exponent in the function ensures that there is a unique solution from a set of placements with equal network usage'
-    // since distances between coordinates represent latencies; the length of the vector from A to B is the latency between A and B
-    // -> we need to square the length of the vector between A and B
-    // -> multiply the vector by its length; the scaled vectors length is the square of the original length (latency)
-    // | x * |x| |  = |x|^2
-    // look up the node closest to the current virtual coordinates, use the bandwidth between this node and the dependency as an estimate for bw between the coordinate pair
-    //  what happens if nearest node is the dependency? -> for now use two closest neighbours
-    // coord distance in ms, data rate in Mbit/s
-    var maxDist = 0.0d // longest observed latency
-    val dependencyForces = currentVCToDependenciesBandwidths.map(dependency => {
-      // f = f + datarate(p , v) * (p - v)²
-      val vectorToDep = dependency._1.sub(vc)
-      if(vectorToDep.measure() >= maxDist) maxDist = vectorToDep.measure()
-      val squaredVectorToDep = vectorToDep.scale(vectorToDep.measure()) // squared latency
-      val dependencyIncrement: Coordinates = squaredVectorToDep.scale(dependency._2) // latency² * bandwidth = BDP'
-      dependencyIncrement
-    }).toList
-
-    val forcesTotal: Coordinates = dependencyForces.foldLeft(Coordinates(0, 0, 0))(_.add(_))
-    val currentRoundForce = forcesTotal.measure()
-    // use unity vector scaled by step size here to not make ludicrously large steps; relative influence of data rates on f is preserved
-    var step = Coordinates.origin
-    if(stepAdjustmentEnabled) step = forcesTotal.unity().scale(stepSize * maxDist)
-    else step = forcesTotal.scale(stepSize)
-    val updatedVC = vc.add(step)
-    var updatedStepSize = stepSize
-    //log.debug(s"\ncalculateVCSingleOperator() iteration $iteration - " +
-      //s"\nprevious round force size: ${previousRoundForce}" +
-      //s"\nstep vector: ${step.toString} step size: ${step.measure()}" +
-      //s"\nvirtualCoords updated: ${updatedVC.toString} \n")
-    // adjust stepSize to make steps smaller when force vector starts growing between two iterations
-    // (we want the force vector's length to approach zero)
-    if(stepAdjustmentEnabled) { // paper did not feature step size adjustment, but algorithm does not converge well/at all without it
-      if (forcesTotal.measure() > previousRoundForce) {
-        updatedStepSize = stepSize * 0.5d
+  @scala.annotation.tailrec
+  def makeVCStep(previousVC: Coordinates,
+                 stepSize: Double,
+                 previousRoundForce: Double,
+                 iteration: Int = 0,
+                 consecutiveStepAdjustments: Int = 0)
+                 (implicit ec: ExecutionContext, operator: Query, dependencyCoordinates: QueryDependenciesWithCoordinates,
+                 dependenciesDataRateEstimates: Map[Query, Double]): Future[Coordinates] = {
+    if(iteration < iterationLimit) {
+      //println(s"makeVCStep $operator iteration $iteration - \ncurrCoord $previousVC, currentForce: $previousRoundForce")
+      // Relaxation minimizes SUM( datarate(p, v) * latency(p, v)^2 )
+      // reason according to paper: 'additional squared exponent in the function ensures that there is a unique solution from a set of placements with equal network usage'
+      // since distances between coordinates represent latencies; the length of the vector from A to B is the latency between A and B
+      // -> we need to square the length of the vector between A and B
+      // -> multiply the vector by its length; the scaled vectors length is the square of the original length (latency)
+      // | x * |x| |  = |x|^2
+      val parentForces = dependencyCoordinates.parents.map(parent => {
+        val vectorToParent = parent._2.sub(previousVC)
+        // f = f + datarate(p , v) * (p - v)²
+        // latency * dataRate = BDP (Bandwidth-Delay-Product)
+        val squaredVectorToParent = vectorToParent.scale(vectorToParent.measure())
+        val dependencyDataRate = dependenciesDataRateEstimates(parent._1) // data rate for parent -> operator
+        // latency is in [ms], dataRate in [Bytes/s]; use KBytes instead of Bytes since otherwise steps get too large
+        val dependencyBDPForce = squaredVectorToParent.scale(dependencyDataRate * 1e-6)
+        //println(s"parent ${parent._1.getClass} bdp vector: $dependencyBDPForce vecToDep: ${parent._2.sub(previousVC)} unit: ${ vectorToParent } data rate: $dependencyDataRate")
+        dependencyBDPForce
+      })
+      val childForces = dependencyCoordinates.child.map(child => {
+        val vectorToChild = child._2.sub(previousVC)
+        val childForce = vectorToChild.scale(vectorToChild.measure()).scale(dependenciesDataRateEstimates(operator) * 1e-6)
+        //println(s"child ${child._1.getClass} bdp vector: $childForce vecToDep: ${child._2.sub(previousVC)} unit: ${child._2.sub(previousVC).unity()} data rate: ${dependenciesDataRateEstimates(operator)}")
+        childForce
+      })
+      val currentRoundForceVector: Coordinates = (parentForces ++ childForces).foldLeft(Coordinates(0, 0, 0))(_.add(_))
+      val currentRoundForce = currentRoundForceVector.measure()
+      val step = currentRoundForceVector.scale(stepSize)
+      // use unity vector scaled by step size here to not make ludicrously large steps; relative influence of data rates on f is preserved
+        //if(stepAdjustmentEnabled) currentRoundForceVector.scale(stepSize)
+        //else currentRoundForceVector.scale(stepSize)
+      val updatedVC = previousVC.add(step)
+      val delta = previousRoundForce - currentRoundForce
+      /*
+      println(s"iteration $iteration" +
+                s"\ndependencyCoords: ${dependencyCoordinates}" +
+                s"\ncurrent round force size: ${currentRoundForce}, forces: $currentRoundForceVector)" +
+                s"\ndelta: $delta" +
+                s"\nstep vector: ${step} step vector size: ${step.measure()}, stepSize param: $stepSize}" +
+                s"\nnext virtualCoords: ${if(currentRoundForce > previousRoundForce) previousVC else updatedVC} ")
+      */
+      // adjust stepSize to make steps smaller when force vector starts growing between two iterations
+      // (we want the force vector's length to approach zero)
+      // paper did not feature step size adjustment, but algorithm does not converge well/at all without it
+      val forceThreshold = 0.5d
+      if(stepAdjustmentEnabled) {
+        if(delta > 0 && currentRoundForce >= forceThreshold) {
+          makeVCStep(updatedVC, stepSize, currentRoundForce, iteration + 1)
+        } else if(delta <= 0) {
+          // do not pass updated parameters -> try again with smaller step
+          makeVCStep(previousVC, stepSize * 0.5, previousRoundForce, iteration + 1)
+        } else {
+          // improvement that is smaller than minimum improvement -> terminate
+          Future { updatedVC }
+        }
+        // no step size adjustment
       } else {
-        updatedStepSize = stepSize * 1.1d
+        if(currentRoundForce >= forceThreshold) {
+          makeVCStep(updatedVC, stepSize, currentRoundForce, iteration + 1)
+        } else {
+          Future { updatedVC }
+        }
       }
+
+    } else { // terminate
+      log.warn(s"maximum iteration limit ($iterationLimit) reached, returning virtual coordinates $previousVC now!")
+      Future { previousVC }
     }
-
-    val result = for {
-      // look up the node closest to the current virtual coordinates, use the bandwidth between this node and the dependency as an estimate for bw between the coordinate pair
-      // what happens if nearest node is the dependency? -> use two closest neighbours
-      bwToDependenciesRequest <- makeMapFuture(dependencyCoordinates.map(dependency => dependency -> this.getBandwidthBetweenCoordinates(dependency, updatedVC, nnCandidates)).toMap)
-      updatedVCToDependenciesBandwidths = bwToDependenciesRequest.map(dependency => dependency._1 -> math.max(dependency._2, defaultBandwidth) / 1000.0d) // coord distance in ms, data rate in Mbit/s
-    } yield {
-      val forceThreshold = 0.1d
-      if(currentRoundForce >= forceThreshold && iteration < iterationLimit) {
-        makeVCStep(updatedVC, updatedStepSize, forcesTotal.measure(), dependencyCoordinates, nnCandidates, updatedVCToDependenciesBandwidths, iteration + 1)
-
-      } else { // terminate
-        if(iteration >= iterationLimit) log.warn(s"maximum iteration limit ($iterationLimit) reached, returning virtual coordinates $updatedVC now!")
-        //log.debug(s"\n calculateVCSingleOperator() iteration $iteration - " +
-          //s"\n previous round force: $previousRoundForce; current round force ${currentRoundForce} ; delta ${math.abs(currentRoundForce - previousRoundForce)}, threshold: $forceThreshold" +
-          //s"\n step vector: ${step.x} ${step.y} step size: $stepSize" +
-          //s"\n virtualCoords: $vc, virtualCoords updated: ${updatedVC} \n")
-
-        Future { updatedVC }
-      }
-    }
-    result.flatten
   }
 
   /**
@@ -186,16 +141,13 @@ object PietzuchAlgorithm extends PlacementStrategy {
     * @return member with minimum load
     */
   // TODO once operator re-use is implemented, this must be adapted according to the paper
-  def selectHostFromCandidates(virtualCoordinates: Coordinates, candidates: Map[Member, Coordinates], operator: Option[Query] = None): Future[Member] = {
-    val host = for {
-      candidatesMap <- if(candidates == null) getCoordinatesOfMembers(cluster, findPossibleNodesToDeploy(cluster), operator)
-      else Future { candidates }
-      machineLoads: Map[Member, Double] <- findMachineLoad(cluster, getNClosestNeighboursToCoordinatesByMember(k, virtualCoordinates, candidatesMap).map(_._1), operator)
+  def selectHostFromCandidates(virtualCoordinates: Coordinates, candidates: Map[Member, Coordinates], operator: Option[Query] = None)(implicit ec: ExecutionContext, cluster: Cluster): Future[(Member, Map[Member, Double])] = {
+    for {
+      machineLoads: Map[Member, Double] <- findMachineLoad(getNClosestNeighboursToCoordinatesByMember(k, virtualCoordinates, candidates).map(_._1), operator)
     } yield {
       val host = machineLoads.toList.minBy(_._2)._1
-      host
+      (host, machineLoads)
     }
-    host
   }
 
 }

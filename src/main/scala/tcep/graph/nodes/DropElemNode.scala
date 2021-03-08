@@ -3,14 +3,9 @@ package tcep.graph.nodes
 import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries._
-import tcep.factories.NodeFactory
 import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
-import tcep.machinenodes.helper.actors.{CreateRemoteOperator, RemoteOperatorCreated}
 import tcep.placement.HostInfo
-import tcep.utils.TCEPUtils
-
-import scala.concurrent.Future
 
 /**
   * Handling of [[tcep.data.Queries.DropElemQuery]] is done by DropElemNode.
@@ -26,11 +21,10 @@ case class DropElemNode(transitionConfig: TransitionConfig,
                         createdCallback: Option[CreatedCallback],
                         eventCallback: Option[EventCallback],
                         isRootOperator: Boolean,
-                        _parentNode: ActorRef*
-                       )
-  extends UnaryNode {
+                        publisherEventRate: Double,
+                        _parentActor: Seq[ActorRef]
+                      ) extends UnaryNode(_parentActor) {
 
-  var parentNode: ActorRef = _parentNode.head
   val elemToBeDropped: Int = query match {
     case DropElem1Of2(_, _) => 1
     case DropElem1Of3(_, _) => 1
@@ -91,7 +85,7 @@ case class DropElemNode(transitionConfig: TransitionConfig,
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
 
-    case event: Event if parentsList.contains(sender()) =>
+    case event: Event if parentActor.contains(sender()) =>
       val newEvent = event match {
         case Event1(_) => sys.error("Panic! Control flow should never reach this point!")
         case Event2(e1, e2) => handleEvent2(e1, e2)
@@ -101,7 +95,7 @@ case class DropElemNode(transitionConfig: TransitionConfig,
         case Event6(e1, e2, e3, e4, e5, e6) => handleEvent6(e1, e2, e3, e4, e5, e6)
       }
       newEvent.monitoringData = event.monitoringData
-      emitEvent(newEvent)
+      emitEvent(newEvent, eventCallback)
 
     case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
   }

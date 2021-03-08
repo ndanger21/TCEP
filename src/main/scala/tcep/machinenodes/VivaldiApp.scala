@@ -17,7 +17,7 @@ object VivaldiApp extends ConfigurationParser with App {
   val actorSystem: ActorSystem = ActorSystem(config.getString("clustering.cluster.name"), config)
   DistVivaldiActor.createVivIfNotExists(actorSystem)
   actorSystem.actorOf(Props(classOf[VivaldiRefNode]), "VivaldiRef")
-  actorSystem.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
+  actorSystem.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
 
 
   override def getRole: String = "VivaldiRef"

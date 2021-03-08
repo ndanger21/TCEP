@@ -13,29 +13,27 @@ import org.slf4j.LoggerFactory
 import tcep.data.Queries.{Query, Requirement}
 import tcep.graph.QueryGraph
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.qos._
-import tcep.graph.transition.MAPEK.{GetLastTransitionDuration, GetLastTransitionStats, GetPlacementStrategyName, GetRequirements, GetTransitionStatus, IsDeploymentComplete}
+import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.TransitionStats
 import tcep.graph.transition.mapek.lightweight.LightweightKnowledge.GetLogData
+import tcep.machinenodes.GraphCreatedCallback
 import tcep.machinenodes.consumers.Consumer.{GetAllRecords, GetMonitorFactories, SetQosMonitors}
-import tcep.machinenodes.{EventPublishedCallback, GraphCreatedCallback}
 import tcep.placement.PlacementStrategy
 
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 
-class Simulation(cluster: Cluster, name: String, directory: Option[File], query: Query, transitionConfig: TransitionConfig,
+class Simulation(name: String, directory: Option[File], query: Query, transitionConfig: TransitionConfig,
                  publishers: Map[String, ActorRef], consumer: ActorRef, startingPlacementStrategy: Option[PlacementStrategy],
-                 allRecords: AllRecords, fixedSimulationProperties: Map[Symbol, Int] = Map(), context: ActorContext,
-                 mapekType: String = ConfigFactory.load().getString("constants.mapek.type")) {
+                 allRecords: AllRecords, fixedSimulationProperties: Map[Symbol, Int] = Map(),
+                 mapekType: String = ConfigFactory.load().getString("constants.mapek.type"))(implicit context: ActorContext, cluster: Cluster, baseEventRate: Double) {
 
   lazy val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
   implicit val ec: ExecutionContext = blockingIoDispatcher
   val ldt = LocalDateTime.now
   val out = directory map { directory => new PrintStream(new File(directory, s"$name-$ldt.csv"))
   } getOrElse java.lang.System.out
-  //val microsecondsPerEvent = ConfigFactory.load().getInt("constants.event-interval-microseconds")
   protected val log = LoggerFactory.getLogger(getClass)
   protected var queryGraph: QueryGraph = _
   protected var simulation: Cancellable = _
@@ -50,10 +48,10 @@ class Simulation(cluster: Cluster, name: String, directory: Option[File], query:
     * @param totalTime Total Time for the simulation (in Seconds)
     * @return
     */
-  def startSimulation(percentageQueries: Double, algoName: String,  queryStr: String, eventRate: String, startTime: FiniteDuration, interval: FiniteDuration, totalTime: FiniteDuration)(callback: () => Any): QueryGraph = {
+  def startSimulation(queryStr: String, startTime: FiniteDuration, interval: FiniteDuration, totalTime: FiniteDuration)(callback: () => Any): QueryGraph = {
     this.callback = callback
     val graph = executeQuery()
-    startSimulationLog(percentageQueries, algoName,  queryStr, eventRate, startTime, interval, totalTime, callback)
+    startSimulationLog(queryStr, startTime, interval, totalTime, callback)
     graph
   }
 
@@ -61,15 +59,14 @@ class Simulation(cluster: Cluster, name: String, directory: Option[File], query:
     log.info("Executing query. Fetching monitors...")
     val monitors = Await.result(this.consumer ? GetMonitorFactories, atMost = FiniteDuration(10, TimeUnit.SECONDS)).asInstanceOf[Array[MonitorFactory]]
     log.info(s"Monitors are: $monitors")
-    queryGraph = new QueryGraph(context, Cluster(context.system), query, transitionConfig, publishers, startingPlacementStrategy,
-      Some(GraphCreatedCallback()), monitors, Some(allRecords), consumer, fixedSimulationProperties, mapekType)
-    queryGraph.createAndStart(monitors)(None)
+    queryGraph = new QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, Some(GraphCreatedCallback()), Some(allRecords), consumer, fixedSimulationProperties, mapekType)
+    queryGraph.createAndStart()
     guiUpdater = context.system.scheduler.schedule(0 seconds, 60 seconds)(GUIConnector.sendMembers(cluster))
     queryGraph
   }
 
 
-  def startSimulationLog(percentageQueries: Double, algoName: String,  queryStr: String, eventRate: String, startTime: FiniteDuration, interval: FiniteDuration, totalTime: FiniteDuration, callback: () => Any): Any = {
+  def startSimulationLog(queryStr: String, startTime: FiniteDuration, interval: FiniteDuration, totalTime: FiniteDuration, callback: () => Any): Any = {
 
     log.info("entered StartSimulationLog")
     var time = 0L
@@ -103,6 +100,7 @@ class Simulation(cluster: Cluster, name: String, directory: Option[File], query:
           cAllRecords <- (consumer ? GetAllRecords).mapTo[AllRecords]
           if recordsArrived(cAllRecords) && cAllRecords.allDefined
           status <- (queryGraph.mapek.knowledge ? GetTransitionStatus).mapTo[Int]
+          avgLatency <- (queryGraph.mapek.knowledge ? GetAverageLatency(interval.toMillis)).mapTo[Double]
           placementStrategy <- (queryGraph.mapek.knowledge ? GetPlacementStrategyName).mapTo[String]
           currentRequirement <- (queryGraph.mapek.knowledge ? GetRequirements).mapTo[List[Requirement]]
           lastTransitionStats <- (queryGraph.mapek.knowledge ? GetLastTransitionStats).mapTo[(TransitionStats, Long)]
@@ -114,7 +112,7 @@ class Simulation(cluster: Cluster, name: String, directory: Option[File], query:
           if (transitionExecutionMode == 1)
             executionMode = "Exponential"
           if (time == 0 && !header) {
-            var headerLine = s"Placement \t CurrentTime \t Query \t Event Rate \t Time \t latency \t hops \t cpuUsage \t OpeventRate " +
+            var headerLine = s"Placement \t CurrentTime \t Query \t Publisher Event Rate \t Time \t latency \t hops \t cpuUsage \t Output Event Rate " +
               s"\t EventMsgOverhead \t PlacementMsgOverhead \t NetworkUsage " +
               s"\t TransitionStatus \t LastTransitionDuration \t LastTransitionCommunicationOverhead \t LastTransitionPlacementOverhead \t LastTransitionCombinedOverhead " +
               s"\t requirement \t mapek"
@@ -130,8 +128,8 @@ class Simulation(cluster: Cluster, name: String, directory: Option[File], query:
           outstring = s"$placementStrategy" +
             s"\t ${LocalDateTime.ofInstant(Instant.now, ZoneOffset.UTC).getHour}:${LocalDateTime.ofInstant(Instant.now, ZoneOffset.UTC).getMinute}:${LocalDateTime.ofInstant(Instant.now, ZoneOffset.UTC).getSecond} " +
             s"\t $queryStr" +
-            s"\t $eventRate" +
-            s"\t $time \t ${cAllRecords.recordLatency.lastMeasurement.get.toMillis.toString} " +
+            s"\t $baseEventRate" +
+            s"\t $time \t ${BigDecimal(avgLatency).setScale(2, BigDecimal.RoundingMode.HALF_UP)} " +
             s"\t ${cAllRecords.recordMessageHops.lastMeasurement.get.toString} " +
             s"\t ${BigDecimal(cAllRecords.recordAverageLoad.lastLoadMeasurement.get).setScale(2, BigDecimal.RoundingMode.HALF_UP).toString} " +
             s"\t ${cAllRecords.recordFrequency.lastMeasurement.get.toString} " +

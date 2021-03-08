@@ -10,6 +10,7 @@ query = sys.argv[3]
 mode = sys.argv[4]
 transitionStrategy = sys.argv[5]
 transitionExecutionMode = sys.argv[6]
+eventRate = sys.argv[7]
 
 dockerStackPath = os.path.join(project_root, "docker-stack.yml")
 
@@ -20,7 +21,8 @@ with open(dockerStackPath) as f:
     reqStr = re.sub('--req \w+', '--req ' + requirement, mapekStr)
     transStratStr = re.sub('--transitionStrategy \w+', '--transitionStrategy ' + transitionStrategy, reqStr)
     transExStr = re.sub('-- \w+', '--transitionExecutionMode ' + transitionExecutionMode, transStratStr)
+    eventRateStr = re.sub('-- \w+', '--eventRate ' + eventRate, transExStr)
 
 with open(dockerStackPath, "w+") as f:
-    f.write(transExStr)
+    f.write(eventRateStr)
 

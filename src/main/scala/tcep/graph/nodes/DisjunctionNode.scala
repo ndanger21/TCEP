@@ -3,7 +3,6 @@ package tcep.graph.nodes
 import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries._
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
@@ -13,10 +12,16 @@ import tcep.placement.HostInfo
   *
   * @see [[QueryGraph]]
   **/
-
-
-case class DisjunctionNode(transitionConfig: TransitionConfig, hostInfo: HostInfo, backupMode: Boolean, mainNode: Option[ActorRef], query: DisjunctionQuery, createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback], isRootOperator: Boolean, parents: ActorRef*)
-  extends BinaryNode {
+case class DisjunctionNode(transitionConfig: TransitionConfig,
+                           hostInfo: HostInfo,
+                           backupMode: Boolean,
+                           mainNode: Option[ActorRef],
+                           query: DisjunctionQuery,
+                           createdCallback: Option[CreatedCallback],
+                           eventCallback: Option[EventCallback],
+                           isRootOperator: Boolean,
+                           publisherEventRate: Double,
+                           parents: ActorRef*) extends BinaryNode {
 
   assert(parents.size == 2)
   var parentNode1 = parents.head
@@ -42,32 +47,32 @@ case class DisjunctionNode(transitionConfig: TransitionConfig, hostInfo: HostInf
       val filledArray: Array[Either[Any, Any]] = fillArray(1, array)
       val event = Event1(filledArray(0))
       event.copyMonitoringData(monitoringData)
-      emitEvent(event)
+      emitEvent(event, eventCallback)
     case _: Query2[_, _] =>
       val filledArray: Array[Either[Any, Any]] = fillArray(2, array)
       val event = Event2(filledArray(0), filledArray(1))
       event.copyMonitoringData(monitoringData)
-      emitEvent(event)
+      emitEvent(event, eventCallback)
     case _: Query3[_, _, _] =>
       val filledArray: Array[Either[Any, Any]] = fillArray(3, array)
       val event = Event3(filledArray(0), filledArray(1), filledArray(2))
       event.copyMonitoringData(monitoringData)
-      emitEvent(event)
+      emitEvent(event, eventCallback)
     case _: Query4[_, _, _, _] =>
       val filledArray: Array[Either[Any, Any]] = fillArray(4, array)
       val event = Event4(filledArray(0), filledArray(1), filledArray(2), filledArray(3))
       event.copyMonitoringData(monitoringData)
-      emitEvent(event)
+      emitEvent(event, eventCallback)
     case _: Query5[_, _, _, _, _] =>
       val filledArray: Array[Either[Any, Any]] = fillArray(5, array)
       val event = Event5(filledArray(0), filledArray(1), filledArray(2), filledArray(3), filledArray(4))
       event.copyMonitoringData(monitoringData)
-      emitEvent(event)
+      emitEvent(event, eventCallback)
     case _: Query6[_, _, _, _, _, _] =>
       val filledArray: Array[Either[Any, Any]] = fillArray(6, array)
       val event = Event6(filledArray(0), filledArray(1), filledArray(2), filledArray(3), filledArray(4), filledArray(5))
       event.copyMonitoringData(monitoringData)
-      emitEvent(event)
+      emitEvent(event, eventCallback)
   }
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {

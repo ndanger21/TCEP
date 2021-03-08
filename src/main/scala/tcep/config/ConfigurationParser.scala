@@ -69,5 +69,8 @@ trait ConfigurationParser {
       .withFallback(ConfigFactory.parseString(s"akka.cluster.roles=[$getRole]"))
       .withFallback(ConfigFactory.load())
 
+  implicit lazy val baseEventRate: Double = options.getOrElse('eventRate,
+    throw new IllegalArgumentException("base event rate of publishers must be given as argument to each App")
+  ).toDouble
   def getRole: String
 }

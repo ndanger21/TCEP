@@ -1,12 +1,11 @@
 package tcep.graph.nodes.traits
 
 import akka.actor.{ActorRef, PoisonPill}
-import tcep.data.Events.{Created, DependenciesRequest, DependenciesResponse}
+import tcep.data.Events.{DependenciesRequest, DependenciesResponse}
 import tcep.data.Queries.LeafQuery
 import tcep.graph.nodes.ShutDown
-import tcep.graph.transition.{StartExecution, TransitionRequest, TransitionStats}
-import tcep.graph.{CreatedCallback, EventCallback}
-import tcep.machinenodes.helper.actors.ACK
+import tcep.graph.nodes.traits.Node.UnSubscribe
+import tcep.graph.transition.TransitionStats
 import tcep.placement.PlacementStrategy
 
 /**
@@ -17,12 +16,11 @@ trait LeafNode extends Node {
   val query: LeafQuery
 
   override def childNodeReceive: Receive = {
-    case Created => emitCreated()
     case DependenciesRequest => sender ! DependenciesResponse(Seq.empty)
     case ShutDown() => {
+      getParentActors().foreach(_ ! UnSubscribe())
       self ! PoisonPill
     }
-
   }
 
   override def handleTransitionRequest(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit =

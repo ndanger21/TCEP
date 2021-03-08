@@ -5,7 +5,6 @@ import java.io.File
 import akka.actor.{ActorSystem, Props}
 import com.typesafe.config.ConfigFactory
 import tcep.machinenodes.helper.actors.TaskManagerActor
-import tcep.placement.vivaldi.VivaldiCoordinates
 
 
 /**
@@ -36,6 +35,6 @@ object SimulationRunner extends App {
     }
 
 
-  actorSystem.actorOf(Props(new TaskManagerActor with VivaldiCoordinates), "TaskManager")
+  actorSystem.actorOf(Props(new TaskManagerActor(1.0)), "TaskManager")
   actorSystem.actorOf(Props(new SimulationSetup(directory)),"simulationSetup")
 }

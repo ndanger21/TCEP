@@ -1,22 +1,24 @@
 package tcep.graph.nodes
 
 import akka.actor.{ActorLogging, ActorRef, PoisonPill}
+import akka.pattern.ask
 import akka.util.Timeout
-import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.DistVivaldiActor
 import tcep.ClusterActor
 import tcep.data.Events
 import tcep.data.Events._
+import tcep.data.Queries.ClientDummyQuery
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, Subscribe}
+import tcep.graph.nodes.traits.{SystemLoadUpdater, TransitionConfig, TransitionModeNames}
 import tcep.graph.transition.MAPEK.{SetLastTransitionStats, SetTransitionStatus, UpdateLatency}
-import tcep.graph.transition.{MAPEK, TransferredState, TransitionRequest}
+import tcep.graph.transition.{MAPEK, SuccessorStart, TransferredState, TransitionRequest}
 import tcep.machinenodes.consumers.Consumer.SetStatus
 import tcep.machinenodes.helper.actors.{ACK, PlacementMessage}
 import tcep.placement.{HostInfo, OperatorMetrics}
+import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.{SpecialStats, TCEPUtils}
 
-import scala.concurrent.Future
 import scala.concurrent.duration._
 
 /**
@@ -24,11 +26,7 @@ import scala.concurrent.duration._
   *
   **/
 
-class ClientNode(var rootOperator: ActorRef, /*monitorFactories: Array[MonitorFactory], */mapek: MAPEK, var consumer: ActorRef = null) extends ClusterActor with ActorLogging {
-
-  log.info("Creating Clientnode")
-  val defaultBandwidth = ConfigFactory.load().getInt("constants.default-data-rate")
-  //val monitors = monitorFactories.map(f => f.createNodeMonitor)
+class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRef = null, transitionConfig: TransitionConfig, rootOperatorBandwidthEstimate: Double) extends ClusterActor with SystemLoadUpdater with ActorLogging {
   var hostInfo: HostInfo = _
   var transitionStartTime: Long = _   //Not in transition
   var transitionStatus: Int = 0
@@ -49,7 +47,7 @@ class ClientNode(var rootOperator: ActorRef, /*monitorFactories: Array[MonitorFa
       }
     }
 
-    case TransferredState(_, replacement, oldParent, stats) => {
+    case TransferredState(_, replacement, oldParent, stats, lastOperator) => {
       sender() ! ACK()
       // log transition time of parent
       val transitionStart: Long = stats.transitionTimesPerOperator.getOrElse(oldParent, 0)
@@ -59,34 +57,39 @@ class ClientNode(var rootOperator: ActorRef, /*monitorFactories: Array[MonitorFa
       val updatedStats =  updateTransitionStats(stats, oldParent, transferredStateSize(oldParent), updatedOpMap = Some(opmap) )
       mapek.knowledge ! SetTransitionStatus(0)
       mapek.knowledge ! SetLastTransitionStats(updatedStats)
+      if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart)
+        replacement ! SuccessorStart
+
       if(transitionStatus != 0) {
         val timetaken = System.currentTimeMillis() - transitionStartTime
         log.info(s"replacing operator node after $timetaken ms \n $rootOperator \n with replacement $replacement")
-        replaceOperator(replacement)
+        for { rootPos <- TCEPUtils.getCoordinatesOfNode(cluster, rootOperator.path.address) } yield {
+          val bdp = 0.001 * rootOperatorBandwidthEstimate * DistVivaldiActor.localPos.coordinates.distance(rootPos) // dist in [ms], bandwidth in [Bytes / s]
+          replaceOperator(replacement, bdp)
         transitionLog(s"transition complete after $timetaken ms (from $oldParent to $replacement \n\n")
-        GUIConnector.sendTransitionTimeUpdate(timetaken.toDouble / 1000)(blockingIoDispatcher)
+          GUIConnector.sendTransitionTimeUpdate(timetaken.toDouble / 1000)
+        }
       }
     }
 
     case OperatorMigrationNotice(oldOperator, newOperator) => { // received from migrating parent (oldOperator)
-      this.replaceOperator(newOperator)
+      this.replaceOperator(newOperator, 1.0 ) // migration is not used atm
       log.info(s"received operator migration notice from $oldOperator, \n new operator is $newOperator")
     }
 
     case event: Event if sender().equals(rootOperator) && hostInfo != null => {
-      val s = sender()
       //Events.printEvent(event, log)
       //val arrival = System.nanoTime()
-      Events.updateMonitoringData(log, event, hostInfo, currentLoad) // also updates hostInfo.operatorMetrics.accumulatedBDP
+      val e2eLatency = System.currentTimeMillis() - event.monitoringData.creationTimestamp
+      Events.updateMonitoringData(log, event, hostInfo, currentLoad)
       if(!guiBDPUpdateSent) {
-        GUIConnector.sendBDPUpdate(hostInfo.graphTotalBDP, DistVivaldiActor.getLatencyValues())(cluster.selfAddress, blockingIoDispatcher) // this is the total BDP of the entire graph
+        GUIConnector.sendBDPUpdate(event.monitoringData.networkUsage.sum, DistVivaldiActor.getLatencyValues())(cluster.selfAddress, blockingIoDispatcher) // this is the total BDP of the entire graph
         guiBDPUpdateSent = true
         SpecialStats.debug(s"$this", s"hostInfo after update: ${hostInfo.operatorMetrics}")
       }
       consumer ! event
       //monitors.foreach(monitor => monitor.onEventEmit(event, transitionStatus))
       //val now = System.nanoTime()
-      val e2eLatency = System.currentTimeMillis() - event.monitoringData.creationTimestamp
       mapek.knowledge ! UpdateLatency(e2eLatency)
       //SpecialStats.log(s"$this", "clientNodeEvents", s"received event $event from $s;
       // ${event.monitoringData.lastUpdate.map(e => e._1 -> (System.currentTimeMillis() - e._2) ).mkString(";")};
@@ -116,33 +119,32 @@ class ClientNode(var rootOperator: ActorRef, /*monitorFactories: Array[MonitorFa
     * @param replacement replacement ActorRef
     * @return
     */
-  private def replaceOperator(replacement: ActorRef) = {
-    for {bdpToOperator: Double <- this.getBDPToOperator(replacement)} yield {
-      hostInfo = HostInfo(this.cluster.selfMember, null, OperatorMetrics(Map(rootOperator.path.name -> bdpToOperator))) // the client node does not have its own operator, hence null
+  private def replaceOperator(replacement: ActorRef, bdpToOperator: Double) = {
+      hostInfo = HostInfo(this.cluster.selfMember, ClientDummyQuery(), OperatorMetrics(Map(rootOperator -> bdpToOperator)))
       this.rootOperator = replacement
       guiBDPUpdateSent = false // total (accumulated) bdp of the entire operator graph is updated when the first event arrives
     }
-  }
 
-  def getBDPToOperator(operator: ActorRef): Future[Double] = {
-    val operatorMember = TCEPUtils.getMemberFromActorRef(cluster, operator)
-    def bdpRequest = TCEPUtils.getBDPBetweenNodes(cluster, cluster.selfMember, operatorMember)(blockingIoDispatcher)
-    bdpRequest recoverWith {
-      case e: Throwable =>
-        log.warning(s"failed to get BDP between clientNode and root operator, retrying once... \n cause: $e")
-        bdpRequest
-    } recoverWith { case _ => TCEPUtils.getVivaldiDistance(cluster, cluster.selfMember, operatorMember)(blockingIoDispatcher) map { _ * defaultBandwidth }
-    }
-  }
 
   override def preStart(): Unit = {
     super.preStart()
-    for { bdpToOperator <- this.getBDPToOperator(rootOperator) } yield {
-      hostInfo = HostInfo(this.cluster.selfMember, null, OperatorMetrics(Map(rootOperator.path.name -> bdpToOperator))) // the client node does not have its own operator, hence null
+    implicit val ec = blockingIoDispatcher
       log.info(s"Subscribing for events from ${rootOperator.path.name}")
-      rootOperator ! Subscribe(self)
+    // subscribe to root operator and update HostInfo with BDP to it
+    for {
+      ack <- (rootOperator ? Subscribe(self, ClientDummyQuery())).mapTo[AcknowledgeSubscription]
+      rootPos <- {
+        log.info(s"subscribed for events from rootoperator ${rootOperator} ${ack.acknowledgingParent}")
+        TCEPUtils.getCoordinatesOfNode(cluster, rootOperator.path.address)(ec)
+      }
+    } yield {
+      val dist = rootPos.distance(DistVivaldiActor.localPos.coordinates)
+      val bdpToOperator = dist * rootOperatorBandwidthEstimate * 0.001 // dist in [ms], bandwidth in [Bytes / s]
+      hostInfo = HostInfo(this.cluster.selfMember, ClientDummyQuery(), OperatorMetrics(Map(rootOperator -> bdpToOperator)))
+      log.info(s"bdp on last hop: ${bdpToOperator} Bytes")
     }
   }
+
 
   override def postStop(): Unit = {
     super.postStop()

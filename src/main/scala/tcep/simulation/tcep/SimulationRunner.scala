@@ -48,6 +48,8 @@ object SimulationRunner extends App with ConfigurationParser {
       val transitionStrategy = options.getOrElse('transitionStrategy, "MFGS") match {
         case "MFGS" => TransitionModeNames.MFGS
         case "SMS" => TransitionModeNames.SMS
+        case "NMS" => TransitionModeNames.NaiveMovingState
+        case "NSMS" => TransitionModeNames.NaiveStopMoveStart
       }
       val transitionExecutionMode = options.getOrElse('transitionExecutionMode, "1").toInt match {
         case 0 => TransitionExecutionModes.SEQUENTIAL_MODE
@@ -71,8 +73,8 @@ object SimulationRunner extends App with ConfigurationParser {
         None
       }
       val fixedSimulationProperties = Map('baseLatency -> baseLatency.toInt, 'maxPubToClientHops -> maxPubToClientHops.toInt)
-      val taskManagerActorProps = Props(classOf[TaskManagerActor]).withMailbox("prio-mailbox")
-      val simulatorActorProps = Props(new SimulationSetup(directory, mode.toInt, TransitionConfig(transitionStrategy, transitionExecutionMode), Some(duration.toInt), initialAlgorithm, None, query, eventRate, fixedSimulationProperties, mapek, requirement, loadTestMax)).withMailbox("prio-mailbox")
+      val taskManagerActorProps = Props(classOf[TaskManagerActor], baseEventRate).withMailbox("prio-mailbox")
+      val simulatorActorProps = Props(new SimulationSetup(directory, mode.toInt, TransitionConfig(transitionStrategy, transitionExecutionMode), Some(duration.toInt), initialAlgorithm, None, query, fixedSimulationProperties, mapek, requirement, loadTestMax)).withMailbox("prio-mailbox")
       logger.info(s"taskManager mailbox: ${taskManagerActorProps.mailbox} \n simulator mailbox: ${simulatorActorProps.mailbox}")
       actorSystem.actorOf(taskManagerActorProps, "TaskManager")
       actorSystem.actorOf(simulatorActorProps, "SimulationSetup")

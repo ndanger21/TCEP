@@ -47,7 +47,7 @@ case class UnregularPublisher(waitTime: Long, createEventFromId: Integer => (Eve
     event.init()(cluster.selfAddress)
     val waittime = tup._2*1000
     log.info(s"Emitting event: $event and waiting for ${waittime.toLong}ms")
-    subscribers.foreach(_ ! event)
+    subscribers.keys.foreach(_ ! event)
     emitEventTask = context.system.scheduler.scheduleOnce(FiniteDuration(waittime.toLong, TimeUnit.MILLISECONDS))(publishEvent)
   }
 }

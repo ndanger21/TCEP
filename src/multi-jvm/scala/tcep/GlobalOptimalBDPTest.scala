@@ -2,17 +2,17 @@ package tcep
 
 import java.util.concurrent.TimeUnit
 
-import akka.actor.ActorContext
-import akka.cluster.{Cluster, Member}
-import com.typesafe.config.ConfigFactory
+import akka.cluster.Member
 import org.discovery.vivaldi.Coordinates
 import org.scalatest.mockito.MockitoSugar
+import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.Dependencies
-import tcep.placement.{GlobalOptimalBDPAlgorithm, HostInfo, PlacementStrategy}
+import tcep.placement.GlobalOptimalBDPAlgorithm
 
+import scala.collection.mutable
 import scala.concurrent.Await
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration._
 
 // need one concrete test class per node
 class GlobalOptimalBDPMultiJvmNode1 extends      GlobalOptimalBDPMultiNodeTestSpec
@@ -25,38 +25,23 @@ abstract class GlobalOptimalBDPMultiNodeTestSpec extends MultiJVMTestSetup with 
 
   import TCEPMultiNodeConfig._
 
-  private def initUUT(cluster: Cluster): GlobalOptimalBDPAlgorithm.type = {
+  private def initUUT(): GlobalOptimalBDPAlgorithm.type = {
     val uut = GlobalOptimalBDPAlgorithm
-    val publisher1 = getPublisherOn(cluster, cluster.state.members.find(_.address.port.get == 2501).get, pNames(0)).get
-    val publisher2 = getPublisherOn(cluster, cluster.state.members.find(_.address.port.get == 2502).get, pNames(1)).get
-    val publishers = Map(pNames(0) -> publisher1, pNames(1) -> publisher2) // need to override publisher map here because all nodes have hostname localhost during test
-
-    Await.result(uut.initialize(cluster, publisherNameMap = Some(publishers)), FiniteDuration(20, TimeUnit.SECONDS))
-    assert(uut.cluster != null)
+    Await.result(uut.initialize(), FiniteDuration(20, TimeUnit.SECONDS))
     testConductor.enter("initialization complete")
     uut
   }
 
-  def setCoordinates(uut: PlacementStrategy,
-                     clientCoords: Coordinates, publisher1Coords: Coordinates, publisher2Coords: Coordinates,
-                     host1: Coordinates, host2: Coordinates): Unit = {
-
-    this.setCoordinatesExplicitly(clientCoords, publisher1Coords, publisher2Coords, host1, host2)
-    uut.memberCoordinates = Map()
-    val coordUpdate = uut.updateCoordinateMap()
-    Await.result(coordUpdate, new FiniteDuration(30, TimeUnit.SECONDS))
-  }
-
   "GlobalOptimalBDPAlgorithm" must {
-    "select the node with minimum BDP sum to publishers and subscriber" in {
+    "select the node with minimum BDP sum to publishers and subscriber" in within(5 seconds){
 
-      val uut = initUUT(cluster)
+      val uut = initUUT()
       val clientC = new Coordinates(0, -10, 0)
-      val publisher1 = new Coordinates(-40, 30, 0) // pnames(0)
-      val publisher2 = new Coordinates(40, 30, 0) // pnames(1)
+      val pub1 = new Coordinates(-40, 30, 0) // pnames(0)
+      val pub2 = new Coordinates(40, 30, 0) // pnames(1)
       val host1 = new Coordinates(0, 0, 0)
       val host2 = new Coordinates(40, -10, 0)
-      setCoordinates(uut, clientC, publisher1, publisher2, host1, host2)
+      setCoordinatesForPlacement(uut, clientC, pub1, pub2, host1, host2)
 
       runOn(client) {
 
@@ -64,43 +49,40 @@ abstract class GlobalOptimalBDPMultiNodeTestSpec extends MultiJVMTestSetup with 
         val s2 = Stream1[Int](pNames(1), Set())
         val and = Conjunction11[Int, Int](s1, s2, Set())
         val f = Filter2[Int, Int](and, _ => true, Set())
-        val operators: List[Query] = List(s1, s2, and, f)
-        //val publishers = Map(pNames(0) -> getPublisherOn(cluster, getMembersWithRole(cluster, "Publisher").head, pNames(0)).get)
-        val candidates = Await.result(uut.getCoordinatesOfMembers(cluster, cluster.state.members), uut.requestTimeout)
+        val operators: List[Query] = List(s1, s2, and, f).reverse
+        val candidates: Map[Member, Coordinates] = Await.result(uut.getCoordinatesOfMembers(cluster.state.members), uut.requestTimeout)
+        val p1Member = cluster.state.members.find(_.address == node(publisher1).address).get
+        val p2Member = cluster.state.members.find(_.address == node(publisher2).address).get
 
-        def getBDPOfPlacement(rootOperator: Query, placement: Map[Query, Member], coords: Map[Member, Coordinates]): Double = {
-          val bw = ConfigFactory.load().getDouble("constants.default-data-rate")
-          val opToParentBDPs = placement.map(op => op._1 -> {
-            val opCoords = coords(op._2)
-            val bdpToParents = op._1 match { // parent == subquery
-                // find stream publisher by member address port (see pNames)
-              case s: StreamQuery => bw * opCoords.distance(coords.find(e => s.publisherName.contains(e._1.address.port.get.toString)).get._2)
-              case s: SequenceQuery =>
-                bw * opCoords.distance(coords.find(e => s.s1.publisherName.contains(e._1.address.port.get.toString)).get._2) +
-                  bw * opCoords.distance(coords.find(e => s.s2.publisherName.contains(e._1.address.port.get.toString)).get._2)
-              case b: BinaryQuery => bw * opCoords.distance(coords(placement(b.sq1))) + bw * opCoords.distance(coords(placement(b.sq2)))
-              case u: UnaryQuery => bw * opCoords.distance(coords(placement(u.sq)))
-            }
-            if(op._1 == rootOperator) bdpToParents + bw * opCoords.distance(coords.find(_._1.hasRole("Subscriber")).get._2)
-            else bdpToParents
-          })
-          opToParentBDPs.values.sum
-        }
-        // all placements where all operators are on one host
-        val allPossibleMappings: List[Map[Query, Member]] = candidates.map(c => operators.map(op => op -> c._1).toMap).toList
-        val BDPs = allPossibleMappings.map(m => m -> getBDPOfPlacement(f, m, candidates))
-        val minBDP = BDPs.minBy(m => m._2)._2
-        //println(s"\nDEBUG BDPs: ${BDPs.map(e => s"\n ${e._1.map(t => s"${t._1} -> ${t._2.address.port.get}")}  | ${e._2}")}")
-        //println(s"\nDEBUG minimum BDP: $minBDP")
-        val dependencies = Dependencies(List(), List()) // only relevant for bdp calculation, not tested here
-        val placement: Map[Query, Member] = operators.map(op => op -> Await.result(uut.findOptimalNode(mock[ActorContext], cluster, dependencies, mock[HostInfo], op), uut.requestTimeout).member).toMap
-        val placementBDP = getBDPOfPlacement(f, placement, candidates)
-        //println(s"\n placement bdp: $placementBDP \n ${placement.mkString("\n")}")
-        val operatorHosts = placement.values
-        operatorHosts.foreach(m => assert(!operatorHosts.exists(_ != m), "all operators must be on the same host"))
-        assert(placementBDP == minBDP, "BDP of placement must be minimum possible BDP of all possible placements with all operators on one node")
+        val s1Placement = s1 -> Await.result(uut.applyGlobalOptimalBDPAlgorithm(s1, Dependencies(Map(publishers(pNames(0)) -> PublisherDummyQuery(pNames(0))), Map(None -> and))), remaining)
+        val s2Placement = s2 -> Await.result(uut.applyGlobalOptimalBDPAlgorithm(s2, Dependencies(Map(publishers(pNames(1)) -> PublisherDummyQuery(pNames(1))), Map(None -> and))), remaining)
+        // use publisher actors here even if they are not the real parents; irrelevant here
+        val andPlacement = and -> Await.result(uut.applyGlobalOptimalBDPAlgorithm(and, Dependencies(Map(publishers(pNames(0)) -> s1), Map(None -> f))), remaining)
+        val fPlacement = f -> Await.result(uut.applyGlobalOptimalBDPAlgorithm(f, Dependencies(Map(publishers(pNames(0)) -> and), Map(Some(clientProbe.ref) -> ClientDummyQuery()))), remaining)
+        val placement = Map(s1Placement, s2Placement, andPlacement, fPlacement)
+        println(s"\n placement bdp: \n ${placement.mkString("\n")}")
+
+        assert(placement.forall(_._2._1.member.address == placement.head._2._1.member.address), "all operators should have the same host")
+        assert(placement.forall(_._2._2 == placement.head._2._2), "all operators should have the same BDP")
+        val dataRateEstimates = Queries.estimateOutputBandwidths(f, baseEventRate)
+        val allBDPs = candidates.map(c => c._1 -> {
+          val p1BDP = dataRateEstimates(PublisherDummyQuery(s1.publisherName)) * 0.001 * candidates(p1Member).distance(c._2)
+          val p2BDP = dataRateEstimates(PublisherDummyQuery(s2.publisherName)) * 0.001 * candidates(p2Member).distance(c._2)
+          val cBDP = dataRateEstimates(f) * 0.001 * candidates(cluster.state.members.find(_.hasRole("Subscriber")).get).distance(c._2)
+          p1BDP + p2BDP + cBDP
+        })
+
+        println(s"allBDPS: \n ${allBDPs.mkString("\n")}")
+        assert(placement.head._2._1.member == allBDPs.minBy(_._2)._1, "BDP of placement must be on the member with minimum possible BDP of all possible placements")
+        assert(math.abs(placement.head._2._2 - allBDPs.minBy(_._2)._2) < 1e-3, "BDP of placement must be minimum possible BDP of all possible placements")
+
+
+        // manually reset placement
+        uut.singleNodePlacement = None
+        Await.result((uut.initialVirtualOperatorPlacement(f, publishers)(ec, cluster, baseEventRate, mutable.LinkedHashMap())), remaining)
+        assert(uut.singleNodePlacement.isDefined, "singleNodePlacement must be defined after calling initialVirtualOperatorPlacement")
+        assert(uut.singleNodePlacement.get._1 == placement.head._2._1.member, "initialVirtualOperatorPlacement should return the same host as recursive deployment")
       }
-
       testConductor.enter("test minimal BDP complete")
     }
   }

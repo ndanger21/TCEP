@@ -8,14 +8,12 @@ import java.lang.management.ManagementFactory
 import java.lang.reflect.{Field, Modifier}
 import java.util.{Arrays, IdentityHashMap, Random}
 
-import akka.actor.ActorRef
 import com.google.common.collect.MapMaker
 import com.google.common.hash.Hashing
 import org.slf4j.LoggerFactory
-import tcep.data.Events.{Event1, Event2, Event3, Event4, Event5, Event6}
 import tcep.graph.nodes.traits.Node.{Subscribe, UnSubscribe}
-import tcep.graph.transition.{StartExecution, StartExecutionWithData, TransferredState, TransitionRequest}
-import tcep.machinenodes.helper.actors.{ACK, CreateRemoteOperator, LoadRequest, LoadResponse, RemoteOperatorCreated, StarksTask, StarksTaskReply}
+import tcep.graph.transition._
+import tcep.machinenodes.helper.actors._
 
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect._
@@ -57,28 +55,34 @@ object SizeEstimator {
     // (e.g. estimate of 3.5MB, but actually only a few hundred bytes)
     // values obtained through logging messages size via akka.remote.classic.log-frame-size-exceeding = ... in application.conf
     obj match {
-      case Subscribe(_) => 438
+        //TODO update values
+      case Subscribe(_, _) => 438
       case UnSubscribe() => 255
       case CreateRemoteOperator(_, _) => 2000
       case RemoteOperatorCreated(_) => 426
       case TransitionRequest(_, _, _) => 542
-      case TransferredState(_, _, _, _) => 650
+      case TransferredState(_, _, _, _, _) => 650
       case StartExecution(_) => 268
       case StartExecutionWithData(_, _, _, data, _) => 512 + data.size * 480
+      case StartExecutionAtTime(_, _, _) => 498
+      case TransferEvents(_, _, _, data1, data2, _) =>512 + (data1.size + data2.size) * 480
       case LoadRequest() => 167
       case LoadResponse(_) => 250
       case StarksTask(_, _, _) => 1243
       case StarksTaskReply(_) => 1400
       case ACK() => 250
-      case e: Event1 => 480
-      case e: Event2 => 488
-      case e: Event3 => 496
-      case e: Event4 => 504
-      case e: Event5 => 512
-      case e: Event6 => 520
+        /*
+      case Event1(_) => 480
+      case Event2(_,_) => 488
+      case Event3(_,_,_) => 496
+      case Event4(_,_,_,_) => 504
+      case Event5(_,_,_,_,_) => 512
+      case Event6(_,_,_,_,_,_) => 520
+      */
       case _ =>
-        log.debug(s"estimating size of object $obj, result may not be reliable")
-        estimate(obj, new IdentityHashMap[AnyRef, AnyRef])
+        val est = estimate(obj, new IdentityHashMap[AnyRef, AnyRef])
+        if(est >= 2000) log.warn(s"estimating size of object $obj, result may not be reliable: $est")
+        est
     }
   }
 

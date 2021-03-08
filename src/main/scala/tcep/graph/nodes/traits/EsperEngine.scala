@@ -3,6 +3,8 @@ package tcep.graph.nodes.traits
 import com.espertech.esper.client._
 import tcep.data.Queries._
 
+import scala.concurrent.{ExecutionContext, Future}
+
 /**
   * The actors extending EsperEngine are essentially equipped with their own instance of the EP engine
   * Esper [3], which they use to perform the respective operation they represent. This approach has two
@@ -27,21 +29,24 @@ trait EsperEngine {
   EPServiceProviderManager.getProvider(esperServiceProviderUri, configuration)
 
   lazy val runtime: EPRuntime = serviceProvider.getEPRuntime
-  lazy val administrator: EPAdministrator = serviceProvider.getEPAdministrator
 
-  def addEventType(eventTypeName: String, elementNames: Array[String], elementClasses: Array[Class[_]]): Unit = {
+  lazy val administrator: EPAdministrator = serviceProvider.getEPAdministrator
+  // these functions are wrapped in futures to be run on the blocking dispatcher since Esper calls Thread.sleep during initialisation and destruction, which is undesirable on an Actor's default dispatcher
+  def addEventType(eventTypeName: String, elementNames: Array[String], elementClasses: Array[Class[_]])(implicit executionContext: ExecutionContext): Future[Unit] = Future {
     configuration.addEventType(eventTypeName, elementNames, elementClasses.asInstanceOf[Array[AnyRef]])
   }
 
-  def createEpStatement(eplString: String): EPStatement = {
+  def createEpStatement(eplString: String)(implicit executionContext: ExecutionContext): Future[EPStatement] = Future {
     administrator.createEPL(eplString)
   }
 
-  def sendEvent(eventTypeName: String, eventAsArray: Array[AnyRef]): Unit = {
+  def sendEvent(eventTypeName: String, eventAsArray: Array[AnyRef])(implicit executionContext: ExecutionContext): Unit = {
     runtime.sendEvent(eventAsArray, eventTypeName)
   }
 
   def destroyServiceProvider(): Unit = {
+    serviceProvider.removeAllServiceStateListeners()
+    serviceProvider.removeAllStatementStateListeners()
     serviceProvider.destroy()
   }
 
@@ -56,6 +61,7 @@ object EsperEngine {
     case _: Query4[_, _, _, _] => Array("e1", "e2", "e3", "e4")
     case _: Query5[_, _, _, _, _] => Array("e1", "e2", "e3", "e4", "e5")
     case _: Query6[_, _, _, _, _, _] => Array("e1", "e2", "e3", "e4", "e5", "e6")
+    case _ => throw new RuntimeException(s"cannot create names for $query")
   }
 
   def createArrayOfClasses(query: Query): Array[Class[_]] = {
@@ -67,6 +73,7 @@ object EsperEngine {
       case _: Query4[_, _, _, _] => Array(clazz, clazz, clazz, clazz)
       case _: Query5[_, _, _, _, _] => Array(clazz, clazz, clazz, clazz, clazz)
       case _: Query6[_, _, _, _, _, _] => Array(clazz, clazz, clazz, clazz, clazz, clazz)
+      case _ => throw new RuntimeException(s"cannot create classes for $query")
     }
   }
 

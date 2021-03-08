@@ -3,16 +3,10 @@ package tcep.graph.nodes
 import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.AverageQuery
-import tcep.factories.NodeFactory
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
 import tcep.graph.{CreatedCallback, EventCallback}
-import tcep.machinenodes.helper.actors.{CreateRemoteOperator, RemoteOperatorCreated}
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.MobilityData
-import tcep.utils.{SpecialStats, TCEPUtils}
-
-import scala.concurrent.Future
 
 /**
   * Operator that calculates the average of the values contained in the received event
@@ -26,10 +20,10 @@ case class AverageNode(
                         createdCallback: Option[CreatedCallback],
                         eventCallback: Option[EventCallback],
                         isRootOperator: Boolean,
-                        _parentNode: ActorRef*
-                      ) extends UnaryNode {
+                        publisherEventRate: Double,
+                        _parentActor: Seq[ActorRef]
+                      ) extends UnaryNode(_parentActor) {
 
-  var parentNode: ActorRef = _parentNode.head
   /**
     * calculate the average of the given dataList of Ints, Doubles or MobilityData items
     * @param dataList
@@ -54,7 +48,7 @@ case class AverageNode(
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
 
-    case event: Event if parentsList.contains(sender()) =>
+    case event: Event if parentActor.contains(sender()) =>
 
       //log.debug(s"averageNode received event: ${event}")
       val value = event match {
@@ -69,7 +63,7 @@ case class AverageNode(
       val averageEvent: Event1 = Event1(value)
       averageEvent.monitoringData = event.monitoringData
       //log.debug(s"average event with monitoring data: $averageEvent")
-      emitEvent(averageEvent)
+      emitEvent(averageEvent, eventCallback)
 
     case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
   }

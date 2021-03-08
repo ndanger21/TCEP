@@ -1,10 +1,12 @@
 package org.discovery.vivaldi
 
+import tcep.machinenodes.helper.actors.MySerializable
+
 /**
   * Created by raheel on 31/01/2018.
   * Based on the client implementation of Vuze JS library
   */
-class VivaldiPosition(var coordinates: Coordinates) extends Serializable {
+class VivaldiPosition(var coordinates: Coordinates) extends MySerializable {
 
   val CONVERGE_EVERY = 5
   val CONVERGE_FACTOR = 50

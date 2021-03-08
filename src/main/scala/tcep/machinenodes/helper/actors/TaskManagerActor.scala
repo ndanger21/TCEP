@@ -11,20 +11,26 @@ import org.discovery.vivaldi.{Coordinates, VivaldiPosition}
 import tcep.data.Queries.Query
 import tcep.factories.NodeFactory
 import tcep.graph.nodes.traits.Node.Dependencies
+import tcep.graph.nodes.traits.SystemLoadUpdater
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.vivaldi.VivaldiCoordinates
 import tcep.placement.{BandwidthEstimator, HostInfo}
-import tcep.simulation.adaptive.cep.SystemLoad
 import tcep.utils.{SpecialStats, TCEPUtils}
 
+import scala.concurrent.Future
+import scala.util.{Failure, Success}
 import scala.collection.JavaConverters._
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext, ExecutionContextExecutor, Future}
+import scala.concurrent.duration._
+import scala.sys.process._
+import scala.util.{Failure, Success}
 
 /**
   * Created by raheel
   * on 09/08/2017.
   */
-sealed trait Message extends Serializable // priority is configured in TCEPPrioMailbox
+trait MySerializable extends Serializable
+trait Message extends MySerializable // priority is configured in TCEPPrioMailbox
 trait TransitionControlMessage extends Message //Only for transition related control messages, highest priority in TCEPPriorityMailbox
 trait PlacementMessage extends TransitionControlMessage
 trait MeasurementMessage extends Message // messages for measurements needed for placements
@@ -32,7 +38,7 @@ trait VivaldiCoordinatesMessage extends Message // regular vivaldi coordinate up
 
 case class CreateRemoteOperator(operatorInfo: HostInfo, props: Props) extends TransitionControlMessage
 case class RemoteOperatorCreated(ref: ActorRef) extends TransitionControlMessage
-case class StarksTask(operator: Query, producers: Seq[ActorRef], askerInfo: HostInfo) extends PlacementMessage {
+case class StarksTask(operator: Query, dependencies: Dependencies, askerInfo: HostInfo) extends PlacementMessage {
   override def toString: String = s"operator: ${askerInfo.operator.toString.split("\\(").head}; source: ${askerInfo.member.address}; visited: ${askerInfo.visitedMembers.map(_.address)}"
 
 }
@@ -70,11 +76,15 @@ case class TaskManagerActorResponse(maybeRef: Option[ActorRef]) extends Placemen
 case class TaskManagerFound(member: Member, ref: ActorRef) extends PlacementMessage
 case class AllTaskManagerActors(refs: Map[Member, ActorRef]) extends PlacementMessage
 case class ACK() extends PlacementMessage // acknowledge msg for confirming transition-related message delivery (so we can retry if it's missing)
+case class StreamStopped() extends TransitionControlMessage
+case object GetMaxEventInterval extends TransitionControlMessage
+case object GetTimeSinceLastEvent extends TransitionControlMessage
+case object GetEventPause extends TransitionControlMessage
 
 /**
   * responsible for handling placement-related activities
   */
-class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
+class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with SystemLoadUpdater with ActorLogging {
 
   override implicit val ec = blockingIoDispatcher // almost all tasks are i/o bound
   private var bandwidthEstimator: ActorRef = _
@@ -83,6 +93,7 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
   private var publisherActorRefs: Map[String, ActorRef] = Map()
   private var taskManagerActors: Map[Member, ActorRef] = Map()
   private var publisherActorRefsInitialized = false
+
   @volatile private var ongoingPlacementRequests: Map[ActorRef, Future[HostInfo]] = Map()
   @volatile private var ongoingCreationRequests: Map[(ActorRef, Query), Option[ActorRef]] = Map() // requester ActorRef, created operator ActorRef -> keep track of who requested which operators to be created, re-send ActorRef if lost
   def clearPlacementRequest(actorRef: ActorRef): Unit = ongoingPlacementRequests = ongoingPlacementRequests.-(actorRef)
@@ -116,32 +127,70 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
       // request received, actor creation not yet complete -> wait for next request
 
     case st: StarksTask =>
-      implicit val ec: ExecutionContext = blockingIoDispatcher
       val s = sender()
-      SpecialStats.debug(s"$this ", s"$s sent starks task $st, is first request: ${!ongoingPlacementRequests.contains(s)}")
+      log.debug(s"$this ", s"$s sent starks task $st, is first request: ${!ongoingPlacementRequests.contains(s)}")
       if(!ongoingPlacementRequests.contains(s)) {
         val starks = StarksAlgorithm
-        val hostRequest: Future[HostInfo] = starks.findOptimalNode(this.context, cluster, Dependencies(st.producers.toList, List()), st.askerInfo, st.operator)
+        val hostRequest: Future[HostInfo] = starks.findOptimalNode(st.operator, st.dependencies, st.askerInfo)(blockingIoDispatcher, context, cluster, baseEventRate)
         ongoingPlacementRequests += s -> hostRequest
         hostRequest.onComplete(_ => context.system.scheduler.scheduleOnce(timeout.duration)(clearPlacementRequest(s))) // delay clearing a bit to avoid re-send arriving while sending reply
         hostRequest.map(StarksTaskReply(_)) pipeTo s
       } else ongoingPlacementRequests(s).map(StarksTaskReply(_)) pipeTo s
 
-
-    case LoadRequest() =>
-      val s = sender()
-       s ! SystemLoad.getSystemLoad
+    case LoadRequest() => sender() ! currentLoad
 
     case BDPRequest(target: Member) =>
       val s = sender()
-      TCEPUtils.getBDPBetweenNodes(cluster, cluster.selfMember, target)(blockingIoDispatcher) pipeTo s // this is a future
+      TCEPUtils.getMaximumBDPBetweenNodes(cluster, cluster.selfMember, target)(blockingIoDispatcher) pipeTo s // this is a future
+
+    case GetNetworkHopsMap =>
+      implicit val ec: ExecutionContext = blockingIoDispatcher
+      val s = sender()
+      implicit val timeout = Timeout(60 seconds)
+      val traceRouteCalls: Future[Map[String, String]] = TCEPUtils.makeMapFuture(
+        //cluster.state.members.filter(m => m.status == MemberStatus.up && m != cluster.selfMember && m.address.host.isDefined).map(other => {
+        hostIpAddresses.map(address => {
+          log.info(s"called traceroute to ${address}, waiting for completion...")
+          address -> Future {
+            s"traceroute ${address}".!!
+          }
+        }).toMap)
+      traceRouteCalls.onComplete {
+        case Success(data: Map[String, String]) =>
+          // traceroute returns:
+          // "1 lilac-dmc.Berkeley.EDU (128.32.216.1) 39 ms 19 ms 39 ms"
+          // "2 ccngw-ner-cc.Berkeley.EDU (128.32.136.23) 39 ms 40 ms 19 ms"
+          log.info(s"completed traceroute calls: ${data.mkString("\n")}")
+          val networkHopsMap = data.map(entry => {
+            val lines = entry._2.split("\n").filter(line => !line.contains("* * *") && !line.contains(entry._1))
+            entry._1 -> {
+              if (lines.nonEmpty) lines.max.substring(1, 2).toInt - 1 else 0
+            }
+          })
+          s ! NetworkHopsMap(networkHopsMap)
+        case Failure(exception) => log.error(exception, s"failed to determine network hops from ${cluster.selfAddress} to other cluster members")
+      }
 
     case request: SingleBandwidthRequest => bandwidthEstimator.forward(request)
     case r: AllBandwidthsRequest => bandwidthEstimator.forward(r)
     case i: InitialBandwidthMeasurementStart => bandwidthEstimator.forward(i)
     case r: BandwidthMeasurementSlotRequest => bandwidthEstimator.forward(r)
     case c: BandwidthMeasurementComplete => bandwidthEstimator.forward(c)
-    case PublisherActorRefsRequest() => sender() ! PublisherActorRefsResponse(this.publisherActorRefs)
+    case PublisherActorRefsRequest() =>
+      if(this.publisherActorRefs.nonEmpty)
+        sender() ! PublisherActorRefsResponse(this.publisherActorRefs)
+      else {
+        val s = sender()
+        TCEPUtils.makeMapFuture(cluster.state.members.filter(_.hasRole("Publisher"))
+                                       .map(m => m -> TCEPUtils.selectPublisherOn(cluster, m.address).resolveOne()(timeout)
+                                                                                        .map(p => p.path.name -> p))
+                                       .toMap).map(_.values).onComplete {
+                  case Failure(exception) => log.error(exception, "failed to generate publisher actor map from publishers")
+                  case Success(publisherActorMap) =>
+                    s ! PublisherActorRefsResponse(publisherActorMap.toMap)
+                    this.publisherActorRefs = publisherActorMap.toMap
+                }
+      }
     case SetPublisherActorRefs(publisherMap) =>
       val s = sender()
       if(s.path.name.contains("SimulationSetup")) {

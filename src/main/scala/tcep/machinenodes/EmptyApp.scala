@@ -11,12 +11,11 @@ import tcep.machinenodes.helper.actors.TaskManagerActor
   * on 09/08/2017.
   */
 object EmptyApp extends ConfigurationParser with App {
-  logger.info("booting up EmptyApp")
 
   val actorSystem: ActorSystem = ActorSystem(config.getString("clustering.cluster.name"), config)
   DistVivaldiActor.createVivIfNotExists(actorSystem)
-  val taskManager = actorSystem.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
-
+  val taskManager = actorSystem.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
+  logger.info(s"booting up EmptyApp with taskManager actor $taskManager")
   override def getRole: String = "Candidate"
   override def getArgs: Array[String] = args
 }

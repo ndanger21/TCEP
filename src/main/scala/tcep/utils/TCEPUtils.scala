@@ -1,7 +1,7 @@
 package tcep.utils
 
 import java.util.UUID
-import java.util.concurrent.{Executors, TimeUnit}
+import java.util.concurrent.TimeUnit
 
 import akka.actor.{ActorContext, ActorRef, ActorSelection, Address, Props, RootActorPath}
 import akka.cluster.{Cluster, Member, MemberStatus}
@@ -13,7 +13,6 @@ import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
 import org.slf4j.LoggerFactory
 import tcep.machinenodes.helper.actors._
 
-import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.language.postfixOps
 import scala.util.{Failure, Success, Try}
@@ -99,8 +98,8 @@ object TCEPUtils {
     request
   }
 
-  def getBDPBetweenNodes(cluster: Cluster, source: Member, target: Member)(implicit ec: ExecutionContext): Future[Double] = {
 
+  def getMaximumBDPBetweenNodes(cluster: Cluster, source: Member, target: Member)(implicit ec: ExecutionContext): Future[Double] = {
     if(source.equals(target)) return Future { 0.0d }
     val bdp = for {
       latency <- this.getVivaldiDistance(cluster, source, target)
@@ -130,15 +129,15 @@ object TCEPUtils {
       localTaskManager <- selectTaskManagerOn(cluster, cluster.selfAddress).resolveOne()(retryTimeout).recoverWith {
         case e: Throwable =>
           if (remainingRetries > 0) {
-            SpecialStats.debug(this.getClass.toString, s"failed to resolve local taskManager actor (attempt ${retries - remainingRetries} of $retries) due to ${e.toString}")
+            log.error(s"failed to resolve local taskManager actor (attempt ${retries - remainingRetries} of $retries)", e)
             getTaskManagerOfMember(cluster, node, remainingRetries - 1)
           }
           else throw new ConnectionException(s"unable to retrieve taskManager actor of $node after $retries attempts with timeout $retryTimeout, cause: ${e.toString}")
       }
-      taskManager <- if(node == cluster.selfAddress) Future { Some(localTaskManager) } else (localTaskManager ? GetTaskManagerActor(node)).mapTo[TaskManagerActorResponse].map(_.maybeRef)
+      taskManager <- if(node == cluster.selfMember) Future { Some(localTaskManager) } else (localTaskManager ? GetTaskManagerActor(node)).mapTo[TaskManagerActorResponse].map(_.maybeRef)
       directTry <- if(taskManager.isEmpty) selectTaskManagerOn(cluster, node.address).resolveOne()(retryTimeout) else Future { taskManager.get } // try to contact it directly as a last resort
     } yield {
-      SpecialStats.debug(this.toString, s"retrieved actorRef of taskManager $taskManager")
+      log.debug(this.toString, s"retrieved actorRef of taskManager $taskManager")
       directTry
     }
   }
@@ -149,6 +148,10 @@ object TCEPUtils {
   def selectSimulator(cluster: Cluster): ActorSelection = {
     val simulatorNode = cluster.state.members.find(_.hasRole("Subscriber")).getOrElse(throw new RuntimeException("could not find Subscriber node in cluster!"))
     cluster.system.actorSelection(RootActorPath(simulatorNode.address) / "user" / "SimulationSetup*")
+  }
+  def selectKnowledge(cluster: Cluster): ActorSelection = {
+    val simulatorNode = cluster.state.members.find(_.hasRole("Subscriber")).getOrElse(throw new RuntimeException("could not find Subscriber node in cluster!"))
+    cluster.system.actorSelection(RootActorPath(simulatorNode.address) / "user" / "SimulationSetup*" / "knowledge*")
   }
   def getAddrStringFromRef(ref: ActorRef): String = ref.path.address.toString
   def getAddrFromRef(ref: ActorRef): Address = ref.path.address
@@ -228,7 +231,7 @@ object TCEPUtils {
 
   def guaranteedDelivery(context: ActorContext, receiver: ActorRef, msg: Message,
                          singleTimeout: Timeout = retryTimeout, totalTimeout: Timeout = timeout,
-                                       tlf: Option[(String, ActorRef) => Unit] = None, tlp: Option[ActorRef] = None)(implicit ec: ExecutionContext): Future[Message] = {
+                         tlf: Option[(String, ActorRef) => Unit] = None, tlp: Option[ActorRef] = None)(implicit ec: ExecutionContext): Future[Message] = {
     val deliverer = context.actorOf(Props(new GuaranteedMessageDeliverer[Message](tlf, tlp, singleTimeout)), s"deliverer${UUID.randomUUID.toString}")
     val delivery = for {
       response <- (deliverer ? CriticalMessage(receiver, msg))(totalTimeout).mapTo[Message]

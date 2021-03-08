@@ -1,12 +1,12 @@
 package tcep.placement
 
-import akka.actor.{ActorContext, ActorRef}
+import akka.actor.ActorContext
 import akka.cluster.{Cluster, Member}
-import org.discovery.vivaldi.Coordinates
+import tcep.data.Queries
 import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.Node.Dependencies
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 
 object RandomAlgorithm extends PlacementStrategy {
 
@@ -14,23 +14,22 @@ object RandomAlgorithm extends PlacementStrategy {
 
   /**
     * Randomly places the operator on one of the available nodes
-    * @param context      actor context
-    * @param cluster      cluster of nodes
     * @param dependencies hosts of operators that the operator to be deployed depends on
-    * @param askerInfo    HostInfo item containing the address of the node asking to deploy the operator (currently always the clientNode)
     * @return HostInfo, containing the address of the node to host the operator
     */
-  def findOptimalNode(context: ActorContext, cluster: Cluster, dependencies: Dependencies, askerInfo: HostInfo, operator: Query): Future[HostInfo] = {
+  def findOptimalNode(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] = {
     val candidates: Set[Member] = findPossibleNodesToDeploy(cluster)
     log.info(s"the number of available members are: ${candidates.size}, members: ${candidates.toList.map(c => c.address.host.get)}")
-    applyRandomAlgorithm(cluster, operator, candidates.toVector, dependencies.parents)
+    applyRandomAlgorithm(operator, candidates.toVector, dependencies)
   }
 
-  def findOptimalNodes(context: ActorContext, cluster: Cluster, dependencies: Dependencies, askerInfo: HostInfo, operator: Query): Future[(HostInfo, HostInfo)] = {
+  def findOptimalNodes(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                      (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, HostInfo)] = {
     val candidates: Set[Member] = findPossibleNodesToDeploy(cluster)
     for {
-      m1 <- applyRandomAlgorithm(cluster, operator, candidates.toVector, dependencies.parents)
-      m2 <- applyRandomAlgorithm(cluster, operator, candidates.filter(!_.equals(m1)).toVector, dependencies.parents)
+      m1 <- applyRandomAlgorithm(operator, candidates.toVector, dependencies)
+      m2 <- applyRandomAlgorithm(operator, candidates.filter(!_.equals(m1)).toVector, dependencies)
     } yield (m1, m2)
   }
 
@@ -40,11 +39,10 @@ object RandomAlgorithm extends PlacementStrategy {
     * @param candidateNodes coordinates of the candidate nodes
     * @return the address of member where operator will be deployed
     */
-  def applyRandomAlgorithm(cluster: Cluster, operator: Query, candidateNodes: Vector[Member], parents: List[ActorRef]): Future[HostInfo] = {
-
+  def applyRandomAlgorithm(operator: Query, candidateNodes: Vector[Member], dependencies: Dependencies)(implicit ec: ExecutionContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] = {
     val random: Int = scala.util.Random.nextInt(candidateNodes.size)
     val randomMember: Member = candidateNodes(random)
-    for { bdpUpdate <- this.updateOperatorToParentBDP(cluster, operator, randomMember, parents) } yield {
+    for { bdpUpdate <- this.updateOperatorToParentBDP(operator, randomMember, dependencies.parents, Queries.estimateOutputBandwidths(operator, baseEventRate)) } yield {
       log.info(s"findOptimalNode - deploying operator on randomly chosen host: ${randomMember}")
       HostInfo(randomMember, operator, this.getPlacementMetrics(operator))
     }
@@ -53,8 +51,4 @@ object RandomAlgorithm extends PlacementStrategy {
   override def hasInitialPlacementRoutine(): Boolean = false
 
   override def hasPeriodicUpdate(): Boolean = false
-
-  override def calculateVCSingleOperator(cluster: Cluster, operator: Query, startCoordinates: Coordinates, dependencyCoordinates: List[Coordinates], nnCandidates: Map[Member, Coordinates]): Future[Coordinates] = ???
-
-  override def selectHostFromCandidates(coordinates: Coordinates, memberToCoordinates: Map[Member, Coordinates], operator: Option[Query]): Future[Member] = ???
 }

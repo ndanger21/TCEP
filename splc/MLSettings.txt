@@ -1,0 +1,9 @@
+numberOfRounds 20
+bagging False
+lossFunction RELATIVE
+useBackward False
+backwardErrorDelta 0.5
+outputRoundsToStdout True
+abortError 1.0
+minImprovementPerRound 0.055
+quadraticFunctionSupport True

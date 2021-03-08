@@ -1,0 +1,38 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="publisher1" type="docker-deploy" factoryName="docker-image" server-name="Docker">
+    <deployment type="docker-image">
+      <settings>
+        <option name="imageTag" value="nieda2018/tcep:latest" />
+        <option name="command" value="" />
+        <option name="containerName" value="publisher1" />
+        <option name="entrypoint" value="/bin/bash" />
+        <option name="envVars">
+          <list>
+            <DockerEnvVarImpl>
+              <option name="name" value="MAIN" />
+              <option name="value" value="tcep.machinenodes.PublisherApp" />
+            </DockerEnvVarImpl>
+            <DockerEnvVarImpl>
+              <option name="name" value="ARGS" />
+              <option name="value" value="--ip speedPublisher1 --port 2501 --kind SpeedPublisher --numberOfPublishers 1 --eventRate 10" />
+            </DockerEnvVarImpl>
+            <DockerEnvVarImpl>
+              <option name="name" value="LOG_FILE_PATH" />
+              <option name="value" value="/app/logs" />
+            </DockerEnvVarImpl>
+          </list>
+        </option>
+        <option name="commandLineOptions" value="" />
+        <option name="volumeBindings">
+          <list>
+            <DockerVolumeBindingImpl>
+              <option name="containerPath" value="/app/logs" />
+              <option name="hostPath" value="$USER_HOME$/logs" />
+            </DockerVolumeBindingImpl>
+          </list>
+        </option>
+      </settings>
+    </deployment>
+    <method v="2" />
+  </configuration>
+</component>

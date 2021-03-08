@@ -3,8 +3,6 @@ package tcep.graph.nodes
 import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.DatabaseJoinQuery
-import tcep.factories.NodeFactory
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
 import tcep.graph.{CreatedCallback, EventCallback}
 import tcep.placement.HostInfo
@@ -12,29 +10,21 @@ import tcep.simulation.tcep.YahooDataNew
 
 import scala.collection.mutable.ListBuffer
 
-case class DatabaseJoinNode(
-                             transitionConfig: TransitionConfig,
-                             hostInfo: HostInfo,
-                             backupMode: Boolean,
-                             mainNode: Option[ActorRef],
-                             query: DatabaseJoinQuery,
-                             createdCallback: Option[CreatedCallback],
-                             eventCallback: Option[EventCallback],
-                             isRootOperator: Boolean,
-                             _parentNode: ActorRef*
-                           ) extends UnaryNode {
-
-  var parentNode: ActorRef = _parentNode.head
-
-  override def preStart(): Unit = {
-    super.preStart()
-  }
-
+case class DatabaseJoinNode(transitionConfig: TransitionConfig,
+                            hostInfo: HostInfo,
+                            backupMode: Boolean,
+                            mainNode: Option[ActorRef],
+                            query: DatabaseJoinQuery,
+                            createdCallback: Option[CreatedCallback],
+                            eventCallback: Option[EventCallback],
+                            isRootOperator: Boolean,
+                            publisherEventRate: Double,
+                            _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
       val s = sender()
-      if(parentsList.contains(s)) {
+      if(parentActor.contains(s)) {
         val value: List[YahooDataNew] = event match {
           case Event1(e1) =>
             this.handle(List(e1))
@@ -52,7 +42,7 @@ case class DatabaseJoinNode(
         for (data <- value) {
           val dbEvent = Event1(data)
           dbEvent.monitoringData = event.monitoringData
-          emitEvent(dbEvent)
+          emitEvent(dbEvent, eventCallback)
         }
       }
     case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")

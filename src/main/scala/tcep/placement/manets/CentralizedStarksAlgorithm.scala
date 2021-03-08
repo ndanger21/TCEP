@@ -1,10 +1,11 @@
+/*
 package tcep.placement.manets
 
 /**
   * Created by mac on 10/10/2017.
   */
 
-/*
+
 object CentralizedStarksAlgorithm extends PlacementStrategy {
 
   //TODO: move common code in base class

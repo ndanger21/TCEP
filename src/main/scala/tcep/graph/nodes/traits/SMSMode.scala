@@ -5,12 +5,11 @@ import java.time.{Duration, Instant}
 import java.util.concurrent.{Executors, TimeUnit}
 
 import akka.actor.{ActorRef, PoisonPill}
-import akka.cluster.{Cluster, Member}
 import tcep.data.Events.Event
-import tcep.graph.nodes.traits.Node.{Dependencies, UnSubscribe, UpdateTask}
+import tcep.graph.nodes.traits.Node.{UnSubscribe, UpdateTask}
 import tcep.graph.transition.{StartExecutionAtTime, TransferredState, TransitionStats}
 import tcep.machinenodes.helper.actors.ACK
-import tcep.placement.{HostInfo, OperatorMetrics, PlacementStrategy}
+import tcep.placement.{HostInfo, PlacementStrategy}
 import tcep.simulation.adaptive.cep.SystemLoad
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.TransitionLogActor.{OperatorTransitionBegin, OperatorTransitionEnd}
@@ -74,39 +73,17 @@ trait SMSMode extends TransitionMode {
         transitionLogPublisher ! OperatorTransitionBegin(self)
         val startTime = System.currentTimeMillis()
         //val updatedStats = updateTransitionStats(stats, self, stats.transitionOverheadBytes, stats.placementOverheadBytes, Some(stats.transitionTimesPerOperator.updated(self, System.currentTimeMillis())))
-        val cluster = Cluster(context.system)
         @volatile var succHostFound: Option[HostInfo] = None
         @volatile var succStarted = false
         @volatile var childNotified = false
         implicit val timeout = retryTimeout
         implicit val ec: ExecutionContext = blockingIoDispatcher
-        val parents: List[ActorRef] = getParentOperators.toList
-        val dependencies = Dependencies(parents, subscribers.toList)
+        val parents: List[ActorRef] = getParentActors
+        val dependencies = getDependencies()
         var delayToSuccessor: Long = 0
         var delayToParent = System.currentTimeMillis() - stats.transitionEndParent
 
         // helper functions for retrying intermediate steps upon failure
-        def findSuccessorHost(): Future[HostInfo] = {
-          if (succHostFound.isDefined) {
-            log.debug(s"successor host was found before, returning it: ${succHostFound.get.member}")
-            Future { succHostFound.get }
-          } else {
-            log.debug("findSuccessorHost() called for the first time")
-            val req = for {
-              wasInitialized <- algorithm.initialize(cluster, caller = Some(self))
-              successorHost: HostInfo <- {
-                transitionLog(s"initialized algorithm $algorithm (was initialized: $wasInitialized), looking for new host...");
-                algorithm.findOptimalNode(this.context, cluster, dependencies, HostInfo(cluster.selfMember, hostInfo.operator, OperatorMetrics()), hostInfo.operator)
-              }
-            } yield {
-              transitionLog(s"found new host ${successorHost.member.address}")
-              succHostFound = Some(successorHost)
-              successorHost
-            }
-            req.recoverWith { case e: Throwable => transitionLog(s"failed to find successor host, retrying... ${e.toString}"); findSuccessorHost() }
-          }
-        }
-
         def startSuccessorActor(successor: ActorRef, newHostInfo: HostInfo): Future[Unit] = {
           if (succStarted) return Future {} // avoid re-sending loop
 
@@ -114,7 +91,7 @@ trait SMSMode extends TransitionMode {
           // vivaldi coord distance sometimes very large (>5s)
           for {
             vivDistToSuccessorHost <- TCEPUtils.getVivaldiDistance(cluster, cluster.selfMember, newHostInfo.member)
-            vivDistToParents <- Future.sequence(getParentOperators().map(p => TCEPUtils.getMemberFromActorRef(cluster, p)).map(p => TCEPUtils.getVivaldiDistance(cluster, newHostInfo.member, p)))
+            vivDistToParents <- Future.sequence(getParentActors().map(p => TCEPUtils.getMemberFromActorRef(cluster, p)).map(p => TCEPUtils.getVivaldiDistance(cluster, newHostInfo.member, p)))
             delta = Duration.ofMillis((deltaFactor * (2 * vivDistToSuccessorHost + 2 * vivDistToParents.max)).toLong) // transmission times: startMsg + ack + subscribe + ack; multiply by factor to allow for vivaldi inaccuracies
           } yield {
 
@@ -164,7 +141,7 @@ trait SMSMode extends TransitionMode {
           transitionLog(s"transition stats map; ${updatedStats.transitionTimesPerOperator.mkString(";")}")
 
           transitionLog(s"stopped sending events at ${Instant.now()}, $successor should start sending at this moment; handing back control to child")
-          val msgACK = TCEPUtils.guaranteedDelivery(context, requester, TransferredState(algorithm, successor, self, updatedStats), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
+          val msgACK = TCEPUtils.guaranteedDelivery(context, requester, TransferredState(algorithm, successor, self, updatedStats, query), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
             .map(ack => {
               childNotified = true;
               SystemLoad.operatorRemoved()
@@ -185,7 +162,7 @@ trait SMSMode extends TransitionMode {
         transitionLog( s"$modeName transition: looking for new host of ${self} dependencies: $dependencies")
         // retry indefinitely on failure of intermediate steps without repeating the previous ones (-> no duplicate operators)
         val transitToSuccessor = for {
-          host: HostInfo <- findSuccessorHost()
+          host: HostInfo <- findSuccessorHost(algorithm, dependencies)
           successor: ActorRef <- {
             val startCreate = System.currentTimeMillis()
             val s = createDuplicateNode(host);

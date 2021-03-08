@@ -10,7 +10,7 @@ import tcep.data.Events.{Event, Event1, Event3}
 import tcep.data.Queries._
 import tcep.data.Structures.MachineLoad
 import tcep.dsl.Dsl._
-import tcep.graph.nodes.traits.{TransitionConfig, TransitionModeNames}
+import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.vivaldi.VivaldiCoordinates
@@ -64,7 +64,7 @@ class Subscriber extends VivaldiCoordinates with ActorLogging {
     val loadRequirement = load < MachineLoad(0.5) otherwise Option.empty
     val messageOverheadRequirement = hops < 10 otherwise Option.empty
 
-    val query1: Query3[Either[Int, String], Either[Int, X], Either[Float, X]] =
+    val query1: Query3[Either[Int, String], Either[Int, Unit], Either[Float, Unit]] =
       stream[Int]("A")
         .join(
           stream[Int]("B"),
@@ -77,12 +77,10 @@ class Subscriber extends VivaldiCoordinates with ActorLogging {
         .and(stream[Float]("C"))
         .or(stream[String]("D"))
 
-    val monitors: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query1, Option.empty),
-                                                DummyMonitorFactory(query1))
+    val monitors: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query1, Option.empty), DummyMonitorFactory(query1))
+    val queryGraph = new QueryGraph(query1, TransitionConfig(), publishers, None, Some(GraphCreatedCallback()))(this.context, cluster, 1.0 )
 
-    val queryGraph = new QueryGraph(this.context, cluster, query1, TransitionConfig(), publishers, None, Some(GraphCreatedCallback()), monitors)
-
-    queryGraph.createAndStart(null)(Some(EventPublishedCallback()))
+    queryGraph.createAndStart(Some(EventPublishedCallback()))
 
     //change in requirements after 2 minutes
     val f = Future {

@@ -1,7 +1,7 @@
 package tcep.graph.qos
 
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.{ScheduledThreadPoolExecutor, TimeUnit}
+import java.util.concurrent.{Executors, TimeUnit}
 
 import org.slf4j.LoggerFactory
 import tcep.data.Events._
@@ -23,14 +23,13 @@ case class AverageFrequencyMonitor(query: Query, record: Option[FrequencyMeasure
   @volatile
   var eventEmittedInInterval : AtomicInteger = new AtomicInteger(0)
 
-  override def onEventEmit(event: Event, status: Int): X = {
+  override def onEventEmit(event: Event, status: Int): Unit = {
     //if(!messages.contains(event.monitoringData.createTime)){
     //  messages.enqueueFinite(event.monitoringData.createTime, 3000)
       eventEmittedInInterval.incrementAndGet()
     //}
   }
 
-  val ex = new ScheduledThreadPoolExecutor(1)
   val task = new Runnable {
     def run() = {
       if (frequencyRequirement.isDefined && frequencyRequirement.get.otherwise.isDefined) {
@@ -43,15 +42,15 @@ case class AverageFrequencyMonitor(query: Query, record: Option[FrequencyMeasure
           case SmallerEqual => if (!(eventEmittedInInterval.get() <= frequencyRequirement.get.frequency.frequency)) frequencyRequirement.get.otherwise.get.apply(eventEmittedInInterval.get())
         }
       }
-      log.debug(s"running frequencyMonitor task, record is defined: ${record.isDefined}, events in last ${interval} seconds: ${eventEmittedInInterval.get}")
+      log.info(s"running frequencyMonitor task, record is defined: ${record.isDefined}, events in last ${interval} seconds: ${eventEmittedInInterval.get}")
       if(record.isDefined){
         record.get.apply(eventEmittedInInterval.get())
       }
       eventEmittedInInterval.set(0)
     }
   }
-
-  ex.scheduleAtFixedRate(task, interval, interval, TimeUnit.SECONDS)
+  val sched = Executors.newSingleThreadScheduledExecutor()
+  sched.scheduleWithFixedDelay(task, interval, interval, TimeUnit.SECONDS)
 
 
   class FiniteQueue[A](q: Queue[A]) {

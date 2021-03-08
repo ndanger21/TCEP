@@ -2,154 +2,136 @@ package tcep.placement.mop
 
 import akka.actor.ActorContext
 import akka.cluster.{Cluster, Member}
-import akka.japi.Option.Some
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.Coordinates
 import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.placement._
-import tcep.utils.SpecialStats
-import tcep.utils.TCEPUtils.makeMapFuture
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 
 
 /**
   * Implementation of MOP algorithm introduced by Stamatia Rizou et. al.
   * http://ieeexplore.ieee.org/abstract/document/5560127/
   * Note: assumes that there is only one consumer for a graph, i.e. operators must not be shared (re-used) between graphs!
+  *
+  *  Differences to Relaxation:
+  *  1. round-to-round improvement uses estimated BDP if operator were to be placed at current coordinates, instead of sum of dependency forces (not the same)
+  *  2. uses actual BDP formula for calculating dependency forces (no squared latency component)
+  *  3. mapping of virtual operator coordinate to physical host: chooses among the k closest hosts the closest  non-overloaded host (unix cpu load < 3.0),
+  *     instead of the least loaded host among the closest k hosts
   */
 
-object RizouAlgorithm extends PlacementStrategy {
+object RizouAlgorithm extends SpringRelaxationLike {
 
   var k = ConfigFactory.load().getInt("constants.placement.physical-placement-nearest-neighbours")
   val loadThreshold = ConfigFactory.load().getDouble("constants.placement.physical-placement-node-overload-threshold")
   val iterationLimit = ConfigFactory.load().getInt("constants.placement.max-single-operator-iterations")
   val defaultBandwidth = ConfigFactory.load().getDouble("constants.default-data-rate")
-  val minimumImprovementThreshold = 0.001d // minimum improvement of network usage (Mbit) per round
   override val name = "Rizou"
   override def hasInitialPlacementRoutine(): Boolean = true
   override def hasPeriodicUpdate(): Boolean = ConfigFactory.load().getBoolean("constants.placement.update.rizou")
-
-  // this should only be called during transitions or in case of missing operators during the initial placement
-  def findOptimalNode(context: ActorContext, cluster: Cluster, dependencies: Dependencies, askerInfo: HostInfo, operator: Query): Future[HostInfo] = {
-    applyRizouAlgorithm(cluster, dependencies, operator)
-  }
-
-  def findOptimalNodes(context: ActorContext, cluster: Cluster, dependencies: Dependencies, askerInfo: HostInfo, operator: Query) =
-    for {
-      mainNode <- applyRizouAlgorithm(cluster, dependencies, operator)
-    } yield {
-      val backup = HostInfo(cluster.selfMember, operator, OperatorMetrics())
-      (mainNode, backup)
-    }
 
   /**
     * Applies Rizou's algorithm to find the optimal node for a single operator
     * @param dependencies   parent nodes on which query is dependent (parent and children operators; caller is responsible for completeness!)
     * @return the address of member where operator will be deployed
     */
-
-  def applyRizouAlgorithm(cluster: Cluster, dependencies: Dependencies, operator: Query): Future[HostInfo] = {
-
-    val res = for {
-      init <- this.initialize(cluster)
-    } yield {
-
-      val candidateCoordRequest = getCoordinatesOfMembers(cluster, findPossibleNodesToDeploy(cluster), Some(operator))
-      val dependencyCoordRequest = getCoordinatesOfNodes(cluster, dependencies.parents ++ dependencies.subscribers, Some(operator))
-      val hostRequest = for {
-        candidateCoordinates <- candidateCoordRequest
-        dependencyCoordinates <- dependencyCoordRequest
-        optimalVirtualCoordinates <- calculateVCSingleOperator(cluster, operator, Coordinates.origin, dependencyCoordinates.values.toList, candidateCoordinates)
-        host <- findHost(optimalVirtualCoordinates, candidateCoordinates, operator, dependencies.parents)
-      } yield {
-
-        log.info(s"found node to host operator: ${host.toString}")
-        SpecialStats.debug(this.getClass.getSimpleName, s"placing $operator on host: ${host.member}")
-        val hostCoords = candidateCoordinates.find(e => e._1.equals(host.member))
-        if (hostCoords.isDefined) log.info(s"with distance to virtual coords: ${hostCoords.get._2.distance(optimalVirtualCoordinates)}")
-        else log.warn("found node, but coordinatesMap does not contain its coords")
-        host
-      }
-      hostRequest
-    }
-    res.flatten
+  // this should only be called during transitions or in case of missing operators during the initial placement
+  def findOptimalNode(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] = {
+    collectInformationAndExecute(operator, dependencies)
   }
 
-  /**
-    * determine the optimal position of a single operator in the virtual vivaldi coordinate space
-    * uses a spring-relaxation technique:
-    * edges on the operator tree are modeled as springs; the length of a spring corresponds to the latency between the operators on its ends,
-    * the spring constant corresponds to the bandwidth on that link. Now the goal is to solve for the minimum energy state in all springs
-    * by iteratively moving operators in the latency space in small steps into the direction of the force exerted by the springs connected to them.
-    *
-    * @param dependencyCoordinates the coordinates of all operator hosts that are connected to this operator (child and parents)
-    * @param nnCandidates cluster members that can host operators (used for bandwidth estimation)
-    * @return the optimal vivaldi coordinates for the operator
-    */
-  def calculateVCSingleOperator(cluster: Cluster, operator: Query, startCoordinates: Coordinates, dependencyCoordinates: List[Coordinates], nnCandidates: Map[Member, Coordinates]): Future[Coordinates] = {
-
-    // check if there is any significant distance between the dependency coordinates (> 0.001)
-    if(Coordinates.areAllEqual(startCoordinates :: dependencyCoordinates)) {
-      Future { startCoordinates }
-    } else {
-      this.cluster = cluster
-      val stepSize: Double = dependencyCoordinates.map(c => c.distance(startCoordinates)).max / 2
-      val previousRoundBDP = Double.MaxValue
-      val resultVC = for {
-        bwToDependenciesRequest <- makeMapFuture(dependencyCoordinates.map(dependency => dependency -> getBandwidthBetweenCoordinates(dependency, startCoordinates, nnCandidates, Some(operator))).toMap)
-        bandwidthsToDependencies = bwToDependenciesRequest.map(dependency => dependency._1 -> math.max(dependency._2, defaultBandwidth) / 1000.0d)
-      } yield makeVCStep(operator = operator, stepSize, previousRoundBDP, dependencyCoordinates, nnCandidates, bandwidthsToDependencies, vc = startCoordinates)
-      resultVC.flatten
+  def findOptimalNodes(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                      (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, HostInfo)] =
+    for {
+      mainNode <- collectInformationAndExecute(operator, dependencies)
+    } yield {
+      val backup = HostInfo(cluster.selfMember, operator, OperatorMetrics())
+      (mainNode, backup)
     }
+
+  override def getStartParameters(implicit operator: Query,
+                                  dependenciesWithCoordinates: QueryDependenciesWithCoordinates,
+                                  dependenciesDataRateEstimates: Map[Query, Double]): (Coordinates, Double, Double) = {
+
+    val (parentCoords, childCoords) = (dependenciesWithCoordinates.parents, dependenciesWithCoordinates.child)
+    var startCoordinates = getWeberL1StartCoordinates(childCoords.values ++ parentCoords.values)
+    // deadpoint check: see if any of the dependency coords would provide a smaller bdp
+    var startPointBDP = estimateBDPAtPosition(startCoordinates)(operator, dependenciesWithCoordinates, dependenciesDataRateEstimates)
+    val dependencyCoordMinBDP = (childCoords ++ parentCoords)
+      .map(dep => dep -> estimateBDPAtPosition(dep._2)(operator, dependenciesWithCoordinates, dependenciesDataRateEstimates)).minBy(_._2)
+
+    if(dependencyCoordMinBDP._2 < startPointBDP) {
+      startCoordinates = dependencyCoordMinBDP._1._2
+      startPointBDP =  dependencyCoordMinBDP._2
+    }
+    // initial step size: maximum distance between start coord and any of the dependency coords
+    val stepSize: Double = (childCoords ++ parentCoords).map(c => c._2.distance(startCoordinates)).max
+    (startCoordinates, startPointBDP, stepSize)
   }
 
-  def makeVCStep(operator: Query, stepSize: Double, previousRoundBDP: Double, dependencyCoordinates: List[Coordinates], nnCandidates: Map[Member, Coordinates], currentVCToDependenciesBandwidths: Map[Coordinates, Double], iteration: Int = 0, vc: Coordinates): Future[Coordinates] = {
-
-    // Rizou minimizes SUM( datarate(p, v) * latency(p, v)
-    val dependencyForces = currentVCToDependenciesBandwidths.map(dependency => {
-      // f = f + datarate(p , v) * (p - v)
-      val vectorToDep = dependency._1.sub(vc)
-      val dependencyIncrement: Coordinates = vectorToDep.scale(dependency._2) // latency * bandwidth = BDP
-      dependencyIncrement
-    }).toList
-
-    val forcesTotal: Coordinates = dependencyForces.foldLeft(Coordinates(0, 0, 0))(_.add(_))
-    // use unity vector scaled by step size here to not make ludicrously large steps; relative influence of data rates on f is preserved
-    val step = forcesTotal.unity().scale(stepSize)
-    val updatedVC = vc.add(step)
-
-    val result = for {
-      // look up the node closest to the current virtual coordinates, use the bandwidth between this node and the dependency as an estimate for bw between the coordinate pair
-      // what happens if nearest node is the dependency? -> use two closest neighbours
-      bwToDependenciesRequest <- makeMapFuture(dependencyCoordinates.map(dependency => dependency -> this.getBandwidthBetweenCoordinates(dependency, vc.add(step), nnCandidates, Some(operator))).toMap)
-      updatedVCToDependenciesBandwidths = bwToDependenciesRequest.map(dependency => dependency._1 -> math.max(dependency._2, defaultBandwidth) / 1000.0d) // coord distance in ms, data rate in Mbit/s
-      bdpsToDependencies = updatedVCToDependenciesBandwidths.map(dependency => dependency._1 -> dependency._1.distance(updatedVC) * dependency._2) // ms * Mbit/ms = Mbit
-    } yield {
-      val currentRoundBDP = bdpsToDependencies.values.sum
-      val delta: Double = math.abs(currentRoundBDP - previousRoundBDP) // abs is missing in paper, but without it we would terminate after one step
-
-      if(delta >= minimumImprovementThreshold && iteration < iterationLimit) {
-        // adjust stepSize to make steps smaller when network usage stops shrinking between two iterations
-        if(currentRoundBDP > previousRoundBDP) {
-          val updatedStepSize = stepSize / 2.0 // do not pass updated virtual coordinates here -> try again with smaller step
-          makeVCStep(operator, updatedStepSize, previousRoundBDP, dependencyCoordinates, nnCandidates, currentVCToDependenciesBandwidths, iteration + 1, vc)
-        } else {
-          makeVCStep(operator, stepSize, currentRoundBDP, dependencyCoordinates, nnCandidates, updatedVCToDependenciesBandwidths, iteration + 1, updatedVC)
-        }
-
-      } else { // terminate
-        if(iteration >= iterationLimit) log.warn(s"maximum iteration limit ($iterationLimit) reached, returning virtual coordinates $vc (last delta: $delta) now!")
-        //log.debug(s"\n calculateVCSingleOperator() iteration $iteration - " +
-          //s"\n previous round BDP: $previousRoundBDP; current round BDP $currentRoundBDP ; delta $delta, threshold: $minimumImprovementThreshold" +
-          //s"\n step vector: ${step.x} ${step.y} step size: $stepSize" +
-          //s"\n virtualCoords: $vc, virtualCoords updated: ${vc.add(step).toString} \n")
-
-         Future { vc }
+  @scala.annotation.tailrec
+  def makeVCStep(previousVC: Coordinates,
+                 stepSize: Double,
+                 previousRoundBDP: Double,
+                 iteration: Int = 0,
+                 consecutiveStepAdjustments: Int = 0)
+                (implicit ec: ExecutionContext, operator: Query, dependencyCoordinates: QueryDependenciesWithCoordinates,
+                 dependenciesDataRateEstimates: Map[Query, Double]): Future[Coordinates] = {
+    if(iteration < iterationLimit) {
+      //println(s"makeVCStep $operator iteration $iteration - \ncurrCoord $previousVC, currBDP: $previousRoundBDP")
+      // Rizou minimizes SUM( datarate(p, v) * latency(p, v)
+      val parentForces = dependencyCoordinates.parents.map(parent => {
+        // f = f + datarate(p , v) * unit(p - v)
+        // latency space positions determine direction of force, data rate estimate the magnitude
+        // note that using unit() here (as in the paper), can impact the total force in some cases e.g.
+        // assuming equal data rate of 1000 for all three links:
+        // a = (-25.000, 50.000) unit: (-0.447, 0.894)
+        // b = (-25.000, -50.000) unit: (-0.447, -0.894)
+        // c = (50.000, 0.000) unit: (1.000, 0.000)
+        // -> sum(a,b,c): (0, 0) vs unit: (0.106, 0.000)
+        val vectorToParent = parent._2.sub(previousVC).unity()
+        // latency is in [ms], dataRate in [Bytes/s]
+        val dependencyDataRate = dependenciesDataRateEstimates(parent._1) * 0.001
+        // latency * dataRate = BDP (Bandwidth-Delay-Product, i.e. network usage)
+        val dependencyBDPForce = vectorToParent.scale(dependencyDataRate)
+        //println(s"parent ${parent._1.getClass} bdp vector: $dependencyBDPForce vecToDep: ${parent._2.sub(previousVC)} unit: $vectorToParent data rate: $dependencyDataRate")
+        dependencyBDPForce
+      })
+      val childForces = dependencyCoordinates.child.map(child => { // same as parent, but with output data rate estimate of this operator
+        val childBDPForce = child._2.sub(previousVC).unity().scale(dependenciesDataRateEstimates(operator) * 0.001)
+        //println(s"child ${child._1.getClass} bdp vector: $childBDPForce vecToDep: ${child._2.sub(previousVC)} unit: ${child._2.sub(previousVC).unity()} data rate: ${dependenciesDataRateEstimates(operator)}")
+        childBDPForce
+      })
+      val forcesTotal: Coordinates = (parentForces ++ childForces).foldLeft(Coordinates(0, 0, 0))(_.add(_))
+      val step = forcesTotal.unity().scale(stepSize)
+      val updatedVC = previousVC.add(step)
+      val currentRoundBDP: Double = estimateBDPAtPosition(updatedVC)
+      val delta: Double = previousRoundBDP - currentRoundBDP
+      /*
+      println(s"dependencyCoords: ${dependencyCoordinates}" +
+                s"\ncurrent round bdp: ${currentRoundBDP} (vs force vector length: ${forcesTotal.measure()}, forces: $forcesTotal)" +
+                s"\ndelta: $delta" +
+                s"\nstep vector: ${step} step vector size: ${step.measure()}, stepSize param: $stepSize}" +
+                s"\nnext virtualCoords: ${if(currentRoundBDP > previousRoundBDP) previousVC else updatedVC} \n")
+      */
+      if(delta > 0 && delta >= minimumImprovementThreshold) { // currentRoundBDP < previousRoundBDP
+        makeVCStep(updatedVC, stepSize, currentRoundBDP, iteration + 1)
+        // adjust stepSize to make steps smaller when network usage stops shrinking between two iterations (i.e. we step further than necessary) only try this 3 times in a row
+      } else if(delta <= 0 && consecutiveStepAdjustments < 3) {
+        // do not pass updated parameters -> try again with smaller step
+        makeVCStep(previousVC, stepSize * 0.5, previousRoundBDP, iteration + 1, consecutiveStepAdjustments + 1)
+      } else {
+        // improvement that is smaller than minimum improvement -> terminate
+        Future { updatedVC }
       }
+    } else { // terminate
+      log.warn(s"maximum iteration limit ($iterationLimit) reached, returning virtual coordinates $previousVC now!")
+     Future { previousVC }
     }
-    result.flatten
   }
 
   /**
@@ -158,17 +140,14 @@ object RizouAlgorithm extends PlacementStrategy {
     * @param candidates members to be considered
     * @return member with minimum load
     */
-  def selectHostFromCandidates(virtualCoordinates: Coordinates, candidates: Map[Member, Coordinates], operator: Option[Query] = None): Future[Member] = {
-    val host = for {
-      candidatesMap <- if(candidates == null) getCoordinatesOfMembers(cluster, findPossibleNodesToDeploy(cluster), operator)
-      else Future { candidates }
-      machineLoads: Map[Member, Double] <- findMachineLoad(cluster, getNClosestNeighboursToCoordinatesByMember(k, virtualCoordinates, candidatesMap).map(_._1), operator)
+  def selectHostFromCandidates(virtualCoordinates: Coordinates, candidates: Map[Member, Coordinates], operator: Option[Query] = None)(implicit ec: ExecutionContext, cluster: Cluster): Future[(Member, Map[Member, Double])] = {
+    for {
+      machineLoads: Map[Member, Double] <- findMachineLoad(getNClosestNeighboursToCoordinatesByMember(k, virtualCoordinates, candidates).map(_._1), operator)
     } yield {
       val sortedLoads = machineLoads.toList.sortBy(_._2)
       val host = sortedLoads.find(_._2 <= loadThreshold).getOrElse(sortedLoads.head)._1 // chose the closest non-overloaded node
-      host
+      (host, machineLoads)
     }
-    host
   }
 
 }

@@ -9,7 +9,7 @@ import tcep.data.Queries._
 case class MessageMonitor(csvWriter: PrintStream) extends Monitor {
   val log = LoggerFactory.getLogger(getClass)
 
-  override def onEventEmit(event: Event, transitionStatus: Int): X = {
+  override def onEventEmit(event: Event, transitionStatus: Int): Unit = {
     // log.info(s"Message emitted ${event}")
     val event2: Event2 = event.asInstanceOf[Event2]
     csvWriter.println(s"${event2.e1} \t ${event2.e2}")

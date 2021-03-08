@@ -1,0 +1,22 @@
+Index: mn_wifi/telemetry.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- mn_wifi/telemetry.py	(revision dd7213e5ddd307a1e424b8e2c20ea4054faca9b3)
++++ mn_wifi/telemetry.py	(date 1587630287153)
+@@ -301,9 +301,12 @@
+             self.colors.append(numpy.random.rand(3,))
+             if not isinstance(node, AP):
+                 inNamespaceNodes.append(node)
+-
++            if isinstance(node, AP):
++                a = 0.1
++            else:
++                a = 0.0
+             node.circle = plt.Circle((0, 0), int(node.wintfs[0].range),
+-                                     color=node.get_circle_color(), alpha=0.1)
++                                     color=node.get_circle_color(), alpha=a)
+
+         self.phys, self.ifaces = telemetry.get_phys(nodes, inNamespaceNodes)
+         interval = 1000

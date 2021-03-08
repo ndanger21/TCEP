@@ -25,9 +25,10 @@ build_local() {
   cp $work_dir/target/scala-2.12/tcep_2.12-0.0.1-SNAPSHOT-one-jar.jar $work_dir/dockerbuild
   cp $work_dir/Dockerfile $work_dir/dockerbuild
   cp $work_dir/docker-entrypoint.sh $work_dir/dockerbuild
+  cp $work_dir/cplex/libcplex1280.so $work_dir/dockerbuild/
+  cp $work_dir/cplex/cplex.jar $work_dir/dockerbuild/
   cp -r $work_dir/mobility_traces $work_dir/dockerbuild/
   docker build -t $registry_user/$tcep_image $work_dir/dockerbuild && \
-
   printf "\nBuilding GUI image\n" && \
   cd $work_dir/gui && \
   docker build -t $registry_user/$gui_image . && \
@@ -44,6 +45,7 @@ build_remote() {
     rm src.zip && rm gui.zip
     scp $work_dir/Dockerfile $user@$manager:~/tcep/dockerbuild/
     scp $work_dir/docker-entrypoint.sh $user@$manager:~/tcep/dockerbuild/
+    ssh $user@$manager '[ -f /users/'$user'/cplex/libcplex1280.so ]' || scp -r $work_dir/cplex $user@$manager:~/
 
     printf "\nLogin required to push images for localhost\n"
     ssh $user@$manager "docker login -u $registry_user -p $PW"
@@ -86,6 +88,7 @@ ENDSSH
     fi
 
     printf "\n Building Docker image of application and GUI \n"
+    ssh $user@$manager "cp ~/cplex/libcplex1280.so ~/tcep/dockerbuild && cp ~/cplex/cplex.jar ~/tcep/dockerbuild"
     ssh $user@$manager "cp -r ~/tcep/mobilityTraces ~/tcep/dockerbuild/"
     ssh $user@$manager "cd ~/tcep/dockerbuild && docker build -t tcep ~/tcep/dockerbuild && docker tag tcep $registry_user/$tcep_image" || exit 1
     ssh $user@$manager "cd ~/tcep/gui && docker build -t tcep-gui . && docker tag tcep-gui $registry_user/$gui_image" || exit 1

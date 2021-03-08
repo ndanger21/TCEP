@@ -8,7 +8,7 @@ import tcep.dsl.Dsl.TransitionMeasurement
 case class TransitionMonitor(recordTransitionStatus: Option[TransitionMeasurement]) extends Monitor{
   val log = LoggerFactory.getLogger(getClass)
 
-  override def onEventEmit(event: Event, transitionStatus: Int): X = {
+  override def onEventEmit(event: Event, transitionStatus: Int): Unit = {
     if(recordTransitionStatus.isDefined){
       recordTransitionStatus.get(transitionStatus)
     }

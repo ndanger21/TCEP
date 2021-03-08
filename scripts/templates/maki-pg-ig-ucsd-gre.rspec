@@ -1,0 +1,25 @@
+<rspec xmlns="http://www.geni.net/resources/rspec/3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" expires="2019-04-16T16:43:16Z" type="request" xsi:schemaLocation="http://www.geni.net/resources/rspec/3                            http://www.geni.net/resources/rspec/3/request.xsd">
+  <node client_id="pg-maki-node" component_manager_id="urn:publicid:IDN+maki.e-technik.tu-darmstadt.de+authority+cm" exclusive="false">
+    <sliver_type name="emulab-xen"/>
+    <services> <execute command="sudo apt-get install iperf -y" shell="sh"/> </services>
+    <interface client_id="pg-maki-node:if0">
+      <ip address="192.168.1.2" netmask="255.255.255.0" type="ipv4"/>
+    </interface>
+  </node>
+  <node client_id="ig-ucsd" component_manager_id="urn:publicid:IDN+instageni.ucsd.edu+authority+cm" exclusive="false">
+    <sliver_type name="emulab-xen"/>
+    <services> <execute command="sudo apt-get install iperf -y" shell="sh"/> </services>
+    <interface client_id="ig-ucsd:if0">
+      <ip address="192.168.1.1" netmask="255.255.255.0" type="ipv4"/>
+    </interface>
+  </node>
+  <link client_id="gre-tunnel0">
+    <component_manager name="urn:publicid:IDN+maki.e-technik.tu-darmstadt.de+authority+cm"/>
+    <component_manager name="urn:publicid:IDN+instageni.ucsd.edu+authority+cm"/>
+    <interface_ref client_id="pg-maki-node:if0"/>
+    <interface_ref client_id="ig-ucsd:if0"/>
+    <property dest_id="ig-ucsd:if0" source_id="pg-maki-node:if0"/>
+    <property dest_id="pg-maki-node:if0" source_id="ig-ucsd:if0"/>
+    <link_type name="egre-tunnel"/>
+  </link>
+</rspec>

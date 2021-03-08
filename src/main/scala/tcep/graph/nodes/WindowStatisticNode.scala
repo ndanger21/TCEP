@@ -3,8 +3,6 @@ package tcep.graph.nodes
 import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.WindowStatisticQuery
-import tcep.factories.NodeFactory
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
 import tcep.graph.{CreatedCallback, EventCallback}
 import tcep.placement.HostInfo
@@ -12,18 +10,17 @@ import tcep.simulation.tcep.{StatisticData, YahooDataNew}
 
 import scala.collection.mutable.{HashMap, ListBuffer}
 
-case class WindowStatisticNode(
-                                transitionConfig: TransitionConfig,
-                                hostInfo: HostInfo,
-                                backupMode: Boolean,
-                                mainNode: Option[ActorRef],
-                                query: WindowStatisticQuery,
-                                createdCallback: Option[CreatedCallback],
-                                eventCallback: Option[EventCallback],
-                                isRootOperator: Boolean,_parentNode: ActorRef*
-                              ) extends UnaryNode {
+case class WindowStatisticNode(transitionConfig: TransitionConfig,
+                               hostInfo: HostInfo,
+                               backupMode: Boolean,
+                               mainNode: Option[ActorRef],
+                               query: WindowStatisticQuery,
+                               createdCallback: Option[CreatedCallback],
+                               eventCallback: Option[EventCallback],
+                               isRootOperator: Boolean,
+                               publisherEventRate: Double,
+                               _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
 
-  var parentNode: ActorRef = _parentNode.head
   var storage: HashMap[Int, ListBuffer[Double]] = HashMap.empty[Int, ListBuffer[Double]]
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
@@ -45,7 +42,7 @@ case class WindowStatisticNode(
       for (id <- updated) {
         val statEvent = Event1(StatisticData(id, this.storage.get(id).get.size))
         statEvent.monitoringData = event.monitoringData
-        emitEvent(statEvent)
+        emitEvent(statEvent, eventCallback)
       }
     case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
   }

@@ -1,6 +1,8 @@
 
 package tcep.graph.transition.mapek.requirementBased
 
+import java.util.concurrent.TimeUnit
+
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.testkit.TestKit
 import org.scalatest.{BeforeAndAfterAll, WordSpecLike}
@@ -8,16 +10,16 @@ import tcep.data.Queries
 import tcep.data.Queries.{Requirement, Stream1}
 import tcep.data.Structures.MachineLoad
 import tcep.dsl.Dsl._
-import tcep.graph.nodes.traits.{TransitionConfig, TransitionModeNames}
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
+import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK.{AddRequirement, RemoveRequirement, SetClient}
-import tcep.graph.transition.{TransitionRequest, TransitionStats}
+import tcep.graph.transition.TransitionRequest
 import tcep.placement.GlobalOptimalBDPAlgorithm
 import tcep.placement.benchmarking.BenchmarkingNode
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.sbon.PietzuchAlgorithm
 
 import scala.collection.mutable.ListBuffer
+import scala.concurrent.duration.FiniteDuration
 
 class RequirementBasedMAPEKTest extends TestKit(ActorSystem())  with WordSpecLike with BeforeAndAfterAll {
 
@@ -29,9 +31,9 @@ class RequirementBasedMAPEKTest extends TestKit(ActorSystem())  with WordSpecLik
   val latencyRequirement = latency < timespan(500.milliseconds) otherwise None
   val messageHopsRequirement = hops < 3 otherwise None
   val loadRequirement = load < MachineLoad(1.0) otherwise None
+  implicit val t = FiniteDuration(5, TimeUnit.SECONDS)
 
   class WrapperActor(transitionConfig: TransitionConfig, initialRequirements: Set[Requirement]) extends Actor {
-
     var mapek: RequirementBasedMAPEK = _
     var subscribers = ListBuffer[ActorRef]()
     override def preStart(): Unit = {
@@ -48,35 +50,40 @@ class RequirementBasedMAPEKTest extends TestKit(ActorSystem())  with WordSpecLik
   }
 
   "RequirementBasedMAPEK" must {
-    "propagate msgHops requirement addition, return Starks algorithm" in {
+    "propagate msgHops requirement addition, return Starks algorithm" in within(t) {
       val w = system.actorOf(Props( new WrapperActor(TransitionConfig(), Set(latencyRequirement))))
 
-      Thread.sleep(3000)
+      Thread.sleep(100)
       w ! RemoveRequirement(Seq(latencyRequirement))
       w ! AddRequirement(Seq(messageHopsRequirement, loadRequirement))
-      expectMsg(TransitionRequest(StarksAlgorithm, w, TransitionStats()))
-
+      expectMsgPF(remaining) {
+        case t: TransitionRequest => assert(t.placementStrategy === StarksAlgorithm)
+      }
     }
   }
 
   "RequirementBasedMAPEK" must {
-    "select GlobalOptimalBDP after latency requirement is removed and latency + msgHops requirement are added (Relaxation->GlobalOptimalBDP)" in {
+    "select GlobalOptimalBDP after latency requirement is removed and latency + msgHops requirement are added (Relaxation->GlobalOptimalBDP)" in within(t) {
       val w = system.actorOf(Props( new WrapperActor(TransitionConfig(), Set(latencyRequirement))))
-      Thread.sleep(3000)
+      Thread.sleep(100)
       w ! RemoveRequirement(Seq(latencyRequirement))
       w ! AddRequirement(Seq(latencyRequirement, messageHopsRequirement))
-      expectMsg(TransitionRequest(GlobalOptimalBDPAlgorithm, w, TransitionStats()))
+      expectMsgPF(remaining) {
+        case t: TransitionRequest => assert(t.placementStrategy === GlobalOptimalBDPAlgorithm)
+      }
     }
   }
 
 
   "RequirementBasedMAPEK" must {
-    "select Relaxation after latency and msgHops requirement is removed and latency requirement is added (GlobalOptimalBDP->Relaxation)" in {
+    "select Relaxation after latency and msgHops requirement is removed and latency requirement is added (GlobalOptimalBDP->Relaxation)" in within((t)) {
       val w = system.actorOf(Props( new WrapperActor(TransitionConfig(), Set(latencyRequirement, messageHopsRequirement))))
-      Thread.sleep(3000)
+      Thread.sleep(100)
       w ! RemoveRequirement(Seq(latencyRequirement, messageHopsRequirement))
       w ! AddRequirement(Seq(latencyRequirement, loadRequirement))
-      expectMsg(TransitionRequest(PietzuchAlgorithm, w, TransitionStats()))
+      expectMsgPF(remaining) {
+        case t: TransitionRequest => assert(t.placementStrategy === PietzuchAlgorithm)
+      }
     }
   }
 }

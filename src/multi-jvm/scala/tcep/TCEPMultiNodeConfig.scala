@@ -13,13 +13,10 @@ object TCEPMultiNodeConfig extends MultiNodeConfig {
 
   // 'role' does not mean member role, but cluster node
   val client = role("client")
-  val node1 = role("node1")
-  val node2 = role("node2")
-  //val node3 = role("node3")
   val publisher1 = role("publisher1")
   val publisher2 = role("publisher2")
-  //val processingNodes = Seq(node1, node2, node3)
-  //val publishers = Seq(publisher1, publisher2)
+  val node1 = role("node1")
+  val node2 = role("node2")
 
   // enable the test transport that allows to do fancy things such as blackhole, throttle, etc.
   testTransport(on = false)
@@ -28,31 +25,26 @@ object TCEPMultiNodeConfig extends MultiNodeConfig {
   nodeConfig(client)(ConfigFactory.parseString(
     """
       |akka.cluster.roles=[Subscriber, Candidate]
-      |akka.remote.classic.netty.tcp.port=2500
     """.stripMargin))
 
   nodeConfig(publisher1)(ConfigFactory.parseString(
     """
-      |akka.remote.classic.netty.tcp.port=2501
-      |akka.cluster.roles=[Publisher]
+      |akka.cluster.roles=[Publisher, Candidate]
     """.stripMargin))
 
   nodeConfig(publisher2)(ConfigFactory.parseString(
     """
-      |akka.remote.classic.netty.tcp.port=2502
-      |akka.cluster.roles=[Publisher]
+      |akka.cluster.roles=[Publisher, Candidate]
     """.stripMargin))
 
   nodeConfig(node1)(ConfigFactory.parseString(
     """
-      |akka.remote.classic.netty.tcp.port=2503
       |akka.cluster.roles=[Candidate]
     """.stripMargin
   ))
 
   nodeConfig(node2)(ConfigFactory.parseString(
     """
-      |akka.remote.classic.netty.tcp.port=2504
       |akka.cluster.roles=[Candidate]
     """.stripMargin
   ))
@@ -66,7 +58,10 @@ object TCEPMultiNodeConfig extends MultiNodeConfig {
   // common configuration for all nodes
   commonConfig(ConfigFactory.parseString(
     """
+      |blocking-io-dispatcher = "akka.actor.default-blocking-io-dispatcher"
       |akka.loglevel=WARNING
+      |akka.log-dead-letters = off
+      |akka.log-dead-letters-during-shutdown = off
       |akka.actor.provider = cluster
       |clustering.cluster.name = tcep
       |akka.coordinated-shutdown.run-by-jvm-shutdown-hook = off
@@ -76,9 +71,19 @@ object TCEPMultiNodeConfig extends MultiNodeConfig {
       |prio-mailbox { mailbox-type = "tcep.akkamailbox.TCEPPriorityMailbox" }
       |akka.actor.deployment { /PrioActor { mailbox = prio-mailbox } }
       |akka.actor.serializers {
-      |      # Define kryo serializer
+      |      jackson-json = "akka.serialization.jackson.JacksonJsonSerializer"
+      |      jackson-cbor = "akka.serialization.jackson.JacksonCborSerializer"
       |      kryo = "com.twitter.chill.akka.AkkaSerializer"
+      |      java = "akka.serialization.JavaSerializer"
+      |      proto = "akka.remote.serialization.ProtobufSerializer"
       |    }
-      |akka.actor.serialization-bindings { "java.io.Serializable" = kryo }
+      |akka.actor.serialization-bindings {
+      |      #"tcep.machinenodes.helper.actors.MySerializable" = jackson-cbor
+      |      #"tcep.data.Queries$Stream1" = proto
+      |      "java.io.Serializable" = kryo
+      |    }
+      |akka.actor.allow-java-serialization = off
+      |akka.actor.serialize-creators = off // always serialize Props
+      |akka.actor.serialize-messages = off // always serialize messages
     """.stripMargin))
 }

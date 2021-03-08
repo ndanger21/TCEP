@@ -1,0 +1,17 @@
+1..1 f0 gt=or gi=or {
+	0..1 f1 gt=xor gi=1..* {
+		a1:Real 1..100
+	}	
+	0..1 f3 gt=xor gi=xor {
+			0..1 f2 gt=xor gi=xor {
+				a2:Integer 0..100
+			}
+			0..1 f4 gt=xor gi=xor {
+				a3:Integer 0..100
+			}
+			0..1 f5 gt=xor gi=xor {
+				a4:Real 1..100
+			}
+		}
+	}
+}

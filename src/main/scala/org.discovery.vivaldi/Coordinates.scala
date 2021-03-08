@@ -1,7 +1,5 @@
 package org.discovery.vivaldi
 
-import akka.cluster.Member
-
 /**
   * Created by raheel on 31/01/2018.
   */
@@ -12,11 +10,11 @@ case class Coordinates(x: Double, y: Double, h: Double) {
   val MAX_H = 3000000
 
   def add(other: Coordinates): Coordinates = {
-    primitive(this, other, 1)
+    Coordinates(this.x + other.x, this.y + other.y, this.h + other.h)
   }
 
   def sub(other: Coordinates): Coordinates = {
-    primitive(this, other, -1)
+    Coordinates(this.x - other.x, this.y - other.y, this.h - other.h)
   }
 
   def scale(scale: Double): Coordinates = {
@@ -45,10 +43,6 @@ case class Coordinates(x: Double, y: Double, h: Double) {
     this.sub(other).measure()
   }
 
-  def distance(other: (Member, Coordinates)): Double = {
-    primitive(this, other._2)
-  }
-
   def unity(): Coordinates = {
     val measure = this.measure()
     if(measure != 0) this.scale(1 / measure)
@@ -67,23 +61,8 @@ case class Coordinates(x: Double, y: Double, h: Double) {
   }
 
   override def toString: String = {
-    s"(${BigDecimal(x).setScale(1, BigDecimal.RoundingMode.HALF_UP)}, ${BigDecimal(y).setScale(1, BigDecimal.RoundingMode.HALF_UP)})"
+    s"(${BigDecimal(x).setScale(3, BigDecimal.RoundingMode.HALF_UP)}, ${BigDecimal(y).setScale(3, BigDecimal.RoundingMode.HALF_UP)})"
   }
-
-  def primitive(c1: Coordinates, c2: Coordinates, scale: Double): Coordinates = {
-    new Coordinates(
-      c1.x + c2.x * scale,
-      c1.y + c2.y * scale,
-      Math.abs(c1.h + c2.h)
-    )
-  }
-
-  def primitive(c1: Coordinates, c2: Coordinates): Double = {
-    maxOrCurrent(primitive(c1, c2, 5).measure().toInt, 100).toDouble
-  }
-
-  def maxOrCurrent(current: Int, max: Int) = if (current > max) max else current
-
 }
 
 object Coordinates {
@@ -94,8 +73,8 @@ object Coordinates {
     * @param coordinates
     * @return true if all distance pairs are smaller than 0.001d, else false
     */
-  def areAllEqual(coordinates: Seq[Coordinates]): Boolean = {
+  def areAllEqual(coordinates: Seq[Coordinates], minDist: Double): Boolean = {
     val distances: Seq[Seq[Double]] = coordinates.map(c => coordinates.map(other => c.distance(other)))
-    return !distances.exists(c => c.exists(dist => dist > 0.001d))
+    return !distances.exists(c => c.exists(dist => dist > minDist))
   }
 }

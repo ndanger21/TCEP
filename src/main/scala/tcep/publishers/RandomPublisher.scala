@@ -18,7 +18,7 @@ case class RandomPublisher(createEventFromId: Integer => Event) extends Publishe
                             FiniteDuration(minimumWait + Random.nextInt(5000), TimeUnit.MILLISECONDS),
                             runnable = () => {
                               val event: Event = createEventFromId(id.incrementAndGet())
-                              subscribers.foreach(_ ! event)
+                              subscribers.keys.foreach(_ ! event)
                               log.info(s"STREAM $publisherName:\t$event")
                             }
                           )

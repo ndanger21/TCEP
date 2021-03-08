@@ -1,0 +1,42 @@
+1..1 root gt=2..2 gi=1..1 {
+	1..1 fsSystem gt=1..1 gi=1..1 {
+		1..1 fsMechanisms gt=1..1 gi=1..1 {
+			1..1 fsPlacementAlgorithm gt=1..1 gi=1..1 {
+				0..1 fsRelaxation
+				0..1 fsMDCEP
+				0..1 fsRandom
+				0..1 fsProducerConsumer
+				0..1 fsRizou
+				0..1 fsGlobalOptimalBDP
+			}
+		}
+	}
+
+	1..1 fcContext gt=1..1 gi=1..1 {
+		1..1 fcNetworkSituation gt=2..2 gi=1..1 {
+		    1..1 fcFixedProperties gt=1..1 gi=1..1 {
+		        fcOperatorTreeDepth:Integer 1..15
+		        fcMaxTopoHopsPubToClient:Integer 0..8
+		    }
+		    1..1 fcVariableProperties gt=0..1 gi=1..1 {
+		        0..1 fcMobility
+		        fcJitter:Real 0..50000
+                fcLoadVariance:Real 0..100
+                fcAvgEventArrivalRate:Real 0..3000
+                fcEventPublishingRate:Real 0..1000
+                fcNodeCount:Integer 1..25
+                fcNodeCountChangerate:Real 0..8
+                fcNodeToOperatorRatio:Real 0..10
+                fcAvgVivaldiDistance:Real 0..10000
+                fcVivaldiDistanceStdDev:Real 0..10000
+                fcLinkChanges:Integer 0..100
+                fcMaxPublisherPing:Real 0..3000
+                fcGiniNodesIn1Hop:Real 0..1
+                fcGiniNodesIn2Hop:Real 0..1
+                fcAvgNodesIn1Hop:Real 0..25
+                fcAvgNodesIn2Hop:Real 0..25
+                fcAvgHopsBetweenNodes:Real 0..25
+		    }
+		}
+	}
+}

@@ -1,11 +1,11 @@
 <configuration>
 
    <!-- <statusListener class="ch.qos.logback.core.status.NopStatusListener" />  suppress logging configuration output-->
-    <timestamp key = "myTimestamp" datePattern="dd-MM-yyyy'_'HH-mm-ss"/>
+    <timestamp key = "myTimestamp" datePattern="dd-MM-yyyy'_'HH-mm-ss:SSS"/>
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file> ${logFilePath}/${MAIN}-${myTimestamp}.log</file>
         <append>false</append>
-        <!-- set immediateFlush to false for much higher logging throughput -->
+        <!-- set immediateFlush to false for much higher logging throughput, but unflushed log entries are lost on crash -->
         <immediateFlush>true</immediateFlush>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
             <fileNamePattern>logFile.%d{yyyy-MM-dd}.log</fileNamePattern>
@@ -17,22 +17,29 @@
             <pattern>%d{HH:mm:ss.SSS} %-5level[%thread] %logger{0} - %msg%n%rEx</pattern>
         </encoder>
     </appender>
-    <!--
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <!-- separate logfile for placement algorithms -->
+    <appender name="PLACEMENT-ALGORITHMS-FILE" class="ch.qos.logback.core.FileAppender">
+        <file> ${logFilePath}/placementAlgorithms.csv</file>
+        <append>false</append>
+        <!-- set immediateFlush to false for much higher logging throughput -->
+        <immediateFlush>true</immediateFlush>
         <encoder>
-            <pattern>%X{akkaTimestamp} %-5level[%thread] %logger{0} - %msg%n%rEx</pattern>
+            <pattern>%d{HH:mm:ss.SSS}; %-5level[%thread]; %logger{0} ;%msg%n%rEx</pattern>
         </encoder>
     </appender>
-
+    <!-- define separate logger for placement algorithm logging -->
+    <logger name="tcep.placement.PlacementStrategy" level="DEBUG" additivity="false">
+        <appender-ref ref="PLACEMENT-ALGORITHMS-FILE"/>
+    </logger>
+    <!--
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <target>System.out</target>
         <encoder>
-            <pattern>%X{akkaTimestamp} %-5level[%thread] %logger{0} - %msg%n%rEx</pattern>
+            <pattern>%d{HH:mm:ss.SSS}; %-5level[%thread]; %logger{0} ;%msg%n%rEx</pattern>
         </encoder>
     </appender>
     -->
     <root level="INFO">
-        <!--<appender-ref ref="STDOUT"/>-->
         <!--<appender-ref ref="CONSOLE"/>-->
         <appender-ref ref="FILE"/>
     </root>

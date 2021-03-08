@@ -7,22 +7,16 @@ import akka.util.Timeout
 import com.espertech.esper.client._
 import tcep.data.Events._
 import tcep.data.Queries._
-import tcep.graph.nodes.traits.Node.Subscribe
-import tcep.graph.nodes.traits.TransitionModeNames._
 import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
-import tcep.publishers.Publisher._
-import tcep.utils.TCEPUtils
-
-import scala.concurrent.duration.FiniteDuration
 
 /**
   * Handling of [[tcep.data.Queries.SequenceQuery]] is done by SequenceNode.
   *
   * @see [[QueryGraph]]
   **/
-
+//TODO either only allow publishers as parents (no check at the moment) or allow any kind of parent (need to implement transition logic similar to BinaryNode then)
 case class SequenceNode(transitionConfig: TransitionConfig,
                         hostInfo: HostInfo,
                         backupMode: Boolean,
@@ -31,74 +25,60 @@ case class SequenceNode(transitionConfig: TransitionConfig,
                         createdCallback: Option[CreatedCallback],
                         eventCallback: Option[EventCallback],
                         isRootOperator: Boolean,
-                        publishers: ActorRef*
-) extends LeafNode with EsperEngine with ActorLogging {
+                        publisherEventRate: Double,
+                        publishers: ActorRef*) extends LeafNode with EsperEngine with ActorLogging {
 
   override val esperServiceProviderUri: String = name
   var esperInitialized = false
   implicit val resolveTimeout = Timeout(60, TimeUnit.SECONDS)
 
-  var subscription1Acknowledged: Boolean = false
-  var subscription2Acknowledged: Boolean = false
-
   override def preStart(): Unit = {
     super.preStart()
     assert(publishers.size == 2)
-    val type1 = addEventType("sq1", SequenceNode.createArrayOfNames(query.s1), SequenceNode.createArrayOfClasses(query.s1))
-    val type2 = addEventType("sq2", SequenceNode.createArrayOfNames(query.s2), SequenceNode.createArrayOfClasses(query.s2))
-    val epStatement: EPStatement = createEpStatement("select * from pattern [every (sq1=sq1 -> sq2=sq2)]")
-
+    for {
+      type1 <- addEventType("sq1", SequenceNode.createArrayOfNames(query.s1), SequenceNode.createArrayOfClasses(query.s1))(blockingIoDispatcher)
+      type2 <- addEventType("sq2", SequenceNode.createArrayOfNames(query.s2), SequenceNode.createArrayOfClasses(query.s2))(blockingIoDispatcher)
+      epStatement: EPStatement <- createEpStatement("select * from pattern [every (sq1=sq1 -> sq2=sq2)]")(blockingIoDispatcher)
+    } yield {
       val updateListener: UpdateListener = (newEventBeans: Array[EventBean], _) => newEventBeans.foreach(eventBean => {
+        try {
+          val values1: Array[Any] = eventBean.get("sq1").asInstanceOf[Array[Any]]
+          val values2: Array[Any] = eventBean.get("sq2").asInstanceOf[Array[Any]]
+          val values = values1.tail ++ values2.tail
+          val monitoringData1 = values1.head.asInstanceOf[MonitoringData]
+          val monitoringData2 = values2.head.asInstanceOf[MonitoringData]
+          val event: Event = values.length match {
+            case 2 =>
+              val res = Event2(values(0), values(1))
+              mergeMonitoringData(res, monitoringData1, monitoringData2, log)
+            case 3 =>
+              val res = Event3(values(0), values(1), values(2))
+              mergeMonitoringData(res, monitoringData1, monitoringData2, log)
+            case 4 =>
+              val res = Event4(values(0), values(1), values(2), values(3))
+              mergeMonitoringData(res, monitoringData1, monitoringData2, log)
+            case 5 =>
+              val res = Event5(values(0), values(1), values(2), values(3), values(4))
+              mergeMonitoringData(res, monitoringData1, monitoringData2, log)
+            case 6 =>
+              val res = Event6(values(0), values(1), values(2), values(3), values(4), values(5))
+              mergeMonitoringData(res, monitoringData1, monitoringData2, log)
+          }
+          emitEvent(event, eventCallback)
 
-        val values1: Array[Any] = eventBean.get("sq1").asInstanceOf[Array[Any]]
-        val values2: Array[Any] = eventBean.get("sq2").asInstanceOf[Array[Any]]
-        val values = values1.tail ++ values2.tail
-        val monitoringData1 = values1.head.asInstanceOf[MonitoringData]
-        val monitoringData2 = values2.head.asInstanceOf[MonitoringData]
-        val event: Event = values.length match {
-          case 2 =>
-            val res = Event2(values(0), values(1))
-            mergeMonitoringData(res, monitoringData1, monitoringData2, log)
-          case 3 =>
-            val res = Event3(values(0), values(1), values(2))
-            mergeMonitoringData(res, monitoringData1, monitoringData2, log)
-          case 4 =>
-            val res = Event4(values(0), values(1), values(2), values(3))
-            mergeMonitoringData(res, monitoringData1, monitoringData2, log)
-          case 5 =>
-            val res = Event5(values(0), values(1), values(2), values(3), values(4))
-            mergeMonitoringData(res, monitoringData1, monitoringData2, log)
-          case 6 =>
-            val res = Event6(values(0), values(1), values(2), values(3), values(4), values(5))
-            mergeMonitoringData(res, monitoringData1, monitoringData2, log)
+        } catch {
+          case e: Throwable =>
+            log.error(e, "error while processing events in Sequence operator")
         }
-        emitEvent(event)
-      })
+      }
+      )
       epStatement.addListener(updateListener)
       esperInitialized = true
-
-  }
-
-  override def subscribeToParents(): Unit = {
-    log.info(s"subscribing for events from $publishers")
-
-    implicit val resolveTimeout = Timeout(10, TimeUnit.SECONDS)
-    for {
-      ack1 <- TCEPUtils.guaranteedDelivery(context, publishers.head, Subscribe(self))(blockingIoDispatcher).mapTo[AcknowledgeSubscription]
-      ack2 <- TCEPUtils.guaranteedDelivery(context, publishers.last, Subscribe(self))(blockingIoDispatcher).mapTo[AcknowledgeSubscription]
-    } yield {
-      log.info(s"subscribed for events from $publishers")
-      context.system.scheduler.scheduleOnce(FiniteDuration(100, TimeUnit.MILLISECONDS), self, Created) // delay sending Created so all children can subscribe to avoid failing tests
     }
+
   }
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
-    case AcknowledgeSubscription() if sender().equals(publishers.head) =>
-      subscription1Acknowledged = true
-      if (subscription2Acknowledged) emitCreated()
-    case AcknowledgeSubscription() if sender().equals(publishers(1)) =>
-      subscription2Acknowledged = true
-      if (subscription1Acknowledged) emitCreated()
     case event: Event if sender().equals(publishers.head) && esperInitialized => event match {
       case Event1(e1) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
       case Event2(e1, e2) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2)))
@@ -118,7 +98,7 @@ case class SequenceNode(transitionConfig: TransitionConfig,
     case unhandledMessage => log.info(s"unhandled message $unhandledMessage, esper initialized: $esperInitialized")
   }
 
-  def getParentOperators(): Seq[ActorRef] = publishers
+  override def getParentActors(): List[ActorRef] = publishers.toList
 
   override def postStop(): Unit = {
     destroyServiceProvider()

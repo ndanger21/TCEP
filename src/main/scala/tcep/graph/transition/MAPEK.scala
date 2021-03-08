@@ -1,16 +1,19 @@
 package tcep.graph.transition
 
-import java.time.{Duration, Instant}
+import java.time.Instant
 
-import akka.actor.{ActorContext, ActorRef, PoisonPill}
+import akka.actor.{Actor, ActorContext, ActorLogging, ActorRef, PoisonPill}
+import akka.cluster.Cluster
 import akka.pattern.ask
 import akka.util.Timeout
-import tcep.ClusterActor
+import com.typesafe.config.ConfigFactory
+import tcep.data.Events.{Event, Event1}
 import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
+import tcep.graph.qos.AverageFrequencyMonitorFactory
 import tcep.graph.transition.MAPEK._
+import tcep.graph.transition.mapek.contrast.ContrastMAPEK
 import tcep.graph.transition.mapek.lightweight.LightweightMAPEK
 import tcep.graph.transition.mapek.requirementBased.RequirementBasedMAPEK
 import tcep.machinenodes.helper.actors.TransitionControlMessage
@@ -20,11 +23,13 @@ import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.simulation.tcep._
 import tcep.utils.SpecialStats
 
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
-trait MAPEKComponent extends ClusterActor {
-  implicit val timeout = Timeout(5 seconds)
-  override implicit val ec = blockingIoDispatcher // do not use the default dispatcher to avoid starvation at high event rates
+trait MAPEKComponent extends Actor with ActorLogging {
+  implicit val timeout: Timeout = Timeout(5 seconds)
+  lazy implicit val ec: ExecutionContext = context.system.dispatchers.lookup("blocking-io-dispatcher") // do not use the default dispatcher to avoid starvation at high event rates
+  val cluster = Cluster(context.system)
 }
 trait MonitorComponent extends MAPEKComponent
 trait AnalyzerComponent extends MAPEKComponent
@@ -74,8 +79,8 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
   var lastTransitionEnd: Long = System.currentTimeMillis()
   var lastTransitionDuration: Long = 0
   var lastTransitionStats: TransitionStats = TransitionStats()
-  var latencyMovingAverage: Double = 0.0
-  var previousLatencies: Map[Long, Long] = Map()
+  var previousLatencies: Vector[(Long, Long)] = Vector()
+  val freqMonitor = AverageFrequencyMonitorFactory(query, None).createNodeMonitor
 
   override def receive: Receive = {
 
@@ -130,8 +135,16 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
     case NotifyOperators(msg: TransitionControlMessage) =>
       log.info(s"broadcasting message $msg to ${operators.size} operators: \n ${operators.mkString("\n")}")
       operators.foreach { op => op ! msg }
-    case GetAverageLatency => sender() ! this.latencyMovingAverage
-    case UpdateLatency(latency) => latencyMovingAverage = this.calculateMovingAvg(latency)
+
+    case GetAverageLatency(intervalMs) => sender() ! this.calculateMovingAvg(intervalMs)
+    case UpdateLatency(latency) =>
+      freqMonitor.onEventEmit(Event1(true)(cluster.selfAddress), 0)
+      previousLatencies = (System.nanoTime(), latency) +: previousLatencies
+      if(previousLatencies.size > 1e6) { // prevent the queue from growing endlessly when not calling calculateMovingAvg
+        log.warning("list of previous latency values has reached 1000000 entries, discarding half of the entries")
+        previousLatencies = previousLatencies.take(500000)
+      }
+
     case TransitionStatsSingle(operator, timetaken, placementOverheadBytes, transitionOverheadBytes) =>
       SpecialStats.log(this.getClass.toString, s"transitionStats-perOperator-$transitionConfig-${currentPlacementStrategy.name}",
         s"operator;$operator;$timetaken;ms;${placementOverheadBytes / 1000.0};kByte;${transitionOverheadBytes / 1000.0};kByte;${(transitionOverheadBytes + placementOverheadBytes) / 1000.0};kByte")
@@ -139,12 +152,18 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
   }
 
   /**
-    * calculate average latency over the past minute
+    * calculate average latency over the given last x milliseconds
+    * discards all older values from the queue
     */
-  def calculateMovingAvg(currentLatency: Long): Double = {
-    val lastMinuteValues = previousLatencies.filter(System.currentTimeMillis() - _._1 <= 60 * 1000).updated(System.currentTimeMillis(), currentLatency)
-    val avg = lastMinuteValues.values.sum.toDouble / lastMinuteValues.size
-    this.previousLatencies = lastMinuteValues
+  def calculateMovingAvg(intervalMs: Long): Double = {
+    val intervalInNS: Double = intervalMs * 1e6
+    val lastIntervalLatencySum = previousLatencies.foldLeft((0.0, 0))((acc, e) =>
+      if(System.nanoTime() - e._1 <= intervalInNS) (acc._1 + e._2, acc._2 + 1)
+      else acc
+    )
+    val avg = if(lastIntervalLatencySum._2 != 0) lastIntervalLatencySum._1 / lastIntervalLatencySum._2 else 0
+    log.debug(s"avg for last $intervalMs ms is ${avg}, ${lastIntervalLatencySum._2} of ${previousLatencies.size} are in interval")
+    this.previousLatencies = previousLatencies.take(lastIntervalLatencySum._2) // keep only the latency values of the last interval
     avg
   }
 
@@ -174,13 +193,13 @@ object MAPEK {
       if(startingPlacementStrategy.isEmpty) BenchmarkingNode.selectBestPlacementAlgorithm(List(), Queries.pullRequirements(query, List()).toList) // implicit
       else BenchmarkingNode.algorithms.find(_.placement.name == startingPlacementStrategy.getOrElse(PietzuchAlgorithm).name).getOrElse( // explicit
         throw new IllegalArgumentException(s"missing configuration in application.conf for algorithm $startingPlacementStrategy"))
-
-    assert(mapekType == "lightweight" || mapekType == "requirementBased", s"mapekType must be either lightweight or requirementBased: $mapekType")
+    val availableMapekTypes = ConfigFactory.load().getStringList("constants.mapek.availableTypes")
+    assert(availableMapekTypes.contains(mapekType), s"mapekType must be either of $availableMapekTypes but was: $mapekType")
     mapekType match {
         // if no algorithm is specified, start with pietzuch, since no context information available yet
-      //case "CONTRAST" => new ContrastMAPEK(context, query, mode, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), publishers, fixedSimulationProperties, allRecords.getOrElse(AllRecords()))
       case "requirementBased" => new RequirementBasedMAPEK(context, query, transitionConfig, placementAlgorithm)
-      case "lightweight" => new LightweightMAPEK(context, query, transitionConfig, placementAlgorithm.placement, /*, allRecords.getOrElse(AllRecords())*/  consumer)
+      case "CONTRAST" => new ContrastMAPEK(context, query, transitionConfig, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), fixedSimulationProperties, consumer)
+      case "lightweight" => new LightweightMAPEK(context, query, transitionConfig, placementAlgorithm.placement, consumer)
     }
 
   }
@@ -213,11 +232,9 @@ object MAPEK {
   case class SetPlacementStrategy(strategy: PlacementStrategy)
   case object IsDeploymentComplete
   case class SetDeploymentStatus(complete: Boolean)
-  case object GetAverageLatency
+  case class GetAverageLatency(fromLastIntervalMs: Long)
   case class UpdateLatency(latency: Long)
 }
-
-case class TransferState(newActor: ActorRef)
 
 case class ChangeInNetwork(networkProperty: NetworkChurnRate)
 case class ScheduleTransition(strategy: PlacementStrategy)
@@ -225,10 +242,14 @@ case class ScheduleTransition(strategy: PlacementStrategy)
 case class TransitionRequest(placementStrategy: PlacementStrategy, requester: ActorRef, transitionStats: TransitionStats) extends TransitionControlMessage
 case class StopExecution() extends TransitionControlMessage
 case class StartExecution(algorithmType: String) extends TransitionControlMessage
+case class AcknowledgeStart() extends TransitionControlMessage
 case class SaveStateAndStartExecution(state: List[Any]) extends TransitionControlMessage
-case class StartExecutionWithData(downTime:Long, startTime: Long, subscribers: Set[ActorRef], data: Set[(ActorRef, Any)], algorithmType: String) extends TransitionControlMessage
-case class StartExecutionAtTime(subscribers: List[ActorRef], startTime: Instant, algorithmType: String) extends TransitionControlMessage
-case class TransferredState(placementAlgo: PlacementStrategy, newParent: ActorRef, oldParent: ActorRef, transitionStats: TransitionStats) extends TransitionControlMessage
+case class StartExecutionWithData(downTime:Long, startTime: Long, subscribers: List[(ActorRef, Query)], data: List[(ActorRef, Event)], algorithmType: String) extends TransitionControlMessage
+case class StartExecutionAtTime(subscribers: List[(ActorRef, Query)], startTime: Instant, algorithmType: String) extends TransitionControlMessage
+case class TransferEvents(downTime: Long, startTime: Long, subscribers: List[(ActorRef, Query)], windowEvents: List[(ActorRef, Event)], unsentEvents: List[(ActorRef, Event)], algorithmName: String) extends TransitionControlMessage
+case class TransferredState(placementAlgo: PlacementStrategy, newParent: ActorRef, oldParent: ActorRef, transitionStats: TransitionStats, lastOperator: Query) extends TransitionControlMessage
+case class MoveOperator(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats) extends TransitionControlMessage
+case object SuccessorStart extends TransitionControlMessage
 // only used inside TransitionRequest and TransferredState; transitionOverheadBytes must be updated on receive of TransitionRequest and TransferredState, placementOverheadBytes on operator placement completion
 case class TransitionStats(
                             placementOverheadBytes: Long = 0, transitionOverheadBytes: Long = 0, transitionStartAtKnowledge: Long = System.currentTimeMillis(),

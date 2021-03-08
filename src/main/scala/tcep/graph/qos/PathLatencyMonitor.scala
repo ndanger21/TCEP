@@ -24,7 +24,7 @@ case class PathLatencyMonitor(query: Query, recordLatency: Option[LatencyMeasure
     !met
   }
 
-  override def onEventEmit(event: Event, status: Int): X = {
+  override def onEventEmit(event: Event, status: Int): Unit = {
     /**
       * @author Niels
       * calculate path latency in two ways:

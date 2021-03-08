@@ -1,0 +1,6 @@
+1..1 f0 gt=xor gi=1..* {
+	attr1:Real 0.1..0.9
+	attr2:Real 1.1..1.9
+	attr3:Real 0..0.01
+	attr4:Real 10..100
+}

@@ -3,15 +3,15 @@ package tcep.graph.nodes.traits
 import java.time.Instant
 
 import akka.actor.{ActorLogging, ActorRef, Address, Cancellable, PoisonPill, Props}
+import akka.pattern.ask
 import com.typesafe.config.ConfigFactory
-import tcep.data.Events._
 import tcep.data.Queries._
-import tcep.graph.nodes.traits.Node.{Dependencies, OperatorMigrationNotice, UnSubscribe, UpdateTask}
+import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, UnSubscribe, UpdateTask}
 import tcep.graph.nodes.traits.TransitionExecutionModes.ExecutionMode
 import tcep.graph.nodes.traits.TransitionModeNames.Mode
-import tcep.graph.transition.{StartExecution, StartExecutionAtTime, StartExecutionWithData, TransitionStats}
+import tcep.graph.transition._
 import tcep.graph.{CreatedCallback, EventCallback}
-import tcep.machinenodes.helper.actors.{CreateRemoteOperator, PlacementMessage, RemoteOperatorCreated}
+import tcep.machinenodes.helper.actors.{CreateRemoteOperator, PlacementMessage, RemoteOperatorCreated, TransitionControlMessage}
 import tcep.placement._
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.mop.RizouAlgorithm
@@ -19,45 +19,40 @@ import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.simulation.adaptive.cep.SystemLoad
 import tcep.simulation.tcep.GUIConnector
-import tcep.utils.{SpecialStats, TCEPUtils}
+import tcep.utils.TCEPUtils
 
-import scala.collection.mutable
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
   * The base class for all of the nodes
   **/
-trait Node extends MFGSMode with SMSMode with ActorLogging {
+trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveStopMoveStartMode with ActorLogging {
 
   val name: String = self.path.name
   val hostInfo: HostInfo
-  val query: Query
   val transitionConfig: TransitionConfig
   @volatile var started: Boolean = false
   val placementUpdateInterval: Int = ConfigFactory.load().getInt("constants.placement.update-interval")
-  val eventIntervalMicros: Int = ConfigFactory.load().getInt("constants.event-interval-microseconds")
   val backupMode: Boolean
   val mainNode: Option[ActorRef]
   private var currAlgorithm: String = ""
   implicit val creatorAddress: Address = cluster.selfAddress
 
-  val subscribers: mutable.Set[ActorRef] = mutable.Set[ActorRef]()
-  var bdpToParents: mutable.Map[Address, Double] = mutable.Map()
   val createdCallback: Option[CreatedCallback]
   val eventCallback: Option[EventCallback]
-
   var updateTask: Cancellable = _
   SystemLoad.newOperatorAdded()
 
   override def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
     log.info(s"${self.path.name} executing transition on $transitionConfig")
     if (transitionConfig.transitionStrategy == TransitionModeNames.SMS) super[SMSMode].executeTransition(requester, algorithm, stats)
+    else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState) super[NaiveMovingStateMode].executeTransition(requester, algorithm, stats)
+    else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart) super[NaiveStopMoveStartMode].executeTransition(requester, algorithm, stats)
     else super[MFGSMode].executeTransition(requester, algorithm, stats)
-
   }
 
-  override def preStart(): X = {
+  override def preStart(): Unit = {
     super.preStart()
     //executionStarted()
     // must explicitly start execution by receiving StartExecution(WithData/WithDependencies)
@@ -67,8 +62,8 @@ trait Node extends MFGSMode with SMSMode with ActorLogging {
   }
 
   override def postStop(): Unit = {
-    getParentOperators().foreach(_ ! UnSubscribe())
-    log.info(s"unsubscribed from parents and stopped self $self")
+    getParentActors().foreach(_ ! UnSubscribe())
+    transitionLog(s"unsubscribed from parents and stopped self $self")
     super.postStop()
   }
 
@@ -84,24 +79,33 @@ trait Node extends MFGSMode with SMSMode with ActorLogging {
   override def receive: Receive = placementReceive orElse (
       if (transitionConfig.transitionStrategy == TransitionModeNames.SMS)
         super[SMSMode].transitionReceive
+      else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState)
+        super[NaiveMovingStateMode].transitionReceive
+      else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart)
+        super[NaiveStopMoveStartMode].transitionReceive
       else
         super[MFGSMode].transitionReceive
       ) andThen childNodeReceive
 
   def placementReceive: Receive = {
 
-    case AcknowledgeSubscription() if getParentOperators.contains(sender()) => log.debug(s"received subscription ACK from ${sender()}")
-    case StartExecution(algorithm) => {
+    case AcknowledgeSubscription(_) if getParentActors.contains(sender()) => log.debug(s"received subscription ACK from ${sender()}")
+    case StartExecution(algorithm) =>
+      val s = sender()
       if(!started) {
         started = true
-        subscribeToParents()
         self ! UpdateTask(algorithm)
-        // during tests, this message is sent only to the root and then forwarded to parents to ensure sequential start and ordered receive of Created msg;
-        // during normal operation, the message is broadcast to all operators at once since the Created msg is not of importance
-        getParentOperators.foreach(_ ! StartExecution(algorithm))
-        log.info(s"started operator $this $started")
+        // during tests, this message is sent only to the root and then forwarded to parents to ensure sequential start
+        // during normal operation, the message is broadcast to all operators at once
+        for {
+          subscribed <- subscribeToParents()
+          parentsStarted <- Future.traverse(getParentActors())(parent => (parent ? StartExecution(algorithm))(retryTimeout).mapTo[AcknowledgeStart])
+        } yield {
+          transitionLog(s"received StartExecution($algorithm): started operator $this $started and ${getParentActors().size} parents")
+          s ! AcknowledgeStart()
+        }
       }
-    }
+
     // placement update task that must be set/sent by the actor deploying this operator
     // 1. receive notification after initial deployment, setting up a task on each operator
     // 2. periodically execute placement algorithm locally, migrate to new node (see transition) if necessary
@@ -118,14 +122,13 @@ trait Node extends MFGSMode with SMSMode with ActorLogging {
         case other: String => throw new NoSuchElementException(s"need to add algorithm type $other to updateTask!")
       }
       if (algorithm.hasPeriodicUpdate()) {
-
         val task: Runnable = () => {
           implicit val ec: ExecutionContext = blockingIoDispatcher
           val startTime = System.currentTimeMillis()
-          val dependencies = Dependencies(getParentOperators.toList, subscribers.toList)
+          val dependencies = getDependencies()
           for {
-            init <- algorithm.initialize(cluster)
-            optimalHost: HostInfo <- algorithm.findOptimalNode(this.context, this.cluster, dependencies, HostInfo(cluster.selfMember, hostInfo.operator), hostInfo.operator)
+            init <- algorithm.initialize()
+            optimalHost: HostInfo <- algorithm.findOptimalNode(hostInfo.operator, dependencies, HostInfo(cluster.selfMember, hostInfo.operator))
           } yield {
             if (!cluster.selfAddress.equals(optimalHost.member.address)) {
               log.info(s"Relaxation periodic placement update for $query: " +
@@ -136,18 +139,19 @@ trait Node extends MFGSMode with SMSMode with ActorLogging {
 
               this.started = false
               val downTime = System.currentTimeMillis()
-              if (transitionConfig.transitionStrategy == TransitionModeNames.MFGS) newOperator ! StartExecutionWithData(downTime, startTime, subscribers.toSet, slidingMessageQueue.toSet, algorithmType)
+                // TODO support other modes
+              if (transitionConfig.transitionStrategy == TransitionModeNames.MFGS) newOperator ! StartExecutionWithData(downTime, startTime, subscribers.toList, slidingMessageQueue.toList, algorithmType)
               else newOperator ! StartExecutionAtTime(subscribers.toList, Instant.now(), algorithmType)
               newOperator ! UpdateTask(algorithmType)
               // inform subscribers about new operator location; parent will receive
-              subscribers.foreach(_ ! OperatorMigrationNotice(self, newOperator))
+              subscribers.keys.foreach(_ ! OperatorMigrationNotice(self, newOperator))
 
               // taken from MFGSMode
               // TODO maybe make regular operator migrations distinguishable from transitions
               val timestamp = System.currentTimeMillis()
               val migrationTime = timestamp - downTime
               val nodeSelectionTime = timestamp - startTime
-              GUIConnector.sendOperatorTransitionUpdate(self, newOperator, algorithm.name, timestamp, migrationTime, nodeSelectionTime, getParentOperators(), optimalHost, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
+              GUIConnector.sendOperatorTransitionUpdate(self, newOperator, algorithm.name, timestamp, migrationTime, nodeSelectionTime, getParentActors().toList, optimalHost, isRootOperator)(selfAddress = cluster.selfAddress, blockingIoDispatcher)
 
               log.info(s"${self} shutting down Self")
               SystemLoad.operatorRemoved()
@@ -164,40 +168,10 @@ trait Node extends MFGSMode with SMSMode with ActorLogging {
     }
   }
 
-  def subscribeToParents()
-
-  def emitCreated(): Unit = {
-    if (createdCallback.isDefined) {
-      log.info("applying created callback".toUpperCase())
-      createdCallback.get.apply()
-    } else {
-      log.info(s"no callback, sending Created to subscribers $subscribers".toUpperCase())
-      subscribers.foreach(_ ! Created)
-    }
-  }
-
-  def emitEvent(event: Event): Unit = {
-    if (started) {
-      val s = sender()
-      //else discarding event
-      updateMonitoringData(log, event, hostInfo, currentLoad)
-      subscribers.foreach(sub => {
-        //SpecialStats.log(s"$this", s"sendEvent_${currAlgorithm}_${self.path.name}", s"STREAMING EVENT $event FROM ${s} TO ${sub}")
-        //log.debug(s"STREAMING EVENT $event FROM ${s.path.address.host} TO ${sub.path.address.host}")
-        if (eventCallback.isDefined) {
-          log.debug(s"applying callback to event $event")
-          eventCallback.get.apply(event)
-        }
-        sub ! event
-      })
-    } else {
-      log.info(s"started $started, discarding event $event from ${sender} $getParentOperators")
-    }
-  }
 
   def createDuplicateNode(nodeInfo: HostInfo): Future[ActorRef] = {
     val startTime = System.currentTimeMillis()
-    val props = Props(getClass, transitionConfig, nodeInfo, backupMode, mainNode, query, createdCallback, eventCallback, isRootOperator, getParentOperators)
+    val props = Props(getClass, transitionConfig, nodeInfo, backupMode, mainNode, query, createdCallback, eventCallback, isRootOperator, publisherEventRate, getParentActors())
     for {
       taskManager <- TCEPUtils.getTaskManagerOfMember(cluster, nodeInfo.member)
       deployDuplicate <- TCEPUtils.guaranteedDelivery(context, taskManager, CreateRemoteOperator(nodeInfo, props), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher)).mapTo[RemoteOperatorCreated]
@@ -219,11 +193,26 @@ trait Node extends MFGSMode with SMSMode with ActorLogging {
 
 
 object Node {
-  case class Subscribe(subscriber: ActorRef) extends PlacementMessage
+  case class Subscribe(subscriber: ActorRef, operator: Query) extends PlacementMessage
   case class UnSubscribe() extends PlacementMessage
   case class UpdateTask(algorithmType: String) extends PlacementMessage
-  case class Dependencies(parents: List[ActorRef], subscribers: List[ActorRef])
+  /*
+  object Dependencies {
+    def buildFromActorMap(parents: Map[ActorRef, Query], children: Map[Option[ActorRef], Query])(implicit cluster: Cluster): Dependencies = {
+      Dependencies(parents, children)
+        parents.map(e => e._2 -> cluster.state.members.find(_.address == e._1.path.address).getOrElse(cluster.selfMember)),
+        children.map(e =>
+                       if(e._1.isDefined) e._2 -> Some(cluster.state.members.find(_.address == e._1.get.path.address).getOrElse(cluster.selfMember))
+                       else e._2 -> None
+                     )
+        )
+    }
+  }
+  */
+  // subscribers: None means that subscriber is not yet instantiated/deployed
+  case class Dependencies(parents: Map[ActorRef, Query], subscribers: Map[Option[ActorRef], Query])
   case class OperatorMigrationNotice(oldOperator: ActorRef, newOperator: ActorRef) extends PlacementMessage
+  case object GetWindowStateEvents extends TransitionControlMessage
 }
 
 case class TransitionConfig(
@@ -236,5 +225,5 @@ object TransitionExecutionModes extends Enumeration {
 
 object TransitionModeNames extends Enumeration {
   type Mode = Value
-  val SMS, MFGS = Value
+  val SMS, MFGS, NaiveMovingState, NaiveStopMoveStart = Value
 }

@@ -1,0 +1,11 @@
+log ./learningLogs/msgHopsModel.log
+load-mlsettings ./MLSettings.txt
+printsettings
+vm ./cfm.xml
+all ./combined_measurements.csv
+nfp mMsgHops
+select-all-measurements true
+learn-splconqueror
+analyze-learning
+clean-sampling
+clean-learning

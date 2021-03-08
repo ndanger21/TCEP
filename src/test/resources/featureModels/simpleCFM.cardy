@@ -1,0 +1,12 @@
+1..1 root gt=1..* gi=1..* {
+	1..1 system gt=1..* gi=1..*{
+		1..1 f0 gt=xor gi=xor {
+			0..1 f1
+			0..1 f2
+		}
+	}
+	1..1 context gt=1..* gi=1..* {
+        c1:Integer 0..100
+        c2:Integer 0..100
+	}
+}

@@ -13,7 +13,7 @@ import tcep.utils.{SpecialStats, TCEPUtils}
 
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.FiniteDuration
 import scala.sys.process._
 import scala.util.{Failure, Success}
@@ -48,6 +48,8 @@ class BandwidthEstimator() extends ClusterActor {
   var outboundMeasurementRequests: mutable.Queue[Member] = mutable.Queue[Member]() // outbound: requests from this node to other nodes
   var outboundOngoingMeasurements: mutable.Queue[Member] = mutable.Queue[Member]()
   var pendingSlotRequest = false
+
+
   implicit val timeout = Timeout(new FiniteDuration(120, TimeUnit.SECONDS))
 
   override def receive: Receive = {
@@ -231,7 +233,7 @@ class BandwidthEstimator() extends ClusterActor {
   }
 
   private def measure(node: Member): Future[Double] = {
-
+    implicit val ec: ExecutionContext = blockingIoDispatcher
     val measurement = Future {
       if (node.equals(cluster.selfMember))
         0.0d

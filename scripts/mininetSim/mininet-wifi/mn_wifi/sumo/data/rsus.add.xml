@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on Fr 03 Apr -10 14:52:49 CEST by Eclipse SUMO netedit Version 1.5.0
+<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
+
+    <input>
+        <sumo-net-file value="/home/niels/git/mininet-wifi/mn_wifi/sumo/data/osm.net.xml"/>
+    </input>
+
+    <output>
+        <output-file value="/home/niels/git/mininet-wifi/mn_wifi/sumo/data/osm.net.xml"/>
+        <output.street-names value="true"/>
+    </output>
+
+    <processing>
+        <geometry.min-radius.fix.railways value="false"/>
+        <geometry.max-grade.fix value="false"/>
+        <offset.disable-normalization value="true"/>
+        <lefthand value="false"/>
+    </processing>
+
+    <junctions>
+        <no-turnarounds value="true"/>
+        <junctions.corner-detail value="5"/>
+        <junctions.limit-turn-speed value="5.5"/>
+        <rectangular-lane-cut value="false"/>
+    </junctions>
+
+    <pedestrian>
+        <walkingareas value="false"/>
+    </pedestrian>
+
+    <netedit>
+        <additional-files value="/home/niels/git/mininet-wifi/mn_wifi/sumo/data/rsus.add.xml"/>
+    </netedit>
+
+    <report>
+        <aggregate-warnings value="5"/>
+    </report>
+
+</configuration>
+-->
+
+<additional xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/additional_file.xsd">
+    <poi id="01" color="0,50,255" layer="-1.00" x="534.55" y="1131.45" imgFile="wifi.png"/>
+    <poi id="03" color="25,60,222" layer="-1.00" x="1434.30" y="1482.84" imgFile="wifi.png"/>
+    <poi id="05" color="25,60,222" layer="-1.00" x="2822.70" y="1879.56" imgFile="wifi.png"/>
+    <poi id="06" color="25,60,222" layer="-1.00" x="3780.08" y="1900.24" imgFile="wifi.png"/>
+    <poi id="07" color="25,60,222" layer="-1.00" x="4872.71" y="1818.68" imgFile="wifi.png"/>
+    <poi id="08" color="25,60,222" layer="-1.00" x="5958.43" y="1734.40" imgFile="wifi.png"/>
+    <poi id="09" color="25,60,222" layer="-1.00" x="7214.40" y="2008.44" imgFile="wifi.png"/>
+    <poi id="10" color="25,60,222" layer="-1.00" x="8019.76" y="2430.12" imgFile="wifi.png"/>
+    <poi id="11" color="25,60,222" layer="-1.00" x="9253.99" y="2706.59" imgFile="wifi.png"/>
+    <poi id="12" color="25,60,222" layer="-1.00" x="10510.43" y="2713.95" imgFile="wifi.png"/>
+    <poi id="13" color="42,0,255" layer="-1.00" x="5236.27" y="2917.99" imgFile="wifi.png"/>
+    <poi id="14" color="42,0,255" layer="-1.00" x="4463.40" y="565.90" imgFile="wifi.png"/>
+</additional>

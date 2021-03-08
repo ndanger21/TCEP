@@ -7,12 +7,12 @@ import tcep.data.Queries._
 import tcep.data.Structures.MachineLoad
 import tcep.dsl.Dsl._
 import tcep.graph.QueryGraph
-import tcep.graph.nodes.traits.{TransitionConfig, TransitionModeNames}
+import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos._
 import tcep.publishers._
 
 case class BaseActor() extends Actor {
-
+  val cluster = Cluster(this.context.system)
   implicit val creatorAddress: Address = cluster.selfAddress
   val publisherA: ActorRef = this.context.actorOf(Props(RandomPublisher(id => Event1(id))),              "A")
   val publisherB: ActorRef = this.context.actorOf(Props(RandomPublisher(id => Event1(id * 2))),          "B")
@@ -31,7 +31,7 @@ case class BaseActor() extends Actor {
     }
 
   }
-  val query1: Query3[Either[Int, String], Either[Int, X], Either[Float, X]] =
+  val query1: Query3[Either[Int, String], Either[Int, Unit], Either[Float, Unit]] =
     stream[Int]("A")
       .join(
         stream[Int]("B"),
@@ -64,10 +64,9 @@ case class BaseActor() extends Actor {
   val monitors: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query1, Option.empty),
                                               DummyMonitorFactory(query1))
 
-  val cluster = Cluster(this.context.system)
-  val graphFactory = new QueryGraph(this.context, Cluster(this.context.system), query1, TransitionConfig(), publishers, None, None, monitors)
+  val graphFactory = new QueryGraph(query1, TransitionConfig(), publishers, None, None)(context, cluster, 1.0 )
 
-  graphFactory.createAndStart(null)(
+  graphFactory.createAndStart(
     eventCallback = Some({
       // Callback for `query1`:
       case Event3(i1, i2, f) => println(s"COMPLEX EVENT:\tEvent3($i1,$i2,$f)")

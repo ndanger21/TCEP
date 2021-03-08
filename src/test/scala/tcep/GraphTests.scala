@@ -4,31 +4,37 @@ import java.util.concurrent.TimeUnit
 
 import akka.actor.{Actor, ActorContext, ActorRef, ActorSystem, Address, PoisonPill, Props}
 import akka.cluster.Cluster
+import akka.serialization.{SerializationExtension, Serializers}
 import akka.testkit.{TestKit, TestProbe}
+import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.Coordinates
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, FunSuiteLike}
 import tcep.data.Events._
 import tcep.data.Queries._
 import tcep.dsl.Dsl._
-import tcep.graph.nodes.traits.{TransitionConfig, TransitionModeNames}
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
-import tcep.graph.qos.{DummyMonitorFactory, MonitorFactory}
+import tcep.graph.nodes.traits.Node.Subscribe
+import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK.{AddOperator, SetClient, SetDeploymentStatus, SetTransitionMode}
-import tcep.graph.transition.StartExecution
+import tcep.graph.transition.{AcknowledgeStart, StartExecution}
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
-import tcep.placement.sbon.PietzuchAlgorithm
-import tcep.placement.{HostInfo, PlacementStrategy}
+import tcep.placement.{HostInfo, MobilityTolerantAlgorithm, PlacementStrategy, QueryDependencies}
+import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.publishers.TestPublisher
 import tcep.simulation.tcep.AllRecords
 
+import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.reflect.runtime.universe.typeOf
 
-class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAndAfterAll with BeforeAndAfterEach {
+class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseString("akka.test.single-expect-default = 5000").withFallback(ConfigFactory.load()))) with FunSuiteLike with BeforeAndAfterAll with BeforeAndAfterEach {
   implicit val ec: ExecutionContext = system.dispatcher
   implicit val creatorAddress: Address = Address("tcp", "tcep", "localhost", 0)
   var actors: List[ActorRef] = List()
   var subscriber: TestProbe = _ // use a TestProbe instead of testActor so that we have an empty mailbox for each test (-> no false failures due to previous failed tests)
+  def subAckMsg(implicit query: Query) = AcknowledgeSubscription(query)
+  var rootOperator: ActorRef = _
+
 
   def createTestPublisher(name: String): ActorRef = {
     val pub = system.actorOf(Props(TestPublisher()), name)
@@ -36,73 +42,86 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
     pub
   }
 
-  case class GraphCreatedCallback() extends CreatedCallback{
-    override def apply(): Any = {
-      subscriber.ref ! Created
+  case class EventPublishedCallback() extends EventCallback {
+    override def apply(event: Event): Any = {
+      println("received event" + event)
     }
   }
 
-  case class EventPublishedCallback() extends EventCallback {
-    override def apply(event: Event): Any = {
-      subscriber.ref ! event
+  // we need to override some functions here to not run the actual placement algorithms with akka cluster (would have to use multiJvmTesting for this, unnecessary overhead)
+  class TestQueryGraph(query: Query,
+                       subscriberActor: ActorRef,
+                       transitionConfig: TransitionConfig,
+                       publishers: Map[String, ActorRef],
+                       startingPlacementStrategy: Option[PlacementStrategy],
+                       createdCallback: Option[CreatedCallback],
+                       allRecords: Option[AllRecords] = None,
+                       consumer: ActorRef = null,
+                       fixedSimulationProperties: Map[Symbol, Int] = Map(),
+                       mapekType: String = "requirementBased")
+                      (implicit override val context: ActorContext,
+                       override implicit val cluster: Cluster,
+                       override implicit val baseEventRate: Double
+                      )
+    extends QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, createdCallback, allRecords, consumer, fixedSimulationProperties, mapekType) {
+
+    override def createAndStart(eventCallback: Option[EventCallback]): ActorRef = {
+      val queryDependencies = extractOperators(query, baseEventRate)
+      val root = startDeployment(eventCallback, queryDependencies)
+      mapek.knowledge ! SetClient(subscriberActor)
+      mapek.knowledge ! SetTransitionMode(transitionConfig)
+      mapek.knowledge ! SetDeploymentStatus(true)
+      println(s"started query ${query} in mode ${transitionConfig} with clientNode $subscriberActor")
+      actors = root :: actors
+      root
+    }
+
+    protected override def startDeployment(implicit eventCallback: Option[EventCallback],
+                                           queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
+                                          ): ActorRef =
+      Await.result(deployOperatorGraphRec(query, true), FiniteDuration(5, TimeUnit.SECONDS))
+
+    protected override def deployOperator(operator: Query, parentOperators: (ActorRef, Query)*)
+                                         (implicit eventCallback: Option[EventCallback],
+                                          isRootOperator: Boolean,
+                                          initialOperatorPlacement: Map[Query, Coordinates],
+                                          queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
+                                         ): Future[ActorRef] = {
+
+      for { operatorActor <- createOperator(operator, HostInfo(cluster.selfMember, operator), false, None, parentOperators.map(_._1):_*)}
+        yield {
+          println(s"deploy: created $operator with created callback $createdCallback: $operatorActor")
+          mapek.knowledge ! AddOperator(operatorActor)
+          operatorActor
+        }
     }
   }
 
   def createTestGraph(query: Query, publishers: Map[String, ActorRef], subscriberActor: ActorRef): ActorRef = {
 
-    // we need to override some functions here to not run the actual placement algorithms with akka cluster (would have to use multiJvmTesting for this, unnecessary overhead)
-    class QueryGraphTestExtension(context: ActorContext, query: Query, mode: TransitionConfig, publishers: Map[String, ActorRef],
-                                  startingPlacementStrategy: Option[PlacementStrategy], createdCallback: Option[CreatedCallback],
-                                  monitors: Array[MonitorFactory], allRecords: Option[AllRecords] = None, fixedSimulationProperties: Map[Symbol, Int] = Map())
-      extends QueryGraph(context, Cluster(system), query, mode, publishers, startingPlacementStrategy, createdCallback, monitors) {
+    val wrapper = system.actorOf(Props(new Actor {
+      implicit val cluster: Cluster = Cluster(context.system)
+      implicit val baseEventRate: EventRateEstimate = 1.0
+      try {
+        val graphFactory: TestQueryGraph = new TestQueryGraph(query, subscriberActor, TransitionConfig(), publishers, None, None)
+        println("Created TestQueryGraph")
+        rootOperator = graphFactory.createAndStart(None)
+        println(s"instantiated query $query with root operator $rootOperator")
+        subscriber.send(rootOperator, Subscribe(subscriber.ref, ClientDummyQuery()))
+        subscriber.send(rootOperator, StartExecution(MobilityTolerantAlgorithm.name))
 
-      override def createAndStart(clientMonitors: Array[MonitorFactory])(eventCallback: Option[EventCallback]): ActorRef = {
-        log.info("Creating and starting new QueryGraph")
-        val root = startDeployment(query, mode, publishers, createdCallback, eventCallback, monitors)
-        mapek.knowledge ! SetClient(subscriberActor)
-        mapek.knowledge ! SetTransitionMode(mode)
-        mapek.knowledge ! SetDeploymentStatus(true)
-        root ! StartExecution(startingPlacementStrategy.getOrElse(PietzuchAlgorithm).name)
-        log.info(s"started query ${query} in mode ${mode} with clientNode $subscriberActor")
-        actors = root :: actors
-        root
-      }
-
-      protected override def startDeployment(q: Query, transitionConfig: TransitionConfig, publishers: Map[String, ActorRef], createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback], monitors: Array[MonitorFactory]): ActorRef = Await.result(deployGraph(q, mode, publishers, createdCallback, eventCallback, monitors), FiniteDuration(5, TimeUnit.SECONDS))
-
-
-      protected override def deploy(mode: TransitionConfig, context: ActorContext, cluster: Cluster, factories: Array[MonitorFactory], operator: Query, initialOperatorPlacement: Map[Query, Coordinates], createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback], isRootOperator: Boolean, parentOperators: ActorRef*): Future[ActorRef] = {
-        log.info(s"deploy: creating $operator with created callback: $createdCallback")
-
-        for { operator <- deployNode(mode, context, cluster, operator, createdCallback, eventCallback, HostInfo(cluster.selfMember, operator), false, None, isRootOperator, parentOperators:_*) }
-          yield {
-            mapek.knowledge ! AddOperator(operator)
-            operator
-          }
-      }
-    }
-
-    class QueryGraphWrapperActor extends Actor {
-
-      var graphActorRef: ActorRef = _
-      override def preStart(): Unit = {
-        super.preStart()
-        val monitors = Array[MonitorFactory](DummyMonitorFactory(query))
-        val graphFactory: QueryGraphTestExtension = new QueryGraphTestExtension(context, query, TransitionConfig(), publishers, None, Some(GraphCreatedCallback()), monitors)
-        graphActorRef = graphFactory.createAndStart(monitors)(Some(EventPublishedCallback()))
-      }
-
-      override def postStop() = {
-        graphActorRef ! PoisonPill
-        super.postStop()
+      } catch {
+        case e: Throwable => println(e.getMessage + "\n" + e.getStackTrace.mkString("\n"))
       }
 
       override def receive: Receive = {
-        case msg => graphActorRef.forward(msg)
+        case msg => rootOperator.forward(msg)
       }
-    }
-
-    val wrapper = system.actorOf(Props(new QueryGraphWrapperActor), "GraphWrapper")
+      override def postStop(): Unit = {
+        rootOperator ! PoisonPill
+        super.postStop()
+      }
+    }), "GraphWrapper")
     actors = wrapper :: actors
     wrapper
   }
@@ -121,7 +140,7 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
     actors.foreach(stopActor)
   }
 
-  override def beforeEach(): X = {
+  override def beforeEach(): Unit = {
     super.beforeEach()
     subscriber = TestProbe()
   }
@@ -137,57 +156,69 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
     system.terminate()
   }
 
+    test("Query should be serializable when sent between actors") {
+      val serialization = SerializationExtension(system)
+      val query = Stream3[String, Int, Boolean]("STREAM3", Set())
+      val serializedBytes = serialization.serialize(query).get
+      val serializerId = serialization.findSerializerFor(query).identifier
+      val manifest = Serializers.manifestFor(serialization.findSerializerFor(query), query)
+      val deserialized = serialization.deserialize(serializedBytes, serializerId, manifest).get
+
+      assert(deserialized.equals(query), "deserialized query must equal original")
+      assert(deserialized.asInstanceOf[StreamQuery].types == Vector(typeOf[String].toString, typeOf[Int].toString, typeOf[Boolean].toString),
+             "deserialized query must contain correct type name strings")
+    }
 
     test("LeafNode - StreamNode - 1") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query1[String] = stream[String]("A")
+      implicit val query: Query1[String] = stream[String]("A")
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event1("42")
       subscriber.expectMsg(Event1("42"))
     }
 
     test("LeafNode - StreamNode - 2") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query2[Int, Int] = stream[Int, Int]("A")
+      implicit val query: Query2[Int, Int] = stream[Int, Int]("A")
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event2(42, 42)
       subscriber.expectMsg(Event2(42, 42))
     }
 
     test("LeafNode - StreamNode - 3") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query3[Long, Long, Long] = stream[Long, Long, Long]("A")
+      implicit val query: Query3[Long, Long, Long] = stream[Long, Long, Long]("A")
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event3(42l, 42l, 42l)
       subscriber.expectMsg(Event3(42l, 42l, 42l))
     }
 
     test("LeafNode - StreamNode - 4") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query4[Float, Float, Float, Float] = stream[Float, Float, Float, Float]("A")
+      implicit val query: Query4[Float, Float, Float, Float] = stream[Float, Float, Float, Float]("A")
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event4(42f, 42f, 42f, 42f)
       subscriber.expectMsg(Event4(42f, 42f, 42f, 42f))
     }
 
     test("LeafNode - StreamNode - 5") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query5[Double, Double, Double, Double, Double] = stream[Double, Double, Double, Double, Double]("A")
+      implicit val query: Query5[Double, Double, Double, Double, Double] = stream[Double, Double, Double, Double, Double]("A")
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event5(42.0, 42.0, 42.0, 42.0, 42.0)
       subscriber.expectMsg(Event5(42.0, 42.0, 42.0, 42.0, 42.0))
     }
 
     test("LeafNode - StreamNode - 6") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query6[Boolean, Boolean, Boolean, Boolean, Boolean, Boolean] = stream[Boolean, Boolean, Boolean, Boolean, Boolean, Boolean]("A")
+      implicit val query: Query6[Boolean, Boolean, Boolean, Boolean, Boolean, Boolean] = stream[Boolean, Boolean, Boolean, Boolean, Boolean, Boolean]("A")
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event6(true, true, true, true, true, true)
       subscriber.expectMsg(Event6(true, true, true, true, true, true))
     }
@@ -195,10 +226,10 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
   test("LeafNode - SequenceNode - 1") {
     val a: ActorRef = createTestPublisher("A")
     val b: ActorRef = createTestPublisher("B")
-    val query: Query4[Int, Int, String, String] =
+    implicit val query: Query4[Int, Int, String, String] =
       sequence(nStream[Int, Int]("A") -> nStream[String, String]("B"))
     val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-    subscriber.expectMsg(Created)
+    subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
     a ! Event2(21, 42)
     Thread.sleep(50)
     b ! Event2("21", "42")
@@ -208,10 +239,10 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
   test("LeafNode - SequenceNode - 2") {
     val a: ActorRef = createTestPublisher("A")
     val b: ActorRef = createTestPublisher("B")
-    val query: Query4[Int, Int, String, String] =
+    implicit val query: Query4[Int, Int, String, String] =
       sequence(nStream[Int, Int]("A") -> nStream[String, String]("B"))
     val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-    subscriber.expectMsg(Created)
+    subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
     a ! Event2(1, 1)
     Thread.sleep(50)
     a ! Event2(2, 2)
@@ -228,11 +259,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - FilterNode - 1") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query2[Int, Int] =
+      implicit val query: Query2[Int, Int] =
         stream[Int, Int]("A")
           .where(_ >= _)
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event2(41, 42)
       a ! Event2(42, 42)
       a ! Event2(43, 42)
@@ -242,25 +273,28 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - FilterNode - 2") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query2[Int, Int] =
+      implicit val query: Query2[Int, Int] =
         stream[Int, Int]("A")
           .where(_ <= _)
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event2(41, 42)
       a ! Event2(42, 42)
       a ! Event2(43, 42)
-      subscriber.expectMsg(Event2(41, 42))
-      subscriber.expectMsg(Event2(42, 42))
+      val x = subscriber.expectMsg(Event2(41, 42))
+      println("expect1 result: " + x)
+      val y = subscriber.expectMsg(Event2(42, 42))
+      println("expect2 result: " + y)
+      subscriber.expectNoMessage()
     }
 
     test("UnaryNode - FilterNode - 3") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query1[Long] =
+      implicit val query: Query1[Long] =
         stream[Long]("A")
           .where(_ == 42l)
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event1(41l)
       a ! Event1(42l)
       subscriber.expectMsg(Event1(42l))
@@ -268,11 +302,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - FilterNode - 4") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query1[Float] =
+      implicit val query: Query1[Float] =
         stream[Float]("A")
           .where(_ > 41f)
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event1(41f)
       a ! Event1(42f)
       subscriber.expectMsg(Event1(42f))
@@ -280,11 +314,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - FilterNode - 5") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query1[Double] =
+      implicit val query: Query1[Double] =
         stream[Double]("A")
           .where(_ < 42.0)
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event1(41.0)
       a ! Event1(42.0)
       subscriber.expectMsg(Event1(41.0))
@@ -292,11 +326,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - FilterNode - 6") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query =
+      implicit val query: Query =
         stream[Boolean]("A")
           .where(_ != true)
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event1(true)
       a ! Event1(false)
       subscriber.expectMsg(Event1(false))
@@ -304,11 +338,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - DropElemNode - 1") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query1[Int] =
+      implicit val query: Query1[Int] =
         stream[Int, Int]("A")
           .dropElem2()
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event2(21, 42)
       a ! Event2(42, 21)
       subscriber.expectMsg(Event1(21))
@@ -317,12 +351,12 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - DropElemNode - 2") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query2[String, String] =
+      implicit val query: Query2[String, String] =
         stream[String, String, String, String]("A")
           .dropElem1()
           .dropElem2()
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event4("a", "b", "c", "d")
       a ! Event4("e", "f", "g", "h")
       subscriber.expectMsg(Event2("b", "d"))
@@ -331,11 +365,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - SelfJoinNode - 1") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query4[String, String, String, String] =
+      implicit val query: Query4[String, String, String, String] =
         stream[String, String]("A")
           .selfJoin(tumblingWindow(3.instances), tumblingWindow(2.instances))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event2("a", "b")
       a ! Event2("c", "d")
       a ! Event2("e", "f")
@@ -349,11 +383,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
 
     test("UnaryNode - SelfJoinNode - 2") {
       val a: ActorRef = createTestPublisher("A")
-      val query: Query4[String, String, String, String] =
+      implicit val query: Query4[String, String, String, String] =
         stream[String, String]("A")
           .selfJoin(slidingWindow(3.instances), slidingWindow(2.instances))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event2("a", "b")
       a ! Event2("c", "d")
       a ! Event2("e", "f")
@@ -371,12 +405,12 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
       val sq: Query2[Int, Int] = stream[Int, Int]("B")
-      val query: Query5[String, Boolean, String, Int, Int] =
+      implicit val query: Query5[String, Boolean, String, Int, Int] =
         stream[String, Boolean, String]("A")
           .join(sq, tumblingWindow(3.instances), tumblingWindow(2.instances))
 
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event3("a", true, "b")
       a ! Event3("c", true, "d")
       a ! Event3("e", true, "f")
@@ -405,11 +439,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
       val sq: Query2[Int, Int] = stream[Int, Int]("B")
-      val query: Query5[String, Boolean, String, Int, Int] =
+      implicit val query: Query5[String, Boolean, String, Int, Int] =
         stream[String, Boolean, String]("A")
           .join(sq, tumblingWindow(3.instances), tumblingWindow(2.instances))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       b ! Event2(1, 2)
       b ! Event2(3, 4)
       b ! Event2(5, 6)
@@ -432,11 +466,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
       val sq: Query2[Int, Int] = stream[Int, Int]("B")
-      val query: Query5[String, Boolean, String, Int, Int] =
+      implicit val query: Query5[String, Boolean, String, Int, Int] =
         stream[String, Boolean, String]("A")
           .join(sq, slidingWindow(3.instances), slidingWindow(2.instances))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event3("a", true, "b")
       a ! Event3("c", true, "d")
       a ! Event3("e", true, "f")
@@ -465,11 +499,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
       val sq: Query2[Int, Int] = stream[Int, Int]("B")
-      val query: Query5[String, Boolean, String, Int, Int] =
+      implicit val query: Query5[String, Boolean, String, Int, Int] =
         stream[String, Boolean, String]("A")
           .join(sq, slidingWindow(3.instances), slidingWindow(2.instances))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       b ! Event2(1, 2)
       b ! Event2(3, 4)
       b ! Event2(5, 6)
@@ -495,11 +529,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
     test("Binary Node - ConjunctionNode - 1") {
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
-      val query: Query2[Int, Float] =
+      implicit val query: Query2[Int, Float] =
         stream[Int]("A")
           .and(stream[Float]("B"))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event1(21)
       b ! Event1(21.0f)
       Thread.sleep(50)
@@ -512,11 +546,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
     test("Binary Node - ConjunctionNode - 2") {
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
-      val query: Query2[Int, Float] =
+      implicit val query: Query2[Int, Float] =
         stream[Int]("A")
           .and(stream[Float]("B"))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event1(21)
       a ! Event1(42)
       Thread.sleep(50)
@@ -528,11 +562,11 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
     test("Binary Node - DisjunctionNode - 1") {
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
-      val query: Query2[Either[Int, String], Either[Int, String]] =
+      implicit val query: Query2[Either[Int, String], Either[Int, String]] =
         stream[Int, Int]("A")
           .or(stream[String, String]("B"))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event2(21, 42)
       Thread.sleep(50)
       b ! Event2("21", "42")
@@ -544,7 +578,7 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
       val c: ActorRef = createTestPublisher("C")
-      val query:
+      implicit val query:
         Query3[Either[Either[Int, String], Boolean],
           Either[Either[Int, String], Boolean],
           Either[Unit, Boolean]] =
@@ -552,7 +586,7 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
           .or(stream[String, String]("B"))
           .or(stream[Boolean, Boolean, Boolean]("C"))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b, "C" -> c), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event2(21, 42)
       Thread.sleep(50)
       b ! Event2("21", "42")
@@ -578,14 +612,14 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
         sq4.join(sq5, tumblingWindow(1.instances), tumblingWindow(4.instances))
       val sq7: Query6[String, String, Int, Int, String, String] =
         sq6.where((_, _, e3, e4, _, _) => e3 < e4)
-      val query: Query2[String, String] =
+      implicit val query: Query2[String, String] =
         sq7
           .dropElem2()
           .dropElem2()
           .dropElem2()
           .dropElem2()
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b, "C" -> c), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       b ! Event2(1, 2)
       b ! Event2(3, 4)
       b ! Event2(5, 6)
@@ -610,12 +644,12 @@ class GraphTests extends TestKit(ActorSystem()) with FunSuiteLike with BeforeAnd
       val a: ActorRef = createTestPublisher("A")
       val b: ActorRef = createTestPublisher("B")
       val c: ActorRef = createTestPublisher("C")
-      val query: Query2[Either[Int, Float], Either[Float, Boolean]] =
+      implicit val query: Query2[Either[Int, Float], Either[Float, Boolean]] =
         stream[Int]("A")
           .and(stream[Float]("B"))
           .or(sequence(nStream[Float]("B") -> nStream[Boolean]("C")))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b, "C" -> c), subscriber.ref)
-      subscriber.expectMsg(Created)
+      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
       a ! Event1(21)
       a ! Event1(42)
       Thread.sleep(50)

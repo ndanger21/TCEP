@@ -1,0 +1,17 @@
+# maximum number of rounds
+numberOfRounds 20
+# enable ensemble learning
+bagging False
+# loss function used for deciding which features and interaction to add to the model
+lossFunction RELATIVE
+# enables removal of learned terms if this can reduce the overall prediction error
+useBackward False
+# maximum error increase due to term removal
+backwardErrorDelta 0.5
+outputRoundsToStdout True
+# prediction error at which the learning process stops
+abortError 1.0
+# minimum prediction error reduction between rounds; laerning stops if lower than this
+minImprovementPerRound 0.055
+# enable learning performance model terms with two or more occurrences of a single numeric feature (fcNodeCount * fcNodeCount * fcNodeCount * ... )
+quadraticFunctionSupport True

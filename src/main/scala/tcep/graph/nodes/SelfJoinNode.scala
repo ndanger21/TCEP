@@ -8,19 +8,16 @@ import tcep.data.Events._
 import tcep.data.Queries._
 import tcep.graph.nodes.JoinNode._
 import tcep.graph.nodes.traits.EsperEngine._
-import tcep.graph.nodes.traits.TransitionModeNames.{apply => _, _}
+import tcep.graph.nodes.traits.TransitionModeNames.{apply => _}
 import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
-
-import scala.concurrent.duration.{FiniteDuration, MICROSECONDS, SECONDS}
 
 /**
   * Handling of [[tcep.data.Queries.SelfJoinQuery]] is done by SelfJoinNode.
   *
   * @see [[QueryGraph]]
   **/
-
 case class SelfJoinNode(transitionConfig: TransitionConfig,
                         hostInfo: HostInfo,
                         backupMode: Boolean,
@@ -29,16 +26,15 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
                         createdCallback: Option[CreatedCallback],
                         eventCallback: Option[EventCallback],
                         isRootOperator: Boolean,
-                        _parentNode: ActorRef*
-                       )
-  extends UnaryNode with EsperEngine with ActorLogging {
+                        publisherEventRate: Double,
+                        _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) with EsperEngine with
+                                                             ActorLogging {
 
-  var parentNode: ActorRef = _parentNode.head
   override val esperServiceProviderUri: String = name
   var esperInitialized = false
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
-    case event: Event if parentsList.contains(sender()) && esperInitialized => event match {
+    case event: Event if parentActor.contains(sender()) && esperInitialized => event match {
       case Event1(e1) => sendEvent("sq", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
       case Event2(e1, e2) => sendEvent("sq", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2)))
       case Event3(e1, e2, e3) => sendEvent("sq", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3)))
@@ -69,36 +65,36 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
     super.postStop()
   }
 
-  override def preStart(): X = {
+  override def preStart(): Unit = {
     super.preStart()
-
-    addEventType("sq", createArrayOfNames(query.sq), createArrayOfClasses(query.sq))
-    val epStatement: EPStatement = createEpStatement(
-      s"select * from " +
+    for {
+      type1 <- addEventType("sq", createArrayOfNames(query.sq), createArrayOfClasses(query.sq))(blockingIoDispatcher)
+      epStatement: EPStatement <- createEpStatement(s"select * from " +
         s"sq.${createWindowEplString(query.w1)} as lhs, " +
-        s"sq.${createWindowEplString(query.w2)} as rhs")
+        s"sq.${createWindowEplString(query.w2)} as rhs")(blockingIoDispatcher)
+    } yield {
+      val updateListener: UpdateListener = (newEventBeans: Array[EventBean], _) => newEventBeans.foreach(eventBean => {
 
-    val updateListener: UpdateListener = (newEventBeans: Array[EventBean], _) => newEventBeans.foreach(eventBean => {
+        val values1: Array[Any] = eventBean.get("lhs").asInstanceOf[Array[Any]]
+        val values2: Array[Any] = eventBean.get("rhs").asInstanceOf[Array[Any]]
+        val values = values1.tail ++ values2.tail
+        val monitoringData = values1.head.asInstanceOf[MonitoringData]
 
-      val values1: Array[Any] = eventBean.get("lhs").asInstanceOf[Array[Any]]
-      val values2: Array[Any] = eventBean.get("rhs").asInstanceOf[Array[Any]]
-      val values = values1.tail ++ values2.tail
-      val monitoringData = values1.head.asInstanceOf[MonitoringData]
+        val event: Event = values.length match {
+          case 2 => Event2(values(0), values(1))
+          case 3 => Event3(values(0), values(1), values(2))
+          case 4 => Event4(values(0), values(1), values(2), values(3))
+          case 5 => Event5(values(0), values(1), values(2), values(3), values(4))
+          case 6 => Event6(values(0), values(1), values(2), values(3), values(4), values(5))
+        }
+        event.monitoringData = monitoringData
+        //log.info(s"creating new event $event")
+        emitEvent(event, eventCallback)
+      })
 
-      val event: Event = values.length match {
-        case 2 => Event2(values(0), values(1))
-        case 3 => Event3(values(0), values(1), values(2))
-        case 4 => Event4(values(0), values(1), values(2), values(3))
-        case 5 => Event5(values(0), values(1), values(2), values(3), values(4))
-        case 6 => Event6(values(0), values(1), values(2), values(3), values(4), values(5))
-      }
-      event.monitoringData = monitoringData
-      //log.info(s"creating new event $event")
-      emitEvent(event)
-    })
-
-    epStatement.addListener(updateListener)
-    esperInitialized = true
+      epStatement.addListener(updateListener)
+      esperInitialized = true
+    }
   }
 
 

@@ -2,29 +2,25 @@ package tcep
 
 import java.util.concurrent.TimeUnit
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
-import akka.cluster.Cluster
-import akka.cluster.ClusterEvent.MemberEvent
+import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
+import akka.cluster.ClusterEvent.{CurrentClusterState, MemberEvent, MemberUp}
+import akka.cluster.{Cluster, Member}
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import tcep.graph.nodes.traits.Node.{Subscribe, UnSubscribe}
 import tcep.graph.transition.{TransferredState, TransitionRequest, TransitionStats}
 import tcep.machinenodes.helper.actors.{ACK, CreateRemoteOperator, RemoteOperatorCreated}
-import tcep.simulation.adaptive.cep.SystemLoad
 import tcep.utils.{SizeEstimator, TransitionLogPublisher}
 
 import scala.concurrent.ExecutionContext
-import scala.concurrent.duration.FiniteDuration
 
 /**
   * Created by mac on 09/08/2017.
   */
 trait ClusterActor extends Actor with ActorLogging {
-  val cluster = Cluster(context.system)
+  implicit val cluster = Cluster(context.system)
   implicit val ec: ExecutionContext = context.system.dispatcher
   lazy val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
-  var currentLoad: Double = 0.0
-  var updateLoadTick: Cancellable = _
   val retryTimeout = Timeout(ConfigFactory.load().getLong("constants.retry-timeout"), TimeUnit.SECONDS)
   val retries = ConfigFactory.load().getInt("constants.default-retries")
   var transitionLogPublisher: ActorRef = context.actorOf(Props[TransitionLogPublisher], s"TransitionLogPublisher")
@@ -42,10 +38,10 @@ trait ClusterActor extends Actor with ActorLogging {
     if(child.path.address != cluster.selfAddress) SizeEstimator.estimate(TransitionRequest(_, _, _)) + ackSize
     else 0
   def transferredStateSize(parent: ActorRef): Long =
-    if(parent.path.address != cluster.selfAddress) (SizeEstimator.estimate(TransferredState(_, _, _, _)) + ackSize)
+    if(parent.path.address != cluster.selfAddress) (SizeEstimator.estimate(TransferredState(_, _, _, _, _)) + ackSize)
     else 0
   def subUnsubOverhead(successor: ActorRef, parents: List[ActorRef]): Long =
-    parents.count(_.path.address != successor.path.address) * (SizeEstimator.estimate(Subscribe(_)) + ackSize) +
+    parents.count(_.path.address != successor.path.address) * (SizeEstimator.estimate(Subscribe(_, _)) + ackSize) +
       parents.count(_.path.address != cluster.selfAddress) * SizeEstimator.estimate(UnSubscribe()) // subscribe, ack, unsubscribe
   def remoteOperatorCreationOverhead(successor: ActorRef): Long =
     if(successor.path.address != cluster.selfAddress) SizeEstimator.estimate(CreateRemoteOperator(_,_)) + SizeEstimator.estimate(RemoteOperatorCreated(_))
@@ -66,15 +62,19 @@ trait ClusterActor extends Actor with ActorLogging {
   override def preStart(): Unit = {
     super.preStart()
     cluster.subscribe(self, classOf[MemberEvent])
-    updateLoadTick = context.system.scheduler.scheduleWithFixedDelay(FiniteDuration(1, TimeUnit.SECONDS), FiniteDuration(1, TimeUnit.SECONDS))(() => {
-      currentLoad = SystemLoad.getSystemLoad
-    })(blockingIoDispatcher)
   }
 
   override def postStop(): Unit = {
     transitionLogPublisher ! PoisonPill
-    updateLoadTick.cancel()
-    super.postStop()
     cluster.unsubscribe(self)
+    super.postStop()
   }
+
+  override def receive: Receive = {
+    case c: CurrentClusterState => currentClusterState(c)
+    case m: MemberUp => memberUp(m.member)
+  }
+
+  def currentClusterState(state: CurrentClusterState): Unit = {}
+  def memberUp(member: Member): Unit = {}
 }
