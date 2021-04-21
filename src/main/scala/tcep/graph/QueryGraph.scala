@@ -20,7 +20,7 @@ import tcep.graph.transition._
 import tcep.machinenodes.consumers.Consumer.SetQosMonitors
 import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.placement.{HostInfo, PlacementStrategy, QueryDependencies, SpringRelaxationLike}
-import tcep.simulation.tcep.{AllRecords, GUIConnector}
+import tcep.simulation.tcep.{GUIConnector}
 import tcep.utils.SpecialStats
 
 import scala.collection.mutable
@@ -39,13 +39,13 @@ class QueryGraph(query: Query,
                  publishers: Map[String, ActorRef],
                  startingPlacementStrategy: Option[PlacementStrategy],
                  createdCallback: Option[CreatedCallback],
-                 allRecords: Option[AllRecords] = None,
-                 consumer: ActorRef = null,
-                 fixedSimulationProperties: Map[Symbol, Int] = Map(),
+                 consumer: ActorRef,
                  mapekType: String = "requirementBased")
                 (implicit val context: ActorContext,
                  implicit val cluster: Cluster,
-                 implicit val baseEventRate: Double
+                 implicit val baseEventRate: Double,
+                 implicit val fixedSimulationProperties: Map[Symbol, Int] = Map(),
+                 implicit val pimPaths: (String, String) = ("", "")
                  ) {
 
   lazy val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
@@ -53,8 +53,7 @@ class QueryGraph(query: Query,
   implicit val ec = context.system.dispatcher
   val log = LoggerFactory.getLogger(getClass)
 
-  var mapek: MAPEK = MAPEK.createMAPEK(mapekType, context, query, transitionConfig, publishers,
-                                       startingPlacementStrategy, allRecords, consumer, fixedSimulationProperties)
+  var mapek: MAPEK = MAPEK.createMAPEK(mapekType, context, query, transitionConfig, startingPlacementStrategy, consumer, fixedSimulationProperties, pimPaths)
   val placementStrategy: PlacementStrategy = PlacementStrategy.getStrategyByName(Await.result(
     mapek.knowledge ? GetPlacementStrategyName, timeout.duration).asInstanceOf[String])
   var clientNode: ActorRef = _
@@ -83,16 +82,15 @@ class QueryGraph(query: Query,
 
     val startTime = System.currentTimeMillis()
     val res = for {init <- placementStrategy.initialize( )} yield {
-      SpecialStats.debug(s"$this", s"starting initial virtual placement")
+      SpecialStats.log(s"$this", "placement", s"starting initial virtual placement")
       val deploymentComplete: Future[ActorRef] = if (placementStrategy.hasInitialPlacementRoutine()) {
         // some placement algorithms calculate an initial placement with global knowledge for all operators,
         // instead of calculating the optimal node one after another
         val initialOperatorPlacementRequest = placementStrategy.asInstanceOf[SpringRelaxationLike]
                                                                .initialVirtualOperatorPlacement(query, publishers)
         initialOperatorPlacementRequest.onComplete {
-          case Success(value) => SpecialStats.debug(s"$this",s"initial deployment virtual placement took ${System.currentTimeMillis() - startTime}ms")
-          case Failure(exception) => SpecialStats.debug(s"$this",
-                                                      s"initial deployment virtual placement failed after" + s" ${System.currentTimeMillis() - startTime}ms, cause: \n $exception")
+          case Success(value) => SpecialStats.log(s"$this", "placement",s"initial deployment virtual placement took ${System.currentTimeMillis() - startTime}ms")
+          case Failure(exception) => SpecialStats.log(s"$this", "placement",s"initial deployment virtual placement failed after" + s" ${System.currentTimeMillis() - startTime}ms, cause: \n $exception")
         }
         for {initialOperatorPlacement <- initialOperatorPlacementRequest
              deployment <- deployOperatorGraphRec(query, true)(eventCallback, queryDependencies, initialOperatorPlacement)} yield {
@@ -105,7 +103,7 @@ class QueryGraph(query: Query,
     }
     // block here to wait until deployment is finished
     val rootOperator = Await.result(res.flatten, new FiniteDuration(120, TimeUnit.SECONDS))
-    SpecialStats.debug(s"$this", s"initial deployment took ${ System.currentTimeMillis() - startTime }ms")
+    SpecialStats.log(s"$this", "placement", s"initial deployment took ${ System.currentTimeMillis() - startTime }ms")
     rootOperator
   }
 
@@ -145,8 +143,7 @@ class QueryGraph(query: Query,
     // child is not deployed yet -> None as placeholder
     val dependencies = Dependencies(parentOperators.toMap, Map(None -> queryDependencies(operator)._1.child.get))
     val reliabilityReqPresent = (query.requirements collect { case r: ReliabilityRequirement => r }).nonEmpty
-    SpecialStats.debug(s"$this", s"deploying operator $operator in mode $transitionConfig with placement strategy " +
-      s"${placementStrategy.name}")
+    SpecialStats.log(s"$this", "placement", s"deploying operator $operator in mode $transitionConfig with placement strategy ${placementStrategy.name}")
 
     val deployment: Future[(ActorRef, HostInfo)] = {
       if (placementStrategy.hasInitialPlacementRoutine() && initialOperatorPlacement.contains(operator)) {
@@ -174,7 +171,7 @@ class QueryGraph(query: Query,
       }
     }
     deployment map { opAndHostInfo => {
-      SpecialStats.debug(s"$this", s"deployed ${ opAndHostInfo._1 } on; ${opAndHostInfo._2.member} ; with " +
+      SpecialStats.log(s"$this", "placement", s"deployed ${ opAndHostInfo._1 } on; ${opAndHostInfo._2.member} ; with " +
         s"hostInfo ${opAndHostInfo._2.operatorMetrics}; parents: $parentOperators; path.name: ${parentOperators.map(_._1).head.path.name}")
       mapek.knowledge ! AddOperator(opAndHostInfo._1)
       GUIConnector.sendInitialOperator(opAndHostInfo._2.member.address, placementStrategy.name,

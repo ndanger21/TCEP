@@ -3,7 +3,6 @@ package tcep.simulation.tcep
 import java.io.{File, PrintStream}
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorContext, ActorRef, Cancellable}
 import akka.cluster.Cluster
 import akka.pattern.ask
@@ -18,16 +17,17 @@ import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.TransitionStats
 import tcep.graph.transition.mapek.lightweight.LightweightKnowledge.GetLogData
 import tcep.machinenodes.GraphCreatedCallback
-import tcep.machinenodes.consumers.Consumer.{GetAllRecords, GetMonitorFactories, SetQosMonitors}
+import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords, GetMonitorFactories, SetQosMonitors}
 import tcep.placement.PlacementStrategy
 
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 
-class Simulation(name: String, directory: Option[File], query: Query, transitionConfig: TransitionConfig,
+class Simulation(name: String,  query: Query, transitionConfig: TransitionConfig,
                  publishers: Map[String, ActorRef], consumer: ActorRef, startingPlacementStrategy: Option[PlacementStrategy],
-                 allRecords: AllRecords, fixedSimulationProperties: Map[Symbol, Int] = Map(),
-                 mapekType: String = ConfigFactory.load().getString("constants.mapek.type"))(implicit context: ActorContext, cluster: Cluster, baseEventRate: Double) {
+                 mapekType: String = ConfigFactory.load().getString("constants.mapek.type"))
+                (implicit context: ActorContext, cluster: Cluster, baseEventRate: Double, directory: Option[File], pimPaths: (String, String),
+                 fixedSimulationProperties: Map[Symbol, Int] = Map() ) {
 
   lazy val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
   implicit val ec: ExecutionContext = blockingIoDispatcher
@@ -59,7 +59,7 @@ class Simulation(name: String, directory: Option[File], query: Query, transition
     log.info("Executing query. Fetching monitors...")
     val monitors = Await.result(this.consumer ? GetMonitorFactories, atMost = FiniteDuration(10, TimeUnit.SECONDS)).asInstanceOf[Array[MonitorFactory]]
     log.info(s"Monitors are: $monitors")
-    queryGraph = new QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, Some(GraphCreatedCallback()), Some(allRecords), consumer, fixedSimulationProperties, mapekType)
+    queryGraph = new QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, Some(GraphCreatedCallback()), consumer, mapekType)
     queryGraph.createAndStart()
     guiUpdater = context.system.scheduler.schedule(0 seconds, 60 seconds)(GUIConnector.sendMembers(cluster))
     queryGraph
@@ -77,17 +77,6 @@ class Simulation(name: String, directory: Option[File], query: Query, transition
 
     def createCSVEntry(): Unit = synchronized {
       try {
-        def recordsArrived(cAllRecords: AllRecords): Boolean = {
-          if (!cAllRecords.allDefined) {
-            log.info(s"Data not available yet! ${cAllRecords.getValues}")
-            log.info(s"Resetting!")
-            consumer ! SetQosMonitors
-            false
-          } else {
-            true
-          }
-        }
-
         def getFitnessData() = {
           if (mapekType == LIGHTWEIGHT)
             (queryGraph.mapek.knowledge ? GetLogData)
@@ -155,7 +144,6 @@ class Simulation(name: String, directory: Option[File], query: Query, transition
       } catch {
         case e: Throwable =>
           log.error("exception while creating csv entry", e)
-          log.error(s"${allRecords.getRecordsList}")
       }
     }
     simulation = context.system.scheduler.schedule(startTime, interval)(createCSVEntry())
@@ -165,6 +153,17 @@ class Simulation(name: String, directory: Option[File], query: Query, transition
       context.system.scheduler.scheduleOnce(totalTime)(GUIConnector.sendMembers(cluster))
     }
 
+  }
+
+  def recordsArrived(cAllRecords: AllRecords): Boolean = {
+    if (!cAllRecords.allDefined) {
+      log.info(s"Data not available yet! ${cAllRecords.getValues}")
+      log.info(s"Resetting!")
+      consumer ! SetQosMonitors
+      false
+    } else {
+      true
+    }
   }
 
   def stopSimulation(): Unit = {

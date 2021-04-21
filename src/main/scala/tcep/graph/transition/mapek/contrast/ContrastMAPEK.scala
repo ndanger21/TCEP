@@ -24,10 +24,8 @@ import scala.concurrent.duration.FiniteDuration
   * @param fixedSimulationProperties parameters fixed for a simulation run
   */
 class ContrastMAPEK(context: ActorContext, query: Query, mode: TransitionConfig, startingPlacementStrategy: PlacementStrategy,
-                    fixedSimulationProperties: Map[Symbol, Int], consumer: ActorRef
-           ) extends MAPEK(context) {
+                    fixedSimulationProperties: Map[Symbol, Int], consumer: ActorRef) extends MAPEK(context) {
 
-  val samplingInterval = new FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.SECONDS)
   val monitor: ActorRef = context.actorOf(Props(new ContrastMonitor(this, consumer, fixedSimulationProperties)))
   val analyzer: ActorRef = context.actorOf(Props(new ContrastAnalyzer(this)))
   val planner: ActorRef = context.actorOf(Props(new ContrastPlanner(this)))

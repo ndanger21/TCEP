@@ -14,7 +14,8 @@
         </rollingPolicy>
 
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %-5level[%thread] %logger{0} - %msg%n%rEx</pattern>
+            <!-- use %X{sourceThread} to show the actual thread that executed the code, not the thread running the logger asynchronously -->
+            <pattern>%d{HH:mm:ss.SSS}  %-5level[%X{sourceThread}] %logger{36}  - %msg%n%rEx</pattern>
         </encoder>
     </appender>
     <!-- separate logfile for placement algorithms -->

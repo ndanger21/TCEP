@@ -17,7 +17,7 @@ scp ../docker-stack.yml ${REMOTE}:~
 nNodesTotal=$(($n_speed_streams + 2 + 1 + 1)) # speedPublishers, 2workers, 1densityPublisher, simulator
 echo "number of containers: ${nNodesTotal}"
 adjust_config $n_speed_streams $n_speed_streams $nNodesTotal $HOST "false" "false" ${GUI_PORT}
-./build.sh
+./build.sh || exit 1
 rm -rf $work_dir/dockerbuild
 ssh ${REMOTE} "docker pull $registry_user/$tcep_image"
 ssh ${REMOTE} "docker pull $registry_user/$gui_image"

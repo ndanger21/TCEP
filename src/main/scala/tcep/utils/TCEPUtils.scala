@@ -72,7 +72,7 @@ object TCEPUtils {
   }
 
   def getBandwidthBetweenNodes(cluster: Cluster, source: Member, target: Member)(implicit ec: ExecutionContext): Future[Double] = {
-    SpecialStats.debug(this.toString, s"bw request for ${source.address}->${target.address}")
+    log.debug(this.toString, s"bw request for ${source.address}->${target.address}")
     if(source.equals(target)) Future { 0.0d }
     else {
       for {
@@ -224,7 +224,7 @@ object TCEPUtils {
       case e: Throwable =>
         val errorMsg = s"failed to send msg $msg to $receiver after $retriesUsed with timeout $t, cause: ${e.toString}, retrying indefinitely"
         if(tlf.isDefined && tlp.isDefined) tlf.get(errorMsg, tlp.get)
-        else SpecialStats.debug(receiver.toString(), errorMsg)
+        else log.error(receiver.toString(), errorMsg)
         trySendUntilReply(receiver, msg, t, retriesUsed + 1, tlf, tlp)
     }
   }

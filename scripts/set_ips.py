@@ -69,15 +69,11 @@ with open(applicationConfSourcePath) as f:
 with open(applicationConfSourcePath, "w") as f:
     f.write(gui_endpoint_line)
 
-#with open(applicationConfSourcePath) as f:
-#    ip_array.append(manager_ip)
-#    ip_addresses_line = re.sub(r'host-ip-addresses = \[.*\]', 'host-ip-addresses = ' + json.dumps(ip_array), f.read())
-
-#with open(applicationConfSourcePath, "w") as f:
-#    f.write(ip_addresses_line)
-
 with open(applicationConfSourcePath) as f:
     disable_mininet_sim_line = re.sub(r'mininet-simulation = .*', 'mininet-simulation = false', f.read())
+
+with open(applicationConfSourcePath) as f:
+    disable_mininet_sim_line = re.sub(r'isLocalSwarm = .*', 'isLocalSwarm = false', f.read())
 
 with open(applicationConfSourcePath, "w") as f:
     f.write(disable_mininet_sim_line)

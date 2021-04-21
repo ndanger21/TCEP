@@ -1,6 +1,6 @@
 package tcep.machinenodes
 
-import akka.actor.{ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import org.discovery.vivaldi.DistVivaldiActor
 import tcep.config.ConfigurationParser
 import tcep.machinenodes.helper.actors.TaskManagerActor

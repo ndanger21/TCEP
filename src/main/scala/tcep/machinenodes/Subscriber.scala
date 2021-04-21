@@ -1,5 +1,6 @@
 package tcep.machinenodes
 
+
 import java.util.concurrent.TimeUnit
 
 import akka.actor.{ActorLogging, ActorRef, RootActorPath}
@@ -21,6 +22,7 @@ import scala.concurrent.{Await, Future}
 /**
   * Subscriber Actor
   */
+// do not use
 class Subscriber extends VivaldiCoordinates with ActorLogging {
 
   var publishers: Map[String, ActorRef] = Map.empty[String, ActorRef]
@@ -78,7 +80,7 @@ class Subscriber extends VivaldiCoordinates with ActorLogging {
         .or(stream[String]("D"))
 
     val monitors: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query1, Option.empty), DummyMonitorFactory(query1))
-    val queryGraph = new QueryGraph(query1, TransitionConfig(), publishers, None, Some(GraphCreatedCallback()))(this.context, cluster, 1.0 )
+    val queryGraph = new QueryGraph(query1, TransitionConfig(), publishers, None, Some(GraphCreatedCallback()), self)(this.context, cluster, 1.0 )
 
     queryGraph.createAndStart(Some(EventPublishedCallback()))
 

@@ -60,7 +60,7 @@ case class BandwidthMeasurementComplete(source: Address, target: Address, bandwi
 case class CoordinatesRequest(node: Address) extends MeasurementMessage // address field is only intended for asking local vivaldi actor about a remote addresses coordinates
 case class CoordinatesResponse(coordinate: Coordinates) extends MeasurementMessage
 case class GetNetworkHopsMap() extends MeasurementMessage
-case class NetworkHopsMap(hopsMap: Map[String, Int]) extends MeasurementMessage
+case class NetworkHopsMap(hopsMap: Map[Address, Int]) extends MeasurementMessage
 
 case class StartVivaldiUpdates() extends PlacementMessage
 case class VivaldiCoordinatesEstablished() extends PlacementMessage
@@ -89,7 +89,6 @@ class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with Sy
   override implicit val ec = blockingIoDispatcher // almost all tasks are i/o bound
   private var bandwidthEstimator: ActorRef = _
   private val timeout = Timeout(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS)
-  private val hostIpAddresses: List[String] = ConfigFactory.load().getStringList("constants.host-ip-addresses").asScala.toList
   private var publisherActorRefs: Map[String, ActorRef] = Map()
   private var taskManagerActors: Map[Member, ActorRef] = Map()
   private var publisherActorRefsInitialized = false
@@ -146,30 +145,32 @@ class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with Sy
     case GetNetworkHopsMap =>
       implicit val ec: ExecutionContext = blockingIoDispatcher
       val s = sender()
-      implicit val timeout = Timeout(60 seconds)
-      val traceRouteCalls: Future[Map[String, String]] = TCEPUtils.makeMapFuture(
-        //cluster.state.members.filter(m => m.status == MemberStatus.up && m != cluster.selfMember && m.address.host.isDefined).map(other => {
-        hostIpAddresses.map(address => {
-          log.info(s"called traceroute to ${address}, waiting for completion...")
-          address -> Future {
-            s"traceroute ${address}".!!
+      implicit val timeout = Timeout(5 seconds)
+      val traceRouteCalls: Future[Map[Address, String]] = TCEPUtils.makeMapFuture(
+        //TODO using the cluster address leads traceroute returning only the hops on the overlay network of the cluster -> only 1-2 hops even in distributed GENI setup
+        // probably need to remove this functionality altogether since it does not work as intended in any of the setups
+        cluster.state.members.filter(m => m != cluster.selfMember && m.address.host.isDefined).map(member => {
+          log.info(s"called traceroute to ${member.address.host}, waiting for completion...")
+          member.address -> Future {
+            s"traceroute -q 1 ${member.address.host.get}".!!
           }
         }).toMap)
       traceRouteCalls.onComplete {
-        case Success(data: Map[String, String]) =>
+        case Success(data: Map[Address, String]) =>
           // traceroute returns:
+          // akka.tcp://tcep@speedPublisher2:2502 -> traceroute to speedPublisher2 (10.0.2.36), 30 hops max, 46 byte packets
           // "1 lilac-dmc.Berkeley.EDU (128.32.216.1) 39 ms 19 ms 39 ms"
           // "2 ccngw-ner-cc.Berkeley.EDU (128.32.136.23) 39 ms 40 ms 19 ms"
           log.info(s"completed traceroute calls: ${data.mkString("\n")}")
           val networkHopsMap = data.map(entry => {
-            val lines = entry._2.split("\n").filter(line => !line.contains("* * *") && !line.contains(entry._1))
-            entry._1 -> {
-              if (lines.nonEmpty) lines.max.substring(1, 2).toInt - 1 else 0
-            }
+            val lines = entry._2.split("\n").filter(line => !line.startsWith("akka"))
+            entry._1 -> (lines.length - 1)
           })
+          log.info(s"returning NetworkHopsMap \n${networkHopsMap.mkString("\n")}")
           s ! NetworkHopsMap(networkHopsMap)
         case Failure(exception) => log.error(exception, s"failed to determine network hops from ${cluster.selfAddress} to other cluster members")
       }
+
 
     case request: SingleBandwidthRequest => bandwidthEstimator.forward(request)
     case r: AllBandwidthsRequest => bandwidthEstimator.forward(r)

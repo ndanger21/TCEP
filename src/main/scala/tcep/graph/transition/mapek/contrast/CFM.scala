@@ -1,7 +1,6 @@
 package tcep.graph.transition.mapek.contrast
 
 import java.io.File
-
 import com.google.common.base.Charsets
 import com.google.common.io.Resources
 import org.cardygan.config._
@@ -11,6 +10,7 @@ import org.cardygan.fm.util.FmUtil
 import org.cardygan.fm.{Attribute, FM, Feature, Real}
 import org.cardygan.xtext.util.CardyUtil
 import org.slf4j.{Logger, LoggerFactory}
+import tcep.graph.transition.MAPEK
 
 import scala.collection.JavaConverters._
 /**
@@ -21,14 +21,14 @@ import scala.collection.JavaConverters._
   * provides utilities for handling the CFM and generating its current configuration (Config)
   * @param mapek reference to the running MAPEK instance
   */
-class CFM(val mapek: ContrastMAPEK) {
+class CFM(val mapek: MAPEK) {
 
   private val log: Logger = LoggerFactory.getLogger(getClass)
 
   var cfm: FM = _
   try {
       val cfmAsString: String = Resources.toString(Resources.getResource("cfm.cardy"), Charsets.UTF_8)
-      log.debug(s"loading the following cfm: $cfmAsString")
+      //log.info(s"loading the following cfm: $cfmAsString")
       cfm = CardyUtil.loadFmFromString(cfmAsString)
       //cfm = CardyUtil.loadFmFromFile(Resources.getResource("cfm.cardy"))
   } catch {

@@ -1,8 +1,7 @@
 package tcep.simulation.tcep
 
 import java.io.File
-
-import akka.actor.{ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import org.discovery.vivaldi.DistVivaldiActor
 import tcep.config.ConfigurationParser
 import tcep.graph.nodes.traits.{TransitionConfig, TransitionExecutionModes, TransitionModeNames}
@@ -25,6 +24,9 @@ import scala.sys.process._
 object SimulationRunner extends App with ConfigurationParser {
 
   logger.info("booting up simulation runner, args: " + args.toList.toString())
+  logger.info(s"CPLEX lib path env var: ${System.getenv("CPLEX_LIB_PATH")}")
+  logger.info(s"IBM_heapdumpdir env var: ${System.getenv("IBM_HEAPDUMPDIR")}")
+  logger.info(s"main env var: ${System.getenv("MAIN")}")
 
   if(args.length <3 ){
     logger.info("Not enough arguments")
@@ -44,7 +46,8 @@ object SimulationRunner extends App with ConfigurationParser {
       val query = options.getOrElse('query, "Stream")
       val mapek = options.getOrElse('mapek, "requirementBased")
       val requirement = options.getOrElse('req, "latency")
-      val eventRate = options.getOrElse('eventRate, "1")
+      val combinedPIM = options.getOrElse('combined, "0")
+
       val transitionStrategy = options.getOrElse('transitionStrategy, "MFGS") match {
         case "MFGS" => TransitionModeNames.MFGS
         case "SMS" => TransitionModeNames.SMS
@@ -74,7 +77,9 @@ object SimulationRunner extends App with ConfigurationParser {
       }
       val fixedSimulationProperties = Map('baseLatency -> baseLatency.toInt, 'maxPubToClientHops -> maxPubToClientHops.toInt)
       val taskManagerActorProps = Props(classOf[TaskManagerActor], baseEventRate).withMailbox("prio-mailbox")
-      val simulatorActorProps = Props(new SimulationSetup(directory, mode.toInt, TransitionConfig(transitionStrategy, transitionExecutionMode), Some(duration.toInt), initialAlgorithm, None, query, fixedSimulationProperties, mapek, requirement, loadTestMax)).withMailbox("prio-mailbox")
+      val simulatorActorProps = Props(
+        new SimulationSetup(mode.toInt, TransitionConfig(transitionStrategy, transitionExecutionMode),
+          Some(duration.toInt), initialAlgorithm, query, mapek, requirement, loadTestMax)(directory, baseEventRate, combinedPIM == "1", fixedSimulationProperties)).withMailbox("prio-mailbox")
       logger.info(s"taskManager mailbox: ${taskManagerActorProps.mailbox} \n simulator mailbox: ${simulatorActorProps.mailbox}")
       actorSystem.actorOf(taskManagerActorProps, "TaskManager")
       actorSystem.actorOf(simulatorActorProps, "SimulationSetup")

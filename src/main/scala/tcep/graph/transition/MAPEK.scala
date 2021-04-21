@@ -1,7 +1,5 @@
 package tcep.graph.transition
 
-import java.time.Instant
-
 import akka.actor.{Actor, ActorContext, ActorLogging, ActorRef, PoisonPill}
 import akka.cluster.Cluster
 import akka.pattern.ask
@@ -14,22 +12,26 @@ import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos.AverageFrequencyMonitorFactory
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK
+import tcep.graph.transition.mapek.learnon.LearnOnMAPEK
 import tcep.graph.transition.mapek.lightweight.LightweightMAPEK
 import tcep.graph.transition.mapek.requirementBased.RequirementBasedMAPEK
 import tcep.machinenodes.helper.actors.TransitionControlMessage
 import tcep.placement.PlacementStrategy
 import tcep.placement.benchmarking.{BenchmarkingNode, NetworkChurnRate}
 import tcep.placement.sbon.PietzuchAlgorithm
-import tcep.simulation.tcep._
 import tcep.utils.SpecialStats
 
-import scala.concurrent.ExecutionContext
+import java.time.Instant
+import java.util.concurrent.TimeUnit
+import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
 
 trait MAPEKComponent extends Actor with ActorLogging {
-  implicit val timeout: Timeout = Timeout(5 seconds)
-  lazy implicit val ec: ExecutionContext = context.system.dispatchers.lookup("blocking-io-dispatcher") // do not use the default dispatcher to avoid starvation at high event rates
   val cluster = Cluster(context.system)
+  implicit val timeout: Timeout = Timeout(5 seconds)
+  // do not use the default dispatcher for futures to avoid starvation at high event rates
+  lazy val blockingIoDispatcher: ExecutionContext = context.system.dispatchers.lookup("blocking-io-dispatcher")
+  implicit val ec: ExecutionContext = blockingIoDispatcher
 }
 trait MonitorComponent extends MAPEKComponent
 trait AnalyzerComponent extends MAPEKComponent
@@ -71,16 +73,18 @@ abstract class ExecutorComponent(mapek: MAPEK) extends MAPEKComponent {
   }
 }
 
-abstract case class KnowledgeComponent(query: Query, var transitionConfig: TransitionConfig, var currentPlacementStrategy: PlacementStrategy, var transitionStatus: Int = 0, var operators: Set[ActorRef] = Set(), var backupOperators: Set[ActorRef] = Set()) extends MAPEKComponent {
-
+abstract case class KnowledgeComponent(query: Query, var transitionConfig: TransitionConfig, var currentPlacementStrategy: PlacementStrategy) extends MAPEKComponent {
   var client: ActorRef = _
   protected val requirements: scala.collection.mutable.Set[Requirement] = scala.collection.mutable.Set(pullRequirements(query, List()).toSeq: _*)
   var deploymentComplete: Boolean = false
   var lastTransitionEnd: Long = System.currentTimeMillis()
   var lastTransitionDuration: Long = 0
+  var transitionStatus: Int = 0
   var lastTransitionStats: TransitionStats = TransitionStats()
   var previousLatencies: Vector[(Long, Long)] = Vector()
-  val freqMonitor = AverageFrequencyMonitorFactory(query, None).createNodeMonitor
+  //val freqMonitor = AverageFrequencyMonitorFactory(query, None).createNodeMonitor
+  var operators: Set[ActorRef] = Set()
+  var backupOperators: Set[ActorRef] = Set()
 
   override def receive: Receive = {
 
@@ -137,8 +141,9 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
       operators.foreach { op => op ! msg }
 
     case GetAverageLatency(intervalMs) => sender() ! this.calculateMovingAvg(intervalMs)
+
     case UpdateLatency(latency) =>
-      freqMonitor.onEventEmit(Event1(true)(cluster.selfAddress), 0)
+      //freqMonitor.onEventEmit(Event1(true)(cluster.selfAddress), 0)
       previousLatencies = (System.nanoTime(), latency) +: previousLatencies
       if(previousLatencies.size > 1e6) { // prevent the queue from growing endlessly when not calling calculateMovingAvg
         log.warning("list of previous latency values has reached 1000000 entries, discarding half of the entries")
@@ -156,20 +161,22 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
     * discards all older values from the queue
     */
   def calculateMovingAvg(intervalMs: Long): Double = {
+    val start = System.nanoTime()
     val intervalInNS: Double = intervalMs * 1e6
     val lastIntervalLatencySum = previousLatencies.foldLeft((0.0, 0))((acc, e) =>
       if(System.nanoTime() - e._1 <= intervalInNS) (acc._1 + e._2, acc._2 + 1)
       else acc
     )
     val avg = if(lastIntervalLatencySum._2 != 0) lastIntervalLatencySum._1 / lastIntervalLatencySum._2 else 0
-    log.debug(s"avg for last $intervalMs ms is ${avg}, ${lastIntervalLatencySum._2} of ${previousLatencies.size} are in interval")
     this.previousLatencies = previousLatencies.take(lastIntervalLatencySum._2) // keep only the latency values of the last interval
+    //log.info(s"avg for last $intervalMs ms is ${avg}, ${lastIntervalLatencySum._2} of ${previousLatencies.size} are in interval; calc took ${(System.nanoTime() - start) / 1e6}ms")
     avg
   }
 
 }
 
 abstract class MAPEK(context: ActorContext) {
+  val samplingInterval = new FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
   val monitor: ActorRef
   val analyzer: ActorRef
   val planner: ActorRef
@@ -187,7 +194,7 @@ abstract class MAPEK(context: ActorContext) {
 
 object MAPEK {
 
-  def createMAPEK(mapekType: String, context: ActorContext, query: Query, transitionConfig: TransitionConfig, publishers: Map[String, ActorRef], startingPlacementStrategy: Option[PlacementStrategy], allRecords: Option[AllRecords], consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int] = Map()): MAPEK = {
+  def createMAPEK(mapekType: String, context: ActorContext, query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: Option[PlacementStrategy], consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int] = Map(), pimPaths: (String, String)): MAPEK = {
 
     val placementAlgorithm = // get correct PlacementAlgorithm case class for both cases (explicit starting algorithm and implicit via requirements)
       if(startingPlacementStrategy.isEmpty) BenchmarkingNode.selectBestPlacementAlgorithm(List(), Queries.pullRequirements(query, List()).toList) // implicit
@@ -200,6 +207,8 @@ object MAPEK {
       case "requirementBased" => new RequirementBasedMAPEK(context, query, transitionConfig, placementAlgorithm)
       case "CONTRAST" => new ContrastMAPEK(context, query, transitionConfig, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), fixedSimulationProperties, consumer)
       case "lightweight" => new LightweightMAPEK(context, query, transitionConfig, placementAlgorithm.placement, consumer)
+      case "LearnOn" => new LearnOnMAPEK(context, transitionConfig, query, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), fixedSimulationProperties, consumer, pimPaths)
+
     }
 
   }

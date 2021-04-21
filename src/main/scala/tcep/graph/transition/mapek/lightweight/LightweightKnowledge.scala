@@ -17,8 +17,7 @@ import tcep.utils.SpecialStats
 
 import scala.collection.JavaConverters._
 
-class LightweightKnowledge(mapek: LightweightMAPEK, query: Query, transitionConfig: TransitionConfig/*, allRecords: AllRecords*/, currentPlacementStrategy: PlacementStrategy, consumer: ActorRef)
-  //extends KnowledgeComponent(query, mode, currentPlacementStrategy = BenchmarkingNode.selectBestPlacementAlgorithm(List(), Queries.pullRequirements(query, List()).toList).placement) {
+class LightweightKnowledge(mapek: LightweightMAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: PlacementStrategy, consumer: ActorRef)
   extends KnowledgeComponent(query, transitionConfig, currentPlacementStrategy) {
 
   var placementAlgorithms: List[PlacementAlgorithm] = List()
@@ -151,27 +150,6 @@ class LightweightKnowledge(mapek: LightweightMAPEK, query: Query, transitionConf
     }
   }
 
-  /**
-    * Created by Niels on 14.04.2018.
-    * Copied from RequirementChecker
-    *
-    * helper function to compare a requirement value to an actual value
-    *
-    * @param reqVal value of the requirement
-    * @param op comparison operator
-    * @param otherVal value to compare to
-    * @return true if requirement is condition holds, false if violated
-    */
-  def compareHelper(reqVal: Double, op: Operator, otherVal: Double): Boolean = {
-    op match {
-      case Equal => reqVal == otherVal
-      case NotEqual => reqVal != otherVal
-      case Greater => otherVal > reqVal
-      case GreaterEqual => otherVal >= reqVal
-      case Smaller => otherVal < reqVal
-      case SmallerEqual => otherVal <= reqVal
-    }
-  }
 }
 
 object LightweightKnowledge{

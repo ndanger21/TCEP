@@ -61,14 +61,14 @@ class BandwidthEstimator() extends ClusterActor {
         s ! BandwidthMeasurementExists(this.getDataRate(senderMember).doubleValue())
       } else {
         inboundMeasurementRequests.enqueue(s)
-        SpecialStats.debug(s"$this", s"bandwidth measurement slot reserved for $s; inbound queue: $inboundMeasurementRequests; inbound ongoing: $inboundOngoingMeasurements")
+        //SpecialStats.debug(s"$this", s"bandwidth measurement slot reserved for $s; inbound queue: $inboundMeasurementRequests; inbound ongoing: $inboundOngoingMeasurements")
         //context.system.scheduler.scheduleOnce(new FiniteDuration(0, TimeUnit.SECONDS))(processInboundRequests)
       }
     case c: BandwidthMeasurementComplete =>
       val s = sender()
       inboundOngoingMeasurements.dequeue()
       this.addMeasurement(DataRateMeasurement(TCEPUtils.getMemberFromActorRef(cluster, s), c.bandwidth)) // store link measurement if no own value exists yet -> prevent duplicate link measurements
-      SpecialStats.debug(s"$this", s"completed bandwidth measurement request ${s.path.address.host} --> ${cluster.selfAddress.host}, result: ${c.bandwidth}")
+      //SpecialStats.debug(s"$this", s"completed bandwidth measurement request ${s.path.address.host} --> ${cluster.selfAddress.host}, result: ${c.bandwidth}")
       TCEPUtils.selectSimulator(cluster).resolveOne().map(_.forward(c)) // forward completion message to simulator so it can record completion status
 
     case InitialBandwidthMeasurementStart() =>
@@ -80,7 +80,7 @@ class BandwidthEstimator() extends ClusterActor {
           cluster.state.members.foreach(m => selfMeasurements += DataRateMeasurement(m, mininetBandwidth))
           cluster.state.members.map(m => cluster.state.members.map(other => allMeasurements += (m, other) -> mininetBandwidth))
         } else {
-          SpecialStats.debug(s"$this", s"initial bandwidth measurements starting on actor $self")
+          //SpecialStats.debug(s"$this", s"initial bandwidth measurements starting on actor $self")
           val membersSorted = cluster.state.members.filter(!_.hasRole("VivaldiRef")).toVector.sortBy(m => m.address.port.getOrElse(
             throw new RuntimeException(s"member ($m has no port!")))
           val selfPosition = membersSorted.indexOf(cluster.selfMember)
@@ -100,7 +100,7 @@ class BandwidthEstimator() extends ClusterActor {
       s ! SingleBandwidthResponse(bandwidth)
 
     case AllBandwidthsRequest() =>
-      SpecialStats.log(this.toString, "placement", s"received AllBandwidthsRequest, replying with ${allMeasurements.size + selfMeasurements.size} entries")
+      //SpecialStats.log(this.toString, "placement", s"received AllBandwidthsRequest, replying with ${allMeasurements.size + selfMeasurements.size} entries")
       sender() ! AllBandwidthsResponse(allMeasurements.toMap ++ selfMeasurements.map(m => (cluster.selfMember, m.node) -> m.dataRate))
 
     case _ =>
@@ -119,7 +119,7 @@ class BandwidthEstimator() extends ClusterActor {
       requester ! BandwidthMeasurementSlotGranted()
       inboundOngoingMeasurements.enqueue(requester)
       if (inboundOngoingMeasurements.size > 1) throw new IllegalStateException(s"more than one bandwidth measurement at a time to this node ${cluster.selfMember} is being executed: ${inboundOngoingMeasurements}")
-      SpecialStats.debug(s"$this", s"bandwidth measurement inbound queue: $inboundMeasurementRequests inbound ongoing: $inboundOngoingMeasurements outbound ongoing: $outboundOngoingMeasurements")
+      //SpecialStats.debug(s"$this", s"bandwidth measurement inbound queue: $inboundMeasurementRequests inbound ongoing: $inboundOngoingMeasurements outbound ongoing: $outboundOngoingMeasurements")
     }
 
     context.system.scheduler.scheduleOnce(new FiniteDuration(1, TimeUnit.SECONDS))(processInboundRequests)
@@ -142,7 +142,7 @@ class BandwidthEstimator() extends ClusterActor {
         } yield {
         outboundOngoingMeasurements.enqueue(otherNode)
         pendingSlotRequest = false
-        SpecialStats.debug(s"$this", s"received reply to slot request to $otherNode: $slotGranted")
+        //SpecialStats.debug(s"$this", s"received reply to slot request to $otherNode: $slotGranted")
         slotGranted match {
           case BandwidthMeasurementSlotGranted() =>
             val measurement = this.measure(otherNode)
@@ -150,15 +150,15 @@ class BandwidthEstimator() extends ClusterActor {
             measurement.onComplete {
               case Success(value) =>
                 taskManager ! BandwidthMeasurementComplete(cluster.selfAddress, otherNode.address, value)
-                SpecialStats.debug(s"$this", s"completed new bandwidth measurement ${cluster.selfAddress.host} --> ${otherNode.address.host}, result: $value")
+                //SpecialStats.debug(s"$this", s"completed new bandwidth measurement ${cluster.selfAddress.host} --> ${otherNode.address.host}, result: $value")
                 this.addMeasurement(DataRateMeasurement(otherNode, value))
                 outboundOngoingMeasurements.dequeue()
               case Failure(exception) =>
-                SpecialStats.debug(s"$this", s"failed new bandwidth measurement ${cluster.selfAddress.host} --> ${otherNode.address.host}, cause: \n $exception")
+                //SpecialStats.debug(s"$this", s"failed new bandwidth measurement ${cluster.selfAddress.host} --> ${otherNode.address.host}, cause: \n $exception")
                 outboundOngoingMeasurements.dequeue()
             }
           case BandwidthMeasurementExists(bandwidthFromOther) =>
-            SpecialStats.debug(s"$this", s"bandwidth has been measured already ${cluster.selfAddress.host} --> ${otherNode.address.host}, result: $bandwidthFromOther")
+            //SpecialStats.debug(s"$this", s"bandwidth has been measured already ${cluster.selfAddress.host} --> ${otherNode.address.host}, result: $bandwidthFromOther")
             TCEPUtils.selectSimulator(cluster).resolveOne().map(_ ! BandwidthMeasurementComplete(cluster.selfAddress, otherNode.address, bandwidthFromOther)) // send completion message to simulator so it can record completion status
             this.addMeasurement(DataRateMeasurement(otherNode, bandwidthFromOther))
             outboundOngoingMeasurements.dequeue()
@@ -168,7 +168,7 @@ class BandwidthEstimator() extends ClusterActor {
             throw new RuntimeException(s"received unknown message $other in reply to BandwidthMeasurementSlotRequest() to $taskManager")
         }
 
-        SpecialStats.debug(s"$this", s"outbound queue: $outboundMeasurementRequests; outbound ongoing: $outboundOngoingMeasurements inbound ongoing: $inboundOngoingMeasurements")
+        //SpecialStats.debug(s"$this", s"outbound queue: $outboundMeasurementRequests; outbound ongoing: $outboundOngoingMeasurements inbound ongoing: $inboundOngoingMeasurements")
       }
 
       for { exc <- outboundProcessing.failed } yield { // recover from failures

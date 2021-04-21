@@ -9,8 +9,7 @@ import tcep.graph.transition.MonitorComponent
 import tcep.graph.transition.mapek.lightweight.LightweightAnalyzer.NodeUnreachable
 import tcep.graph.transition.mapek.lightweight.LightweightKnowledge.UpdatePerformance
 import tcep.graph.transition.mapek.lightweight.LightweightMAPEK.GetConsumer
-import tcep.machinenodes.consumers.Consumer.GetAllRecords
-import tcep.simulation.tcep.AllRecords
+import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
 
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration._

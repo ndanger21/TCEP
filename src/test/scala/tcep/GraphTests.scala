@@ -1,7 +1,6 @@
 package tcep
 
 import java.util.concurrent.TimeUnit
-
 import akka.actor.{Actor, ActorContext, ActorRef, ActorSystem, Address, PoisonPill, Props}
 import akka.cluster.Cluster
 import akka.serialization.{SerializationExtension, Serializers}
@@ -17,10 +16,10 @@ import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK.{AddOperator, SetClient, SetDeploymentStatus, SetTransitionMode}
 import tcep.graph.transition.{AcknowledgeStart, StartExecution}
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
+import tcep.machinenodes.consumers.Consumer.AllRecords
 import tcep.placement.{HostInfo, MobilityTolerantAlgorithm, PlacementStrategy, QueryDependencies}
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.publishers.TestPublisher
-import tcep.simulation.tcep.AllRecords
 
 import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
@@ -55,15 +54,12 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
                        publishers: Map[String, ActorRef],
                        startingPlacementStrategy: Option[PlacementStrategy],
                        createdCallback: Option[CreatedCallback],
-                       allRecords: Option[AllRecords] = None,
-                       consumer: ActorRef = null,
-                       fixedSimulationProperties: Map[Symbol, Int] = Map(),
-                       mapekType: String = "requirementBased")
+                       consumer: ActorRef = null)
                       (implicit override val context: ActorContext,
                        override implicit val cluster: Cluster,
                        override implicit val baseEventRate: Double
                       )
-    extends QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, createdCallback, allRecords, consumer, fixedSimulationProperties, mapekType) {
+    extends QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, createdCallback, consumer) {
 
     override def createAndStart(eventCallback: Option[EventCallback]): ActorRef = {
       val queryDependencies = extractOperators(query, baseEventRate)

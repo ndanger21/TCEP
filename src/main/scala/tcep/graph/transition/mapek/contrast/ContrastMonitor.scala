@@ -1,23 +1,24 @@
 package tcep.graph.transition.mapek.contrast
 
 import java.util.concurrent.atomic.AtomicInteger
-
 import akka.actor.{ActorRef, Address, Cancellable}
 import akka.cluster.ClusterEvent.{MemberJoined, MemberLeft}
 import akka.cluster.{Member, MemberStatus}
+import akka.event.LoggingAdapter
 import akka.pattern.ask
+import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.Coordinates
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetOperatorTreeDepth, MonitoringDataUpdate}
 import tcep.graph.transition.mapek.contrast.FmNames._
-import tcep.graph.transition.{ChangeInNetwork, MonitorComponent}
-import tcep.machinenodes.consumers.Consumer.GetAllRecords
+import tcep.graph.transition.{ChangeInNetwork, MAPEK, MonitorComponent}
+import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
 import tcep.machinenodes.helper.actors.{GetNetworkHopsMap, NetworkHopsMap}
-import tcep.simulation.tcep.AllRecords
 import tcep.utils.TCEPUtils.{getTaskManagerOfMember, makeMapFuture}
 import tcep.utils.{SpecialStats, TCEPUtils}
 
+import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.io.Source
 import scala.util.{Failure, Success}
@@ -31,14 +32,14 @@ import scala.util.{Failure, Success}
   * @param mapek reference to the running MAPEK instance
   * @param consumer container object for all metrics for which a monitor exists; contained records are set and updated by monitors
   */
-class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int]) extends MonitorComponent {
+class ContrastMonitor(mapek: MAPEK, consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int]) extends MonitorComponent {
 
   var updateNetworkDataScheduler: Cancellable = _
   var updateMonitorDataScheduler: Cancellable = _
   var checkOperatorHostStateScheduler: Cancellable = _
   var nodeCountChangerate: AtomicInteger = new AtomicInteger(0)
   var nodeChanges: List[Long] = List()
-  var previousLatencies: Map[Long, Long] = Map()
+  var previousLatencies: Map[Long, Double] = Map()
   var previousLoads: Map[Long, Double] = Map()
   var previousArrivalsPerSecond: Map[Long, Double] = Map()
   var jitter: Double = 0.0d
@@ -46,9 +47,10 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
   var vivaldiDistanceStdDev: Double = 0.0d
   var maxPubToClientLatency: Double = 0.0d
   var publisherMobility: Boolean = false
-  var networkHopsMap: Map[Address, Map[String, Int]] = Map()
+  var networkHopsMap: Map[Address, Map[Address, Int]] = Map()
   var vivDistances: Map[(Member, Member), Option[Double]] = Map()
   val isMininetSim: Boolean = ConfigFactory.load().getBoolean("constants.mininet-simulation")
+  val isLocalSwarm: Boolean = ConfigFactory.load().getBoolean("constants.isLocalSwarm")
 
   def nodeCount: Int = cluster.state.members.count(m => m.status == MemberStatus.Up && m.hasRole("Candidate"))
 
@@ -58,11 +60,11 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
     updateMonitorDataScheduler = this.context.system.scheduler.schedule(5 seconds, mapek.samplingInterval)(f = updateContextData())
     log.info(s"registered updateMonitorData scheduler: $updateMonitorDataScheduler")
     // update network state every half minute
-    updateNetworkDataScheduler = this.context.system.scheduler.schedule(5 seconds, 5 seconds)(f = updateNetworkData())
+    updateNetworkDataScheduler = this.context.system.scheduler.schedule(5 seconds, 15 seconds)(f = updateNetworkData())
     log.info(s"registered updateNetworkData scheduler: $updateNetworkDataScheduler")
-    checkOperatorHostStateScheduler = this.context.system.scheduler.schedule(5 seconds, 10 seconds)(f = checkOperatorHostState())
+    checkOperatorHostStateScheduler = this.context.system.scheduler.schedule(5 seconds, 15 seconds)(f = checkOperatorHostState())
     log.info(s"registered checkOperatorHostState scheduler: $checkOperatorHostStateScheduler")
-    if(!isMininetSim) this.updateNetworkHops()
+    this.updateNetworkHops()
   }
 
   override def postStop() = {
@@ -97,28 +99,22 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
     * stores this data in the ContrastKnowledge
     */
   def updateContextData(): Unit = {
+    //val startTime = System.currentTimeMillis()
 
-    val startTime = System.currentTimeMillis()
-    /*log.debug(s"entered updateContextData - allRecords: ${allRecords.allDefined} $allRecords" +
-      s"\n ${allRecords.recordLatency.lastMeasurement}" +
-      s"\n ${allRecords.recordAverageLoad.lastLoadMeasurement}" +
-      s"\n ${allRecords.recordFrequency.lastMeasurement}" +
-      s"\n ${allRecords.recordMessageHops.lastMeasurement}" +
-      s"\n ${allRecords.recordNetworkUsage.lastUsageMeasurement}" +
-      s"\n ${allRecords.recordOverhead.lastOverheadMeasurement}" +
-      s"\n ${allRecords.recordPublishingRate.lastRateMeasurement}" +
-      s"\n ${allRecords.recordTransitionStatus.get.lastMeasurement}")*/
     for {
       deploymentComplete <- (mapek.knowledge ? IsDeploymentComplete).mapTo[Boolean]
       if deploymentComplete
+      //_ <- Future { log.info(s"deploymentComplete: $deploymentComplete")}
       cAllRecords <- (consumer ? GetAllRecords).mapTo[AllRecords]
+      //_ <- Future { log.info(s"allRecords defined: ${cAllRecords.allDefined}")}
       if cAllRecords.allDefined
       operatorTreeDepth <- (mapek.knowledge ? GetOperatorTreeDepth).mapTo[Int]
+      //_ <- Future { log.info(s"operator tree depth: $operatorTreeDepth")}
       opCount <- (mapek.knowledge ? GetOperatorCount).mapTo[Int]
+      currentLatency <- (mapek.knowledge ? GetAverageLatency(mapek.samplingInterval.toMillis)).mapTo[Double]
     } yield {
 
-      SpecialStats.log("monitor", "clusterState", s"up members: ${cluster.state.members.count(_.status == MemberStatus.up)} of ${cluster.state.members.size} ${if(cluster.state.unreachable.nonEmpty) cluster.state.unreachable}")
-      val currentLatency: Long = cAllRecords.recordLatency.lastMeasurement.get.toMillis
+     // val currentLatency: Long = cAllRecords.recordLatency.lastMeasurement.get.toMillis // use avg latency of all events in last sampling interval
       val currentMsgHops: Int = cAllRecords.recordMessageHops.lastMeasurement.get
       val currentSystemLoad: Double = cAllRecords.recordAverageLoad.lastLoadMeasurement.get
       val currentArrivalRate: Int = cAllRecords.recordFrequency.lastMeasurement.get
@@ -126,7 +122,7 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
       val eventMsgOverhead: Long = cAllRecords.recordMessageOverhead.lastEventOverheadMeasurement.get
       val networkUsage: Double = cAllRecords.recordNetworkUsage.lastUsageMeasurement.get
 
-      previousArrivalsPerSecond += (System.currentTimeMillis() -> currentArrivalRate.toDouble / 5)
+      previousArrivalsPerSecond += (System.currentTimeMillis() -> currentArrivalRate.toDouble / mapek.samplingInterval.toSeconds)
       previousArrivalsPerSecond = previousArrivalsPerSecond.filter(e => e._1 - System.currentTimeMillis() <= 60000)
       val avgArrivalRateLastMinute: Double = previousArrivalsPerSecond.values.sum / previousArrivalsPerSecond.size
 
@@ -143,44 +139,46 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
 
       /**
         * retrieves the amount of link changes due to mobility in the last 20 and 60 seconds
-        * file linkChanges.csv is updated by the simulation_*.py files running the mobility simulation
-        * @return the amount of mobility-caused link changes of publisher nodes (from one containernet switch to the next)
+        * file linkChanges.csv is updated by the simulation_*.py or mobility.py (wifi simulation) files running the mobility simulation
+        * @return the amount of mobility-caused link changes of publisher nodes (from one mininet switch to the next)
         */
       def getLinkChanges: Int = {
+        if(!isMininetSim) 0
+        else {
+          try {
+            val bufferedSource = Source.fromFile("handovers.csv")
+            var res = Map[Long, String]()
+            //log.info(s"updateContextData() - getting link changes from file")
 
-        try {
-          val bufferedSource = Source.fromFile("/app/handovers.csv")
-          var res = Map[Long, String]()
-          log.info(s"updateContextData() - getting link changes from file")
-
-          for (line <- bufferedSource.getLines) {
-            val cols = line.split(",").map(_.trim)
-            res += (cols(0).toLong -> s"${cols(1)}: ${cols(2)} -> ${cols(3)}")
-          }
-          val sorted = res.toList.sorted
-          //log.debug(s"getLinkChanges() - file read: ${res.toList.sorted}")
-          if(res.nonEmpty) {
-
-            log.info(s"updateContextData() - time since last entry: ${System.currentTimeMillis() - sorted.last._1}ms")
-            val last20 = res.filter(e => System.currentTimeMillis() - e._1 <= 20 * 1000)
-            val last60 = res.filter(e => System.currentTimeMillis() - e._1 <= 60 * 1000)
-            if(last60.size > 0) {
-              publisherMobility = true
-            } else {
-              publisherMobility = false
+            for (line <- bufferedSource.getLines) {
+              val cols = line.split(",").map(_.trim)
+              res += (cols(0).toLong -> s"${cols(1)}: ${cols(2)} -> ${cols(3)}")
             }
-            log.info(s"updateContextData() - number of link changes in the last 20s: ${last20.size}")
-            log.info(s"updateContextData() - number of link changes in the last 60s: ${last60.size}, mobility: ${publisherMobility}")
-            bufferedSource.close()
-            last60.size
-          } else {
-            bufferedSource.close()
-            0
+            val sorted = res.toList.sorted
+            //log.debug(s"getLinkChanges() - file read: ${res.toList.sorted}")
+            if (res.nonEmpty) {
+
+              //log.info(s"updateContextData() - time since last entry: ${System.currentTimeMillis() - sorted.last._1}ms")
+              val last20 = res.filter(e => System.currentTimeMillis() - e._1 <= 20 * 1000)
+              val last60 = res.filter(e => System.currentTimeMillis() - e._1 <= 60 * 1000)
+              if (last60.size > 0) {
+                publisherMobility = true
+              } else {
+                publisherMobility = false
+              }
+              //log.info(s"updateContextData() - number of link changes in the last 20s: ${last20.size}")
+              //log.info(s"updateContextData() - number of link changes in the last 60s: ${last60.size}, mobility: ${publisherMobility}")
+              bufferedSource.close()
+              last60.size
+            } else {
+              bufferedSource.close()
+              0
+            }
+          } catch {
+            case e: Throwable =>
+              log.error("could not get link changes from file", e)
+              0
           }
-        } catch {
-          case e: Throwable =>
-            log.info("could not get link changes from file")
-            0
         }
       }
 
@@ -190,7 +188,7 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
         * @param currentLatency latency to use for the update
         * @return the jitter value updated by the currentLatency
         */
-      def calculateJitterIteratively(currentLatency: Long): Double = {
+      def calculateJitterIteratively(currentLatency: Double): Double = {
         // keep only values of the last $interval seconds
         previousLatencies = previousLatencies.filter(e => System.currentTimeMillis() - e._1 <= 1.5d * mapek.samplingInterval.toMillis)
 
@@ -219,10 +217,11 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
         avgArrivalRateLastMinute, eventMsgOverhead, networkUsage, getLinkChanges, calculateJitterIteratively(currentLatency), loadMetrics,
         nodeCount, nodeChanges.size, publisherMobility, maxPubToClientLatency, calculateAverageNodesInNHops(1), calculateAverageNodesInNHops(2),
         calculateAverageNodesInNHopsGini(1), calculateAverageNodesInNHopsGini(2),
-        calculateAverageHopsBetweenNodes, fixedSimulationProperties)
+        calculateAverageHopsBetweenNodes, fixedSimulationProperties)(log)
       // share data with knowledge to make it available to simulation csv writer and analyzer
+      log.info(s"contextData update: \n${contextDataUpdate.mkString("\n")}")
       mapek.knowledge ! MonitoringDataUpdate(contextDataUpdate)
-      log.info(s"updateContextData() - complete after ${System.currentTimeMillis() - startTime}ms")
+      //log.info(s"updateContextData() - complete after ${System.currentTimeMillis() - startTime}ms")
     }
   }
 
@@ -230,11 +229,10 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
     * called periodically to update the network state (available nodes, vivaldi distances between all nodes)
     */
   def updateNetworkData(): Unit = {
-
     try {
       if (true /*mapek.knowledge.deploymentComplete*/ ) {
 
-        val allNodes: Set[Member] = cluster.state.members.filter(m => m.status == MemberStatus.Up && !m.hasRole("VivaldiRef"))
+        val allNodes: Set[Member] = cluster.state.members.filter(m => m.status == MemberStatus.Up && !m.hasRole("Consumer"))
 
         for {
           vivCoordinates: Map[Member, Coordinates] <- makeMapFuture(allNodes.map(node => node -> TCEPUtils.getCoordinatesOfNode(cluster, node.address)).seq.toMap)
@@ -260,11 +258,11 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
             .minBy(entry => entry._2.getOrElse(Double.MaxValue))._2.get
           this.avgVivaldiDistance = vivDistances.values.flatten.sum / vivDistances.values.flatten.size
           this.vivaldiDistanceStdDev = ContrastMonitor.stdDev(vivDistances.values.flatten.toList)
-          log.info(s"updateNetworkState() - update complete" +
+          this.updateNetworkHops()
+          /*log.info(s"updateNetworkState() - update complete" +
             s"\n maximum vivaldi distance between client and publishers: ${ContrastMonitor.scale(maxPubToClientLatency, 2)}" +
             s"\n avg vivaldi distance: $avgVivaldiDistance, stddev: $vivaldiDistanceStdDev")
-
-          if(!isMininetSim) this.updateNetworkHops()
+           */
         }
       }
     } catch {
@@ -282,7 +280,6 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
       operators <- (mapek.knowledge ? GetOperators).mapTo[List[ActorRef]]
     } yield {
 
-      log.info("checking OperatorHost state")
       // check if an operator of the graph has an unreachable host (and no backup)
       // if yes, notify analyzer to trigger transition and/or placement algorithm execution
       val unreachableNodes: Set[Address] = cluster.state.unreachable.map(m => m.address)
@@ -297,19 +294,18 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
   }
 
   def calculateAverageHopsBetweenNodes: Double = {
-    if(!isMininetSim && this.networkHopsMap.nonEmpty || isMininetSim && vivDistances.nonEmpty) {
-      val networkHops = calculateNetworkHopsList()
+    //log.info(s"localSwarm: $isLocalSwarm mininet $isMininetSim \n networkHopsMap ${networkHopsMap.mkString("\n")} \n VivaldiMap ${vivDistances.mkString("\n")}")
+    // distributed docker swarm, or mininet with known link latency
+    if(isLocalSwarm) 1
+    else {
+      val networkHops = if (!isMininetSim) networkHopsMap.flatMap(_._2.values).toList
+                        else vivDistances.filter(_._2.isDefined).map(e => estimateNetworkHopsInMininet(e._2.get)).toList
       networkHops.sum.toDouble / networkHops.size
-    } else 0.0d
+    }
   }
 
-  def calculateNetworkHopsList(): List[Int] =
-    if(!isMininetSim) networkHopsMap.flatMap(_._2.values).toList
-    else {
-      vivDistances.filter(_._2.isDefined).map(e => estimateNetworkHopsInMininet(e._2.get)).toList
-    }
-
   def estimateNetworkHopsInMininet(latency: Double) = math.round(latency / fixedSimulationProperties.getOrElse('baseLatency, 30)).toInt
+
   /**
     * calculates the average amount of nodes that can be reached in N hops
     * (hops on the processing node network; number of hops inferred from the average link latency)
@@ -317,11 +313,10 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
     * @return the average number of nodes reachable in N hops
     */
   def calculateAverageNodesInNHops(hops: Int): Double = {
-    if(!isMininetSim && networkHopsMap.nonEmpty || isMininetSim && vivDistances.nonEmpty) {
-      val nodesInNHops: Map[Address, Int] = nodesWithinNHops(hops)
-      nodesInNHops.values.sum.toDouble / nodesInNHops.size
-    } else 0.0d
+    val nodesInNHops: Map[Address, Int] = nodesWithinNHops(hops)
+    nodesInNHops.values.sum.toDouble / nodesInNHops.size
   }
+
   /**
     * Calculates the gini coefficient of the number of nodes that can be reached from each node in n network hops.
     * This is meant to gauge the topology of the network; it indicates how centralized it is and how deep branches are
@@ -331,46 +326,54 @@ class ContrastMonitor(mapek: ContrastMAPEK, consumer: ActorRef, fixedSimulationP
     * @return gini coefficient of the amount of nodes reachable in n hops from each node
     */
   def calculateAverageNodesInNHopsGini(hops: Int): Double = {
-    if(!isMininetSim && networkHopsMap.nonEmpty || isMininetSim && vivDistances.nonEmpty) {
-      val connectionDegreesNHops = nodesWithinNHops(hops)
-      val nHopGiniCoefficient = ContrastMonitor.gini(connectionDegreesNHops.values.toList)
-      nHopGiniCoefficient
-    } else 0.0d
+    val connectionDegreesNHops = nodesWithinNHops(hops)
+    val nHopGiniCoefficient = ContrastMonitor.gini(connectionDegreesNHops.values.toList)
+    nHopGiniCoefficient
   }
 
   def nodesWithinNHops(n: Int) = {
     if(isMininetSim) nodesWithinNHopsMininet(n)
+    else if(isLocalSwarm) nodesWithinNHopsLocalSwarm(n)
     else nodesWithinNHopsTraceroute(n)
   }
   /**
+    * estimates the amount of nodes reachable in n hops within a mininet simulation with a known base link latency
     * @param n number of network hops (approximated by using the base link latency)
     * @return the number of nodes that can be reached from each node in n hops
     */
   def nodesWithinNHopsMininet(n: Int): Map[Address, Int] = {
-    val allNodes = cluster.state.members.filter(m => m.status == MemberStatus.Up && !m.hasRole("VivaldiRef"))
+    val allNodes = cluster.state.members.filter(m => m.status == MemberStatus.Up && !m.hasRole("Consumer"))
     val networkHops = vivDistances.filter(_._2.isDefined).map(e => e._1 -> estimateNetworkHopsInMininet(e._2.get))
     allNodes.map(node => node.address -> networkHops.filter(_._1._1.equals(node)).count(_._2 <= n)).toMap
   }
-
+  // full mesh in local docker swarm -> entire cluster is always reachable
+  def nodesWithinNHopsLocalSwarm(n: Int): Map[Address, Int] = {
+    val allNodes = cluster.state.members.filter(m => m.status == MemberStatus.Up && !m.hasRole("Consumer"))
+    allNodes.map(node => node.address -> allNodes.size).toMap
+  }
   def nodesWithinNHopsTraceroute(n: Int) : Map[Address, Int] = this.networkHopsMap.map(addr => addr._1 -> addr._2.count(_._2 <= n))
 
   /**
     * update the networkHopsMap containing the network hops between all address pairs; hops are measured using traceroute
     */
-  def updateNetworkHops(addresses: List[Member] = cluster.state.members.filter(m => m.status == MemberStatus.up && m != cluster.selfMember && !m.hasRole("VivaldiRef")).toList) = {
-    val requests = TCEPUtils.makeMapFuture(addresses.map(node => node -> {
-      for {
-        taskManager <- getTaskManagerOfMember(cluster, node)
-        hopsMap <- (taskManager ? GetNetworkHopsMap).mapTo[NetworkHopsMap]
-      } yield {
-        hopsMap.hopsMap
-      }
-    }).toMap)
-    requests.onComplete {
-      case Success(hopsMap) =>
-        this.networkHopsMap = hopsMap.map(e => e._1.address -> e._2)
+  def updateNetworkHops(addresses: List[Member] = cluster.state.members.filter(m => m.status == MemberStatus.up && m != cluster.selfMember && !m.hasRole("Consumer")).toList) = {
+    // traceroute does not work in a local docker swarm and mininet
+    if(!isMininetSim && !isLocalSwarm) {
+      implicit val timeout: Timeout = 10 seconds
+      val requests = TCEPUtils.makeMapFuture(addresses.map(node => node -> {
+        for {
+          taskManager <- getTaskManagerOfMember(cluster, node)
+          hopsMap <- (taskManager ? GetNetworkHopsMap).mapTo[NetworkHopsMap]
+        } yield {
+          hopsMap.hopsMap
+        }
+      }).toMap)
+      requests.onComplete {
+        case Success(hopsMap) =>
+          this.networkHopsMap = hopsMap.map(e => e._1.address -> e._2)
         //log.debug(s"updateNetworkHops - update successful: \n ${hopsMap.map(e => e._1 -> e._2.mkString("\n")).mkString("\n")}")
-      case Failure(exception) => log.error(exception, "failed to update network hops map for all addresses")
+        case Failure(exception) => log.error(exception, "failed to update network hops map for all addresses")
+      }
     }
   }
 }
@@ -434,7 +437,7 @@ object ContrastMonitor {
   def createContextDataUpdate(vivDistances: Map[(Member, Member), Option[Double]],
                               operatorTreeDepth: Int,
                               opCount: Int,
-                              currentLatency: Long,
+                              currentLatency: Double,
                               currentMsgHops: Int,
                               currentSystemLoad: Double,
                               currentPublishingRate: Double,
@@ -453,12 +456,12 @@ object ContrastMonitor {
                               avgNodesIn1HopGini: Double,
                               avgNodesIn2HopGini: Double,
                               avgHopsBetweenNodes: Double,
-                              fixedSimulationProperties: Map[Symbol, Int]): Map[String, AnyVal] = {
+                              fixedSimulationProperties: Map[Symbol, Int])(implicit log: LoggingAdapter): Map[String, AnyVal] = {
 
     val avgDistance: Double = vivDistances.values.flatten.sum / vivDistances.values.flatten.size
     val distanceStdDev = stdDev(vivDistances.values.flatten.toList)
     var contextDataUpdate: Map[String, AnyVal] = Map()
-    contextDataUpdate += (LATENCY -> currentLatency)
+    contextDataUpdate += (LATENCY -> scale(currentLatency, 0))
     contextDataUpdate += (MSG_HOPS -> currentMsgHops)
     contextDataUpdate += (AVG_LOAD -> scale(currentSystemLoad, LOAD_DIGITS))
     contextDataUpdate += (OVERHEAD -> msgOverhead)

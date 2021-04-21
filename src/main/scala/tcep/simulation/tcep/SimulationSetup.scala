@@ -28,11 +28,13 @@ import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success}
 
-class SimulationSetup(directory: Option[File], mode: Int, transitionMode: TransitionConfig, durationInMinutes: Option[Int] = None,
-                      startingPlacementAlgorithm: String = PietzuchAlgorithm.name, overridePublisherPorts: Option[Set[Int]] = None,
-                      queryString: String = "AccidentDetection", fixedSimulationProperties: Map[Symbol, Int] = Map(),
-                      mapek: String = "requirementBased", requirementStr: String = "latency", loadTestMax: Int = 1
-                     )(implicit val baseEventRate: Double) extends VivaldiCoordinates with ActorLogging {
+class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMinutes: Option[Int] = None,
+                      startingPlacementAlgorithm: String = PietzuchAlgorithm.name,
+                      queryString: String = "AccidentDetection",
+                      mapek: String = "requirementBased", requirementStr: String = "latency", loadTestMax: Int = 1,
+                      overridePublisherPorts: Option[Set[Int]] = None
+                     )(implicit val directory: Option[File], val baseEventRate: Double, combinedPIM: Boolean, fixedSimulationProperties: Map[Symbol, Int] = Map()
+) extends VivaldiCoordinates with ActorLogging {
 
   val transitionTesting = true
   val nSpeedPublishers = ConfigFactory.load().getInt("constants.number-of-speed-publisher-nodes")
@@ -64,6 +66,46 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
   val frequencyRequirement = frequency > Frequency(50, 5) otherwise None
   var graphs: Map[Int, QueryGraph] = Map()
   //val query = ConfigFactory.load().getStringList("constants.query")
+  // performance influence model paths for LearnOn
+  implicit val pimPaths: (String, String) = if(!Set(Mode.MADRID_TRACES, Mode.LINEAR_ROAD, Mode.YAHOO_STREAMING).contains(mode)) {
+    //("/performanceModels/combinedLatencyModel.log", "/performanceModels/combinedLoadModel.log") // just use this as default
+    (ConfigFactory.load().getString("constants.mapek.naive-latency-madrid-log-pim-path"), ConfigFactory.load.getString("constants.mapek.naive-load-madrid-log-pim-path"))
+  } else if (combinedPIM) {
+    (ConfigFactory.load().getString("constants.mapek.latency-combined-pim-path"), ConfigFactory.load().getString("constants.mapek.load-combined-pim-path"))
+  } else {
+    if (ConfigFactory.load().getBoolean("constants.learnon.naive-models")) {
+      mode match {
+        case Mode.MADRID_TRACES =>
+          (ConfigFactory.load().getString("constants.mapek.naive-latency-madrid-log-pim-path"), ConfigFactory.load.getString("constants.mapek.naive-load-madrid-log-pim-path"))
+        case Mode.LINEAR_ROAD =>
+          (ConfigFactory.load().getString("constants.mapek.naive-latency-linear-road-log-pim-path"), ConfigFactory.load.getString("constants.mapek.naive-load-linear-road-log-pim-path"))
+        case Mode.YAHOO_STREAMING =>
+          (ConfigFactory.load().getString("constants.mapek.naive-latency-yahoo-log-pim-path"), ConfigFactory.load.getString("constants.mapek.naive-load-yahoo-log-pim-path"))
+      }
+    } else {
+      if (ConfigFactory.load().getBoolean("constants.learnon.log-prediction")) {
+        mode match {
+          case Mode.MADRID_TRACES =>
+            (ConfigFactory.load().getString("constants.mapek.latency-madrid-log-pim-path"),ConfigFactory.load().getString("constants.mapek.load-madrid-pim-path"))//ConfigFactory.load().getString("constants.mapek.load-madrid-log-pim-path"))
+          case Mode.LINEAR_ROAD =>
+            (ConfigFactory.load().getString("constants.mapek.latency-linear-road-log-pim-path"), ConfigFactory.load().getString("constants.mapek.load-linear-road-pim-path"))//ConfigFactory.load().getString("constants.mapek.load-linear-road-log-pim-path"))
+          case Mode.YAHOO_STREAMING =>
+            (ConfigFactory.load().getString("constants.mapek.latency-yahoo-log-pim-path"), ConfigFactory.load().getString("constants.mapek.load-yahoo-pim-path"))//ConfigFactory.load().getString("constants.mapek.load-yahoo-log-pim-path"))
+        }
+      } else {
+        mode match {
+          case Mode.MADRID_TRACES =>
+            (ConfigFactory.load().getString("constants.mapek.latency-madrid-pim-path"),ConfigFactory.load().getString("constants.mapek.load-madrid-pim-path"))
+          case Mode.LINEAR_ROAD =>
+            (ConfigFactory.load().getString("constants.mapek.latency-linear-road-pim-path"), ConfigFactory.load().getString("constants.mapek.load-linear-road-pim-path"))
+          case Mode.YAHOO_STREAMING =>
+            (ConfigFactory.load().getString("constants.mapek.latency-yahoo-pim-path"), ConfigFactory.load().getString("constants.mapek.load-yahoo-pim-path"))
+        }
+      }
+    }
+  }
+  log.info(s"PIMPATHS are: ${pimPaths}")
+
 
   log.info(s"publisher ports: speed ($speedPublisherNodePorts) density: $densityPublisherNodePort \n $publisherPorts")
   lazy val speedPublishers: Vector[(String, ActorRef)] = publishers.toVector.filter(p => speedPublisherNodePorts.contains(p._2.path.address.port.getOrElse(-1)))
@@ -318,7 +360,6 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
         publisherActorBroadcastAcks.size >= minNumberOfTaskManagers &&
         consumers.size >= loadTestMax && !simulationStarted) {
         simulationStarted = true
-        SpecialStats.debug(s"$this", s"ready to start after $timeSinceStart, setting up simulation...")
         log.info(s"telling publishers to start streams...")
         publishers.foreach(p => p._2 ! StartStreams())
         this.consumers.foreach(c => TCEPUtils.guaranteedDelivery(context, c, SetStreams(this.getStreams())))
@@ -369,15 +410,14 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
         else averageSpeedQuery() // 18 operators
       }
 
-      val sim = if (splcDataCollection) {
+      val sim = if (splcDataCollection || this.mapek == "CONSTRAST" || this.mapek == "LearnOn") {
         new SPLCDataCollectionSimulation(
-          name = s"${transitionMode}-${placementStrategy.name}-${queryString}-${mapek}-${requirementStr}-$i", directory = directory,
-          query = query, transitionConfig = transitionConfig, publishers = publishers, consumer = consumers.toVector(i),
-          startingPlacementAlgorithm = Some(placementStrategy), allRecords = AllRecords(), mapekType = this.mapek)
+          name = s"${transitionMode}-${placementStrategy.name}-${queryString}-${mapek}-${requirementStr}-$i",
+          query, transitionConfig, publishers, consumers.toVector(i),
+          Some(placementStrategy), this.mapek)
         } else {
-            new Simulation(name = s"${transitionMode}-${placementStrategy.name}-${queryString}-${mapek}-${requirementStr}-$i", directory = directory,
-            query = query, transitionConfig = transitionConfig, publishers = publishers, consumer = consumers.toVector(i),
-            startingPlacementStrategy = Some(placementStrategy), allRecords = AllRecords(), mapekType = this.mapek)
+            new Simulation(name = s"${transitionMode}-${placementStrategy.name}-${queryString}-${mapek}-${requirementStr}-$i",
+              query, transitionConfig, publishers, consumers.toVector(i), Some(placementStrategy), this.mapek)
         }
 
     val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
@@ -397,7 +437,7 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
           val allAlgorithms = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala
           //val allAlgorithms = List(PietzuchAlgorithm.name, GlobalOptimalBDPAlgorithm.name)
           var mult = 2
-          val repetitions: Double = (totalDuration.-(firstDelay).div(requirementChangeDelay) - 2) / allAlgorithms.size
+          val repetitions: Double = 1// (totalDuration.-(firstDelay).div(requirementChangeDelay) - 2) / allAlgorithms.size
           for (repeat <- 0 until repetitions.toInt) {
             allAlgorithms.foreach(a => {
               val t = firstDelay.+(requirementChangeDelay.mul(mult))
@@ -425,7 +465,7 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
   // interactive simulation mode: select query and algorithm via GUI at runtime
   def testGUI(i: Int, j: Int, windowSize: Int): Unit = {
     try {
-      var mfgsSims: mutable.MutableList[Simulation] = mutable.MutableList()
+      var sims: mutable.MutableList[Simulation] = mutable.MutableList()
       var graphs: mutable.MutableList[QueryGraph] = mutable.MutableList()
       var currentTransitionMode: String = null
       @volatile var currentStrategyName: String = null
@@ -471,15 +511,25 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
         }
 
         val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
-        val mfgsSim = new Simulation(name = transitionMode, directory = directory, query = currentQuery,
-          TransitionConfig(mode, TransitionExecutionModes.CONCURRENT_MODE),
-          publishers = publishers, consumers.toVector(i),
-          startingPlacementStrategy = Some(PlacementStrategy.getStrategyByName(strategyName)),
-          allRecords = AllRecords(), fixedSimulationProperties = fixedSimulationProperties, mapekType = mapekName)
-        mfgsSims += mfgsSim
+
+        val sim = if (mapekName == "CONSTRAST" || mapekName == "LearnOn") {
+          new SPLCDataCollectionSimulation(
+            name = transitionMode,
+            currentQuery, TransitionConfig(mode, TransitionExecutionModes.CONCURRENT_MODE),
+            publishers, consumers.toVector(i),
+            Some(PlacementStrategy.getStrategyByName(strategyName)), mapekName)
+        } else {
+          new Simulation(transitionMode, currentQuery,
+            TransitionConfig(mode, TransitionExecutionModes.CONCURRENT_MODE),
+            publishers, consumers.toVector(i),
+            Some(PlacementStrategy.getStrategyByName(strategyName)),
+            mapekName)
+        }
+
+        sims += sim
 
         //start at 20th second, and keep recording data for 5 minutes
-        val graph = mfgsSim.startSimulation(query, startDelay, samplingInterval, FiniteDuration.apply(0, TimeUnit.SECONDS))(null)
+        val graph = sim.startSimulation(query, startDelay, samplingInterval, FiniteDuration.apply(0, TimeUnit.SECONDS))(null)
         graphs += graph
 
         currentTransitionMode = transitionMode
@@ -514,14 +564,14 @@ class SimulationSetup(directory: Option[File], mode: Int, transitionMode: Transi
       }
 
       val stop = () => {
-        mfgsSims.foreach(sim => {
+        sims.foreach(sim => {
           sim.stopSimulation()
         })
         graphs.foreach(graph => {
           graph.stop()
         })
         graphs = mutable.MutableList()
-        mfgsSims = mutable.MutableList()
+        sims = mutable.MutableList()
         if(strategyNameUpdate != null) strategyNameUpdate.cancel()
         currentStrategyName = null
         currentTransitionMode = null
@@ -738,46 +788,7 @@ case class RecordProcessingNodes() {
   }
 }
 
-case class AllRecords(recordLatency: RecordLatency = RecordLatency(),
-                      recordAverageLoad: RecordAverageLoad = RecordAverageLoad(),
-                      recordMessageHops: RecordMessageHops = RecordMessageHops(),
-                      recordFrequency: RecordFrequency = RecordFrequency(),
-                      recordMessageOverhead: RecordMessageOverhead = RecordMessageOverhead(),
-                      recordNetworkUsage: RecordNetworkUsage = RecordNetworkUsage(),
-                      recordPublishingRate: RecordPublishingRate = RecordPublishingRate(),
-                      recordTransitionStatus: Option[RecordTransitionStatus] = Some(RecordTransitionStatus()),
-                      recordProcessingNodes: Option[RecordProcessingNodes] = Some(RecordProcessingNodes())) {
-  def allDefined: Boolean =
-    recordLatency.lastMeasurement.isDefined &&
-    recordMessageHops.lastMeasurement.isDefined &&
-    recordAverageLoad.lastLoadMeasurement.isDefined &&
-    recordFrequency.lastMeasurement.isDefined &&
-    recordMessageOverhead.lastEventOverheadMeasurement.isDefined &&
-    recordMessageOverhead.lastPlacementOverheadMeasurement.isDefined &&
-    recordNetworkUsage.lastUsageMeasurement.isDefined /*&&
-    recordPublishingRate.lastRateMeasurement.isDefined*/
-  /*
-  SpecialStats.log(this.getClass.getSimpleName, "measurements", s"latency:${recordLatency.lastMeasurement.isDefined}")
-  SpecialStats.log(this.getClass.getSimpleName, "measurements", s"message hops:${recordMessageHops.lastMeasurement.isDefined}")
-  SpecialStats.log(this.getClass.getSimpleName, "measurements", s"average load:${recordAverageLoad.lastLoadMeasurement.isDefined}")
-  SpecialStats.log(this.getClass.getSimpleName, "measurements", s"frequency :${recordFrequency.lastMeasurement.isDefined}")
-  SpecialStats.log(this.getClass.getSimpleName, "measurements", s"event overhead :${recordOverhead.lastEventOverheadMeasurement.isDefined}")
-  SpecialStats.log(this.getClass.getSimpleName, "measurements", s"event overhead :${recordOverhead.lastPlacementOverheadMeasurement.isDefined}")
-  SpecialStats.log(this.getClass.getSimpleName, "measurements", s"network usage :${recordNetworkUsage.lastUsageMeasurement.isDefined}")
-  */
-  def getRecordsList: List[Measurement] = List(recordLatency, recordAverageLoad, recordMessageHops, recordFrequency, recordMessageOverhead, recordNetworkUsage, recordPublishingRate, recordTransitionStatus.get)
-  def getValues = this.getRecordsList.map {
-    case l: RecordLatency => l -> l.lastMeasurement
-    case l: RecordAverageLoad => l -> l.lastLoadMeasurement
-    case h: RecordMessageHops => h -> h.lastMeasurement
-    case f: RecordFrequency => f -> f.lastMeasurement
-    case o: RecordMessageOverhead => o -> (o.lastEventOverheadMeasurement, o.lastPlacementOverheadMeasurement)
-    case n: RecordNetworkUsage => n -> n.lastUsageMeasurement
-    case p: RecordPublishingRate => p -> p.lastRateMeasurement
-    case t: RecordTransitionStatus => t -> t.lastMeasurement
-    case pn: RecordProcessingNodes => pn -> pn.lastMeasurement
-  }
-}
+
 
 case class MobilityData(publisherSection: Int, speed: Double)
 case object SetMissingBandwidthMeasurementDefaults

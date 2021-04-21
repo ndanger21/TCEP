@@ -69,9 +69,9 @@ with open(applicationConfSourcePath) as f:
     minimum_members_line = re.sub(r'min-nr-of-members = \d+', 'min-nr-of-members = ' + str(total_node_count), f.read())
     gui_endpoint_line = re.sub('gui-endpoint = \"(.*?)\"', 'gui-endpoint = "http://' + manager_ip + ':3000"', minimum_members_line)
     ip_array.append(manager_ip)
-    ip_addresses_line = re.sub(r'host-ip-addresses = \[.*\]', 'host-ip-addresses = ' + json.dumps(ip_array), gui_endpoint_line)
-    disable_mininet_sim_line = re.sub(r'mininet-simulation = .*', 'mininet-simulation = false', ip_addresses_line)
-    replace_seed_node_line = re.sub(r' \"akka\.tcp://tcep@10\.0\.0\.253:\"\$\{\?constants\.base-port\}\"\"', ' #\"akka.tcp://tcep@10.0.0.253:\"${?constants.base-port}\"\"', disable_mininet_sim_line)
+    disable_mininet_sim_line = re.sub(r'mininet-simulation = .*', 'mininet-simulation = false', gui_endpoint_line)
+    disable_local_swarm_line = re.sub(r'isLocalSwarm = .*', 'isLocalSwarm = false', disable_mininet_sim_line)
+    replace_seed_node_line = re.sub(r' \"akka\.tcp://tcep@10\.0\.0\.253:\"\$\{\?constants\.base-port\}\"\"', ' #\"akka.tcp://tcep@10.0.0.253:\"${?constants.base-port}\"\"', disable_local_swarm_line)
     replace_seed_node_line = re.sub(r'#\"akka\.tcp://tcep@simulator:\"\$\{\?constants\.base-port\}\"\"', '\"akka.tcp://tcep@simulator:\"${?constants.base-port}\"\"', replace_seed_node_line)
 
 with open(applicationConfSourcePath, "w") as f:

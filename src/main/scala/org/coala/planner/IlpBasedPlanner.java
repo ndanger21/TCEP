@@ -278,8 +278,7 @@ public class IlpBasedPlanner implements Planner {
 			return finalConfiguration;
 		} catch(Throwable e) {
 			logger.error("PROBLEM WHILE SOLVING ILP with CPLEX: \n" + e.toString() );
-			e.printStackTrace();
-			return config;
+			throw e;
 		}
 	}
 

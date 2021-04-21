@@ -67,15 +67,15 @@ trait PlacementStrategy {
       Future { true }
     } else synchronized {
       this.placementMetrics.clear()
-      SpecialStats.log(s"${this.toString} $caller", "placementInit", s" placementStrategy was not yet initialized, fetching publisherActor list and bandwidths from local taskManager")
+      log.info(s" placementStrategy was not yet initialized, fetching publisherActor list and bandwidths from local taskManager")
       for {
         publisherMap <- TCEPUtils.getPublisherActors(cluster)
         bandwidthMap <- TCEPUtils.getAllBandwidthsFromLocalTaskManager(cluster)
       } yield {
-        SpecialStats.log(s"${this.toString} $caller", "placementInit", s" bw and pub requests complete (${bandwidthMap.size} bws, ${publisherMap.size} pubs")
+        log.info(s" bw and pub requests complete (${bandwidthMap.size} bws, ${publisherMap.size} pubs")
         this.publishers = publisherMap
         initialized = true
-        SpecialStats.log(s"${this.toString} $caller", "placementInit", s" algorithm initialization complete \n publishers: \n ${publishers.keys.mkString("\n")}")
+        log.info(s" algorithm initialization complete \n publishers: \n ${publishers.keys.mkString("\n")}")
         false
       }
 
@@ -195,8 +195,8 @@ trait PlacementStrategy {
         bw
       }
       request.onComplete {
-        case Success(bw) => SpecialStats.debug(s"$this", s"retrieved bandwidth $bw between $source and $target, caching it locally")
-        case Failure(exception) => SpecialStats.debug(s"$this", s"failed to retrieve bandwidth between $source and $target, cause: $exception")
+        case Success(bw) => log.debug(s"$this", s"retrieved bandwidth $bw between $source and $target, caching it locally")
+        case Failure(exception) => log.error(s"$this", s"failed to retrieve bandwidth between $source and $target, cause: $exception")
       }
       request
     }

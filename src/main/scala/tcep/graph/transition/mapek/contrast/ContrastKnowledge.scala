@@ -2,7 +2,7 @@ package tcep.graph.transition.mapek.contrast
 
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.transition.KnowledgeComponent
+import tcep.graph.transition.{KnowledgeComponent, MAPEK}
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData, GetOperatorTreeDepth, MonitoringDataUpdate}
 import tcep.placement.PlacementStrategy
 
@@ -12,7 +12,7 @@ import tcep.placement.PlacementStrategy
   * central sharing point for information regarding system and current context
   * @param mapek reference to the running MAPEK instance
   */
-class ContrastKnowledge(mapek: ContrastMAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: PlacementStrategy)
+class ContrastKnowledge(mapek: MAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: PlacementStrategy)
   extends KnowledgeComponent(query, transitionConfig, currentPlacementStrategy) {
 
   val operatorTreeDepth: Int = calculateOperatorTreeDepth(query)
@@ -23,7 +23,7 @@ class ContrastKnowledge(mapek: ContrastMAPEK, query: Query, transitionConfig: Tr
   override def preStart() = {
     super.preStart()
     cfm.exportCFMAsXML("logs/")
-    log.info(s"starting ContrastMAPEK as actor ${self} on path ${self.path}")
+    log.info(s"starting ContrastMAPEK as actor ${self} with dispatcher ${context.dispatcher}")
   }
 
   override def receive: Receive = super.receive orElse {

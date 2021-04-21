@@ -126,6 +126,7 @@ adjust_config() {
     echo "replacing gui server in config with $machine"
     echo "configuring application.conf for $nSpeedPublishers speed publishers and $nNodesTotal nodes total"
     sed -i -r "s#mininet-simulation = .*#mininet-simulation = true#" ${work_dir}/src/main/resources/application.conf
+    sed -i -r "s#isLocalSwarm = .*#isLocalSwarm = false#" ${work_dir}/src/main/resources/application.conf
     sed -i -r "s#min-nr-of-members = [0-9]*#min-nr-of-members = $nNodesTotal#" ${work_dir}/src/main/resources/application.conf
     sed -i -r "s#number-of-speed-publisher-nodes = [0-9]*#number-of-speed-publisher-nodes = $nSpeedPublishers#" ${work_dir}/src/main/resources/application.conf
     sed -i -r "s#number-of-road-sections = [0-9]*#number-of-road-sections = $sections#" ${work_dir}/src/main/resources/application.conf

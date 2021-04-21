@@ -8,8 +8,7 @@ import tcep.graph.transition.MAPEK.{GetLastTransitionEnd, GetTransitionStatus, I
 import tcep.graph.transition.mapek.lightweight.LightweightAnalyzer.{InitTransition, NodeUnreachable}
 import tcep.graph.transition.mapek.lightweight.LightweightMAPEK.GetConsumer
 import tcep.graph.transition.mapek.lightweight.LightweightPlanner.Plan
-import tcep.machinenodes.consumers.Consumer.GetAllRecords
-import tcep.simulation.tcep.AllRecords
+import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
 
 import scala.concurrent.Future
 import scala.concurrent.duration._

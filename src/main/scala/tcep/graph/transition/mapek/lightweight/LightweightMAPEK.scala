@@ -11,9 +11,8 @@ import tcep.placement.PlacementStrategy
 
 import scala.concurrent.duration.FiniteDuration
 
-class LightweightMAPEK(context: ActorContext, query: Query,transitionConfig: TransitionConfig, startingPlacementStrategy: PlacementStrategy/*, allRecords: AllRecords*/, consumer: ActorRef) extends MAPEK(context) {
+class LightweightMAPEK(context: ActorContext, query: Query,transitionConfig: TransitionConfig, startingPlacementStrategy: PlacementStrategy, consumer: ActorRef) extends MAPEK(context) {
 
-  val samplingInterval = new FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.SECONDS)
   val monitor: ActorRef = context.actorOf(Props(new LightweightMonitor(this)))
   val analyzer: ActorRef = context.actorOf(Props(new LightweightAnalyzer(this)))
   val planner: ActorRef = context.actorOf(Props(new LightweightPlanner(this)))

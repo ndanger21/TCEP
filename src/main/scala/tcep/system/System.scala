@@ -20,7 +20,7 @@ import scala.concurrent.{Await, Future}
 object System {
   val index = new AtomicInteger(0)
 }
-
+// do not use
 class System(context: ActorContext) {
   private val roots = ListBuffer.empty[ActorRef]
   private val placements = mutable.Map.empty[ActorRef, Host] withDefaultValue NoHost
@@ -28,7 +28,7 @@ class System(context: ActorContext) {
   def runQuery(query: Query, publishers: Map[String, ActorRef], createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback]) = {
     val monitorFactories: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query, Option.empty),
       DummyMonitorFactory(query))
-    val graphFactory = new QueryGraph(query, TransitionConfig(), publishers, None, createdCallback)(context, Cluster(context.system), 1.0)
+    val graphFactory = new QueryGraph(query, TransitionConfig(), publishers, None, createdCallback, null)(context, Cluster(context.system), 1.0)
 
     roots += graphFactory.createAndStart(eventCallback)
   }

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 work_dir="$(cd "$(dirname "$0")" ; pwd -P)/../"
+source "$work_dir/scripts/common_functions.sh"
 
 user=$USER
 mininet_sim_vms=("10.2.1.40" "10.2.1.42" "10.2.1.64")
@@ -83,17 +84,6 @@ start_controller() {
     echo "calling start_controller with $host $controller"
     ./publish_mininet-wifi.sh start_controller -u ${user} -h ${host} -c ${controller}
     popd
-}
-
-configure_passwordless_sudo() {
-    local host=$1
-    #line="$user ALL=(ALL:ALL) NOPASSWD: /usr/bin/python2.7, /usr/bin/mn, /usr/local/bin/mn /bin/cat /usr/sbin/visudo"
-    line="$user ALL=(ALL:ALL) NOPASSWD: ALL"
-    if [[ -z $(ssh ${user}@${host} "sudo cat /etc/sudoers | grep $line ") ]]; then
-        echo "add the following line to the end of /etc/sudoers of $host via visudo: "
-        echo ${line}
-        ssh -t ${host} "sudo visudo"
-    fi
 }
 
 setup_all() {

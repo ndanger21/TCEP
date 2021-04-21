@@ -3,11 +3,12 @@ package tcep.machinenodes.consumers
 import akka.actor.ActorLogging
 import tcep.data.Events.Event
 import tcep.data.Queries.{Query, Stream1}
+import tcep.dsl.Dsl.Measurement
 import tcep.graph.qos._
 import tcep.machinenodes.consumers.Consumer._
 import tcep.machinenodes.helper.actors.Message
 import tcep.placement.vivaldi.VivaldiCoordinates
-import tcep.simulation.tcep.AllRecords
+import tcep.simulation.tcep.{RecordAverageLoad, RecordFrequency, RecordLatency, RecordMessageHops, RecordMessageOverhead, RecordNetworkUsage, RecordProcessingNodes, RecordPublishingRate, RecordTransitionStatus}
 
 abstract class Consumer extends VivaldiCoordinates with ActorLogging {
 
@@ -30,7 +31,7 @@ abstract class Consumer extends VivaldiCoordinates with ActorLogging {
       log.info(s"Query is: ${this.query.toString}")
 
     case GetAllRecords =>
-      log.debug(s"${sender()} asked for AllRecords")
+      log.info(s"${sender()} asked for AllRecords, eventrate out/in: ${allRecords.recordPublishingRate.lastRateMeasurement} ${allRecords.recordFrequency.lastMeasurement}   load: ${allRecords.recordAverageLoad.lastLoadMeasurement}")
       sender() ! this.allRecords
 
     case GetMonitorFactories =>
@@ -83,4 +84,46 @@ object Consumer {
   case object SetQosMonitors
   //case class SetStreams(streams: (Vector[Stream1[MobilityData]],Vector[Stream1[Int]]))
   case class SetStreams(streams: Seq[Any]) extends Message
+
+  case class AllRecords(recordLatency: RecordLatency = RecordLatency(),
+                        recordAverageLoad: RecordAverageLoad = RecordAverageLoad(),
+                        recordMessageHops: RecordMessageHops = RecordMessageHops(),
+                        recordFrequency: RecordFrequency = RecordFrequency(),
+                        recordMessageOverhead: RecordMessageOverhead = RecordMessageOverhead(),
+                        recordNetworkUsage: RecordNetworkUsage = RecordNetworkUsage(),
+                        recordPublishingRate: RecordPublishingRate = RecordPublishingRate(),
+                        recordTransitionStatus: Option[RecordTransitionStatus] = Some(RecordTransitionStatus()),
+                        recordProcessingNodes: Option[RecordProcessingNodes] = Some(RecordProcessingNodes())) {
+    def allDefined: Boolean =
+      recordLatency.lastMeasurement.isDefined &&
+        recordMessageHops.lastMeasurement.isDefined &&
+        recordAverageLoad.lastLoadMeasurement.isDefined &&
+        recordFrequency.lastMeasurement.isDefined &&
+        recordMessageOverhead.lastEventOverheadMeasurement.isDefined &&
+        recordMessageOverhead.lastPlacementOverheadMeasurement.isDefined &&
+        recordNetworkUsage.lastUsageMeasurement.isDefined /*&&
+    recordPublishingRate.lastRateMeasurement.isDefined*/
+    /*
+    SpecialStats.log(this.getClass.getSimpleName, "measurements", s"latency:${recordLatency.lastMeasurement.isDefined}")
+    SpecialStats.log(this.getClass.getSimpleName, "measurements", s"message hops:${recordMessageHops.lastMeasurement.isDefined}")
+    SpecialStats.log(this.getClass.getSimpleName, "measurements", s"average load:${recordAverageLoad.lastLoadMeasurement.isDefined}")
+    SpecialStats.log(this.getClass.getSimpleName, "measurements", s"frequency :${recordFrequency.lastMeasurement.isDefined}")
+    SpecialStats.log(this.getClass.getSimpleName, "measurements", s"event overhead :${recordOverhead.lastEventOverheadMeasurement.isDefined}")
+    SpecialStats.log(this.getClass.getSimpleName, "measurements", s"event overhead :${recordOverhead.lastPlacementOverheadMeasurement.isDefined}")
+    SpecialStats.log(this.getClass.getSimpleName, "measurements", s"network usage :${recordNetworkUsage.lastUsageMeasurement.isDefined}")
+    */
+    def getRecordsList: List[Measurement] = List(recordLatency, recordAverageLoad, recordMessageHops, recordFrequency, recordMessageOverhead, recordNetworkUsage, recordPublishingRate, recordTransitionStatus.get)
+    def getValues = this.getRecordsList.map {
+      case l: RecordLatency => l -> l.lastMeasurement
+      case l: RecordAverageLoad => l -> l.lastLoadMeasurement
+      case h: RecordMessageHops => h -> h.lastMeasurement
+      case f: RecordFrequency => f -> f.lastMeasurement
+      case o: RecordMessageOverhead => o -> (o.lastEventOverheadMeasurement, o.lastPlacementOverheadMeasurement)
+      case n: RecordNetworkUsage => n -> n.lastUsageMeasurement
+      case p: RecordPublishingRate => p -> p.lastRateMeasurement
+      case t: RecordTransitionStatus => t -> t.lastMeasurement
+      case pn: RecordProcessingNodes => pn -> pn.lastMeasurement
+    }
+  }
 }
+

@@ -24,8 +24,7 @@ object PlannerHelper {
     */
   def extractModelFromFile(cfm: FM, filename: String): Option[PerformanceInfluenceModel] = {
 
-    //log.debug(s"extractModelFromFile() - entered, filename: ${filename}")
-
+    log.info(s"extractModelFromFile() - entered, filename: ${filename}")
     //if (res.toString.startsWith("jar:"))
       try {
       //log.debug(s"extractModelFromFile() - reading from jar, writing model to temporary file")

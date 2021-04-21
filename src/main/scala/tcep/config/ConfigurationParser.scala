@@ -55,6 +55,10 @@ trait ConfigurationParser {
         readArgs(map ++ Map('transitionExecutionMode -> value), tail)
       case "--loadTestMax" :: value :: tail =>
         readArgs(map ++ Map('loadTestMax -> value), tail)
+      case "--eventWaitTime" :: value :: tail =>
+        readArgs(map ++ Map('eventWaitTime -> value), tail)
+      case "--combinedPIM" :: value :: tail =>
+        readArgs(map ++ Map('combined -> value), tail)
       case option :: tail =>
         logger.error(s"Unknown option $option $tail");
         readArgs(map, tail)

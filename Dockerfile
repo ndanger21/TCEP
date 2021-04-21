@@ -39,7 +39,7 @@ RUN mkdir /app/cplex
 ENV CPLEX_LIB_PATH "/app/cplex/"
 ENV JMX_PORT 8484
 COPY ./libcplex1280.so /app/cplex/
-COPY ./cplex.jar /app/cplex/
+#COPY ./cplex.jar /app/cplex/
 COPY docker-entrypoint.sh /app/
 COPY mobility_traces/ /app/mobility_traces/
 RUN chmod +x /app/docker-entrypoint.sh

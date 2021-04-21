@@ -46,7 +46,7 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
           startedPublishing = true
           //timers.startTimerAtFixedRate(SendEventTickKey, SendEventTick, waitTime.micros)
           emitEventTask = sched.scheduleAtFixedRate(() => self ! SendEventTick, 10, waitTime, TimeUnit.MICROSECONDS)
-          logTask = sched.scheduleWithFixedDelay(() => self !  LogEventsSentTick, 5, 5, TimeUnit.SECONDS)
+          //logTask = sched.scheduleWithFixedDelay(() => self !  LogEventsSentTick, 5, 5, TimeUnit.SECONDS)
         }
 
       case SendEventTick =>

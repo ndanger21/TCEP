@@ -169,7 +169,7 @@ def topology(enable_tcep=True):
                                 % (COMMON_CONFIG, LOG_PATH, i+1, LOG_PATH, i+1, 8484-i-1, 8484-i-1, JARFILE, ARGS))
             info("*** %s Starting TCEP EmptyApp on %s with ARGS %s \n" % (datetime.datetime.now(), rsus[rsu_index], ARGS))
 
-        sim_rsu = rsus[4]  # the rsu at the intersection of the two main roads in the SUMO sim, IP: 20.0.0.15
+        sim_rsu = rsus[4]  # the rsu at the intersection of the two main roads in the SUMO sim, IP: 20.0.0.15 hosts densityPublisher and simulationRunner
         ARGS = '--dir %s/dp%i --ip %s --port %i --kind DensityPublisher --eventRate %s' \
                % (LOG_PATH, 1, sim_rsu.IP(), publisher_base_port + n_publishers, eventrate)
         info("*** %s Starting TCEP DensityPublisher on %s with ARGS %s\n" % (datetime.datetime.now(), sim_rsu, ARGS))

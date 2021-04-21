@@ -85,7 +85,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
       if(!guiBDPUpdateSent) {
         GUIConnector.sendBDPUpdate(event.monitoringData.networkUsage.sum, DistVivaldiActor.getLatencyValues())(cluster.selfAddress, blockingIoDispatcher) // this is the total BDP of the entire graph
         guiBDPUpdateSent = true
-        SpecialStats.debug(s"$this", s"hostInfo after update: ${hostInfo.operatorMetrics}")
+        log.info(s"$this", s"hostInfo after update: ${hostInfo.operatorMetrics}")
       }
       consumer ! event
       //monitors.foreach(monitor => monitor.onEventEmit(event, transitionStatus))

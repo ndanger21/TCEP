@@ -11,6 +11,7 @@ import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos._
 import tcep.publishers._
 
+// do not use
 case class BaseActor() extends Actor {
   val cluster = Cluster(this.context.system)
   implicit val creatorAddress: Address = cluster.selfAddress
@@ -64,7 +65,7 @@ case class BaseActor() extends Actor {
   val monitors: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query1, Option.empty),
                                               DummyMonitorFactory(query1))
 
-  val graphFactory = new QueryGraph(query1, TransitionConfig(), publishers, None, None)(context, cluster, 1.0 )
+  val graphFactory = new QueryGraph(query1, TransitionConfig(), publishers, None, None, self)(context, cluster, 1.0 )
 
   graphFactory.createAndStart(
     eventCallback = Some({

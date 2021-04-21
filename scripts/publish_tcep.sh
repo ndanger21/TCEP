@@ -7,7 +7,7 @@ work_dir="$(cd "$(dirname "$0")" ; pwd -P)/../"
 source "$work_dir/docker-swarm.cfg"
 source "$work_dir/scripts/common_functions.sh"
 if [ -z $2 ]; then
-  u=$USER
+  u=user
 else
   u=$2
 fi
@@ -15,6 +15,11 @@ if [ -z $3 ]; then
   host=$manager
 else
   host=$3
+fi
+if [[ ${host} == "localhost" ]]; then
+  local_run=true
+else
+  local_run=false
 fi
 token="undefined"
 maki_pat='^[10]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
@@ -35,14 +40,16 @@ setUser() {
 }
 
 all() {
-    adjust_cfg
-    ./build.sh
+    echo "running TCEP simulation with manager $host and workers $workers"
+    $local_run && echo "local_run $local_run"
     #setup
     START=$(date +%s.%N)
-    take_down_swarm && \
+    take_down_swarm
     swarm_token=$(init_manager) && \
     join_workers $swarm_token && \
     PUB_START=$(date +%s.%N) && \
+    adjust_cfg && \
+    ./build.sh && \
     publish && \
     END=$(date +%s.%N) && \
     TOT_DIFF=$(echo "$END - $START" | bc) && \
@@ -53,7 +60,12 @@ all() {
 
 adjust_cfg() {
     local sections=$n_speed_streams
-    local nNodesTotal=$((${#workers[@]}+1))
+    if $local_run; then
+      local nNodesTotal=7
+    else
+      local nNodesTotal=$((${#workers[@]}+1))
+    fi
+    # numberOfMininetMobilitySections nSpeedPublishers nNodesTotal GUIHost mininetSimulation mininetWifiSimulation
     adjust_config $sections $sections $nNodesTotal $host "false" "false"
 }
 
@@ -61,7 +73,7 @@ take_down_swarm() {
     setUser $manager
     echo "Taking down possible existing swarm with manager $manager"
     ssh -Tq -p $port $u@$manager 'docker stack rm tcep; docker swarm leave --force && docker network prune -f || exit 0;'
-    for i in "${workers[@]}"
+    $local_run || for i in "${workers[@]}"
     do
 	      setUser $i
 	      echo "$i leaving swarm"
@@ -77,7 +89,7 @@ setup() {
   else
     echo "$(date +%H:%M:%S) setting up manager $manager and workers $workers"
     count=0
-    for i in "${workers[@]}"
+    ${local_run} || for i in "${workers[@]}"
     do
       count=$((count+1))
       setUser $i
@@ -94,7 +106,11 @@ init_manager() {
     
      setUser $manager
     `ssh -T -p $port $u@$manager "sudo hostname node0; sudo systemctl restart docker"` 2> /dev/null
-    `ssh -T -p $port $u@$manager "docker swarm init --advertise-addr $manager"` 2> /dev/null
+    if $local_run; then
+      docker swarm init
+    else
+      `ssh -T -p $port $u@$manager "docker swarm init --advertise-addr $manager"` 2> /dev/null
+    fi
     # currently we are pushing jar file to all of the workers and building image locally on all of the workers
     # in future we should use docker registry service to create image on manager and use it as reference in worker nodes
     #ssh $user@$manager "docker service create --name registry --publish published=5000,target=5000 registry:2"
@@ -104,26 +120,39 @@ init_manager() {
 
 join_workers() {
     count=0
-    for i in "${workers[@]}"
+    ${local_run} || for i in "${workers[@]}"
     do
-        setUser $i
+      setUser $i
 	    count=$((count+1))
-        ssh $u@$i "echo 'processing worker $i'"
-        ssh -T -p $port $u@$i "docker swarm join --token $1 $manager:2377"
-        #ssh -T -p $port $u@$i "sudo systemctl restart docker" 2> /dev/null
-        # add labels to docker nodes so replicas can be deployed according to label
-        if [ "$count" -le "$n_publisher_nodes_total" ]; then
-          ssh -T -p $port $user@$manager "docker node update --label-add publisher=true node$count"
-          echo "added label publisher=true to node$count "
-        else
-          ssh -T -p $port $user@$manager "docker node update --label-add worker=true node$count"
-          echo "added label worker=true to node$count "
-        fi
+      ssh $u@$i "echo 'processing worker $i'"
+      ssh -T -p $port $u@$i "docker swarm join --token $1 $manager:2377"
+      #ssh -T -p $port $u@$i "sudo systemctl restart docker" 2> /dev/null
+      # add labels to docker nodes so replicas can be deployed according to label
+      if [ "$count" -le "$n_publisher_nodes_total" ]; then
+        ssh -T -p $port $user@$manager "docker node update --label-add publisher=true node$count"
+        echo "added label publisher=true to node$count "
+      else
+        ssh -T -p $port $user@$manager "docker node update --label-add worker=true node$count"
+        echo "added label worker=true to node$count "
+      fi
     done
+    ${local_run} && docker node update --label-add worker=true node0 && docker node update --label-add publisher=true node0
     ssh -T -p $port $u@$manager "docker node update --label-add subscriber=true node0"
     echo "added label subscriber=true to node0"
 }
 
+rebootSwarm() {
+    ##take_down_swarm
+    for i in "${workers[@]}"
+    do
+	      setUser $i
+        echo "rebooting worker $i"
+        ssh -p $port $u@$i "sudo reboot" &>/dev/null
+    done
+    echo "rebooting manager"
+    setUser $manager
+    ssh -p $port $u@$manager "sudo reboot" &>/dev/null
+}
 
 # get the output from the manager node
 # Usage bash publish_tcep.sh getOutput
@@ -144,7 +173,12 @@ clear_logs() {
 
 }
 
-publish() {
+build_image() {
+  adjust_cfg && \
+  ./build.sh
+}
+
+publish_no_build() {
     get_output
     clear_logs
     setUser $manager
@@ -164,18 +198,10 @@ publish() {
     #clear_logs
 }
 
-rebootSwarm() {
-    ##take_down_swarm
-    for i in "${workers[@]}"
-    do
-	      setUser $i
-        echo "rebooting worker $i"
-        ssh -p $port $u@$i "sudo reboot" &>/dev/null
-    done
-    echo "rebooting manager"
-    setUser $manager
-    ssh -p $port $u@$manager "sudo reboot" &>/dev/null
+publish() {
+  build_image && publish_no_build
 }
+
 
 
 # Set the port variable default to 22 if not set

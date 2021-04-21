@@ -25,8 +25,8 @@ build_local() {
   cp $work_dir/target/scala-2.12/tcep_2.12-0.0.1-SNAPSHOT-one-jar.jar $work_dir/dockerbuild
   cp $work_dir/Dockerfile $work_dir/dockerbuild
   cp $work_dir/docker-entrypoint.sh $work_dir/dockerbuild
-  cp $work_dir/cplex/libcplex1280.so $work_dir/dockerbuild/
-  cp $work_dir/cplex/cplex.jar $work_dir/dockerbuild/
+  cp $work_dir/lib/libcplex1280.so $work_dir/dockerbuild/
+  #cp $work_dir/lib/cplex.jar $work_dir/dockerbuild/
   cp -r $work_dir/mobility_traces $work_dir/dockerbuild/
   docker build -t $registry_user/$tcep_image $work_dir/dockerbuild && \
   printf "\nBuilding GUI image\n" && \

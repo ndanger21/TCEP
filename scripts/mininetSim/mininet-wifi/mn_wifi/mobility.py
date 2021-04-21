@@ -176,8 +176,13 @@ class Mobility(object):
                     intf.associate_infra(ap_intf)
                     end = datetime.datetime.now()
                     # clear flow entries with macs of moved node (when not using ONOS HostMobility module)
-                    debug(datetime.datetime.now(), 'node %s has roamed from %s to other ap %s\n'
-                         % (intf.node, prevAP, intf.associatedTo))
+                    debug(datetime.datetime.now(), 'node %s has roamed from %s to other ap %s\n' % (intf.node, prevAP, intf.associatedTo))
+                    # write handovers to file for TCEP mapek-monitor
+                    # TODO might want to do this via socket instead
+                    with open('handovers.csv', 'a') as linkChange_file:
+                        millis = int(round(time() * 1000))
+                        timestamp = datetime.datetime.now()
+                        linkChange_file.write('%s,%s,%s,%s,%s\n' % (millis, intf.node, prevAP, intf.associatedTo, timestamp))
 
                     # clearing flows on handover is handled by ONOS
                     for ap in self.aps:

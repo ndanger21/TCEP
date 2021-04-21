@@ -12,9 +12,9 @@ chmod -R a+w /app/logs
 # https://publib.boulder.ibm.com/httpserv/cookbook/Major_Tools-IBM_Memory_Analyzer_Tool.html#Major_Tools-IBM_Memory_Analyzer_Tool_MAT-Standalone_Installation
 # set path for CPLEX library needed for CONTRAST
 # enable remote profiling with visualvm when executing on localhost
+# add  -Xverbosegclog:"/app/logs/jvm_gc.txt" \ for JVM garbage collection log
 java \
   -DlogFilePath=${LOG_FILE_PATH} \
-  -Xverbosegclog:"/app/logs/jvm_gc.txt" \
   -DIBM_HEAPDUMP=true \
   -DIBM_HEAPDUMP_OUTOFMEMORY=true \
   -DIBM_HEAPDUMPDIR="/app/logs/" \

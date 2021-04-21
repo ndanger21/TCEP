@@ -40,13 +40,15 @@ object SpecialStats {
       })
       log.clear()
 
-      val debugFile = new PrintStream(new BufferedOutputStream(new FileOutputStream(new File(logFilePath, s"debug-$debugID.csv"), true)))
-      val sb = new mutable.StringBuilder()
-      debug.forEach(l => sb.append(l + "\n"))
-      debugFile.append(sb.toString)
-      debugFile.flush()
-      debugFile.close()
-      debug.clear()
+      if(!debug.isEmpty) {
+        val debugFile = new PrintStream(new BufferedOutputStream(new FileOutputStream(new File(logFilePath, s"debug-$debugID.csv"), true)))
+        val sb = new mutable.StringBuilder()
+        debug.forEach(l => sb.append(l + "\n"))
+        debugFile.append(sb.toString)
+        debugFile.flush()
+        debugFile.close()
+        debug.clear()
+      }
     }
     catch {
       case e: Throwable => logger.error("error in SpecialStats logger: ", e)

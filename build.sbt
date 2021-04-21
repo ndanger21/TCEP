@@ -20,6 +20,8 @@ libraryDependencies ++= Seq(
   "org.scalaj" %% "scalaj-http" % "2.4.1",
   "commons-lang" % "commons-lang" % "2.6",
   "com.google.guava" % "guava" % "19.0",
+  "org.scalanlp" %% "breeze" % "1.0",           //Added for Linear Algebra in Benedikt's thesisw
+  "org.scalanlp" %% "breeze-natives" % "1.0",
   "com.typesafe.akka" %% "akka-testkit" % akkaVersion  % "test",
   "com.typesafe.akka" %% "akka-multi-node-testkit" % akkaVersion % "test",
   "org.scalatest"     %% "scalatest"    % "3.0.1"   % "test",
@@ -32,13 +34,14 @@ resolvers += "XypronRelease" at "https://www.xypron.de/repository"
 libraryDependencies += "org.gnu.glpk" % "glpk-java" % "1.11.0"
 resolvers += "CardyGAn" at "https://github.com/Echtzeitsysteme/cardygan-mvn/raw/master"
 libraryDependencies += "org.coala" % "coala-core" % "0.0.5-SNAPSHOT"
+//resolvers += "JenaBio" at "https://bio.informatik.uni-jena.de/repository/libs-release-oss/"
+//libraryDependencies += "cplex" % "cplex" % "12.8"
 //dependencyOverrides += "org.cardygan" % "ilp" % "0.1.12" // force correct cardygan ilp version
 // force older version because org.eclipse.xtext v2.12.0 tries to use the field EOF_TOKEN from org.antlr.runtime, which is not present in newest version
 dependencyOverrides += "org.antlr" % "antlr-runtime" % "3.2"
-//dependencyOverrides += "org.eclipse.emf" % "org.eclipse.emf.common" % "2.15.0"
-// explicitly add version 2.23.0 to avoid assembly merge conflicts
+// explicitly add most recent version to avoid assembly merge conflicts due to strange transitive dependency structure of emf ecore and common
 libraryDependencies += "org.eclipse.emf" % "org.eclipse.emf.ecore" % "2.23.0"
-
+libraryDependencies += "org.eclipse.emf" % "org.eclipse.emf.common" % "2.20.0"
 
 import com.typesafe.sbt.SbtMultiJvm.multiJvmSettings
 

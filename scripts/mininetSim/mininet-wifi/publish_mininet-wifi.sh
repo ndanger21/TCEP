@@ -106,10 +106,10 @@ if [ -z "$duration" ]; then
    duration=2
 fi
 if [ -z "$mapek" ]; then
-    mapek='requirementBased'
+    mapek='LearnOn'
 fi
 if [ -z "$req" ]; then
-    req="hops"
+    req="load"
 fi
 if [ -z "$query" ]; then
   query="Conjunction"
@@ -118,7 +118,7 @@ if [ -z "$algorithm" ]; then
    algorithm="Relaxation"
 fi
 if [ -z "$controller_ip" ]; then
-  controller_ip="10.0.30.15"
+  controller_ip="localhost"
 fi
 if [ -z "$nSpeedPublishers" ]; then
   nSpeedPublishers=8
@@ -136,11 +136,11 @@ if [ -z "$transitionExecutionMode" ]; then
   transitionExecutionMode="1"
 fi
 if [ -z "$eventrate" ]; then
-  eventrate="10"
+  eventrate="100"
 fi
 host=${u}@${machine}
 if [[ ${controller_ip} == "localhost" ]] || [[ ${controller_ip} == "127.0.0.1" ]]; then
-  gui_ip="172.30.0.254"
+  gui_ip="localhost"
 else
   gui_ip=${controller_ip}
 fi
@@ -190,6 +190,10 @@ setup() {
   scp mn_wifi/*.py $host:~/tcep/mininet-wifi/mn_wifi/ && \
   scp mn_wifi/sumo/*.py $host:~/tcep/mininet-wifi/mn_wifi/sumo/ && \
   ssh -t ${host} 'cd ~/tcep/mininet-wifi && sudo make install'
+
+  ssh $host [ ! -f ~/tcep/cplex/cplex.jar ] \
+  && ssh $host "mkdir -p ~/tcep/cplex" \
+  && scp ${work_dir}/lib/cplex.jar ${work_dir}/lib/libcplex1280.so ${host}:~/tcep/cplex/
 
   scp  *.py $host:~/tcep/mininet-wifi/
   scp ${work_dir}/src/main/resources/application.conf $host:~/tcep/

@@ -34,8 +34,6 @@ case class PathLatencyMonitor(query: Query, recordLatency: Option[LatencyMeasure
     val accumulatedLatency = Duration.ofMillis(event.monitoringData.latency)
     val startTime: Long = event.monitoringData.creationTimestamp
     val end2endLatencyMeasurement = Duration.ofMillis(System.currentTimeMillis() - startTime)
-    //SpecialStats.debug("PathLatencyMonitor", s"accumulatedLatency: ${accumulatedLatency}")
-    //SpecialStats.debug("PathLatencyMonitor", s"end2endLatency: ${end2endLatencyMeasurement}")
 
     if (recordLatency.isDefined) recordLatency.get.apply(end2endLatencyMeasurement)
     if (latencyRequirement.isDefined && latencyRequirement.get.otherwise.isDefined &&
