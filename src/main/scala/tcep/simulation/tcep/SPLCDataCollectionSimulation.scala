@@ -66,14 +66,14 @@ class SPLCDataCollectionSimulation(
     s"\t linkChanges"*/
   /*def logHeader: String = ConfigFactory.load().getString("constants.mapek.learning-model")*/
   def logHeader: String = {
-    if (this.learningModel.equals("Lightweight")) {
+    if (this.learningModel.equals("lightweight")) {
       s"Time \t Algorithm" +
         s"\t latency" +
         s"\t cpuUsage" +
         s"\t eventPublishRate \t eventArrivalRate " +
         s"\t TransitionStatus" +
         s"\t AlgorithmFitnesses \t AlgorithmSelectionProbabilities "
-    } else if (this.learningModel.equals("LearnOn")) {
+    } else if (this.learningModel.equals("learnon")) {
       s"Time \t Algorithm" +
         s"\t latency \t estLatency" +
         s"\t cpuUsage \t estLoad" +
