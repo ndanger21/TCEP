@@ -7,6 +7,7 @@ sumo 1.5.0
 sumo-gui"""
 
 import os
+import os.path
 import datetime
 import time
 import sys
@@ -98,10 +99,12 @@ def topology(enable_tcep=True):
     for car in net.cars:
         car.setIP('20.0.0.%s/24' % (int(net.cars.index(car))+101), intf='%s-wlan0' % car.name)
         car.cmd('ip route add %s via 20.0.0.254' % gui_subnet)
+        car.cmd('export PATH=/opt/ibm/java-x86_64-80/bin:$PATH CPLEX_LIB_PATH=%s/tcep/cplex/' % homedir)
 
     for i in range(0, len(rsus)):
         rsus[i].setIP('20.0.0.%s/24' % (i + 11))
         rsus[i].cmd('ip route add %s via 20.0.0.254' % gui_subnet)
+        rsus[i].cmd('export PATH=/opt/ibm/java-x86_64-80/bin:$PATH CPLEX_LIB_PATH=%s/tcep/cplex/' % homedir)
 
     time.sleep(15.0)
     info('*** checking if wpa_supplicant was started successfully (sometimes fails to start for reasons unknown)\n')
@@ -134,10 +137,10 @@ def topology(enable_tcep=True):
         info("*** %s Starting TCEP on cars and RSUs \n" % datetime.datetime.now())
 
         COMMON_CONFIG = '-XX:+UseParallelGC -XX:+UseNUMA -Xmx2048m  ' \
-                        '-XX:+HeapDumpOnOutOfMemoryError -DIBM_HEAPDUMP=true -DIBM_HEAPDUMP_OUTOFMEMORY=true -DCPLEX_LIB_PATH="%s/tcep/cplex/" ' \
+                        '-XX:+HeapDumpOnOutOfMemoryError -DIBM_HEAPDUMP=true -DIBM_HEAPDUMP_OUTOFMEMORY=true ' \
                         '-Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.local.only=false ' \
                         '-Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false ' \
-                        '-Djava.rmi.server.hostname=localhost ' % homedir
+                        '-Djava.rmi.server.hostname=localhost '
         LOG_PATH = '%s/tcep/logs' % homedir
 
         # start publishers on cars
@@ -216,6 +219,7 @@ def topology(enable_tcep=True):
 
 
 if __name__ == '__main__':
+    assert os.path.exists('/opt/ibm/java-x86_64-80/bin')
     setLogLevel('info')
     info("python args: %s" % sys.argv)
     # global constants

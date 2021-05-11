@@ -24,9 +24,6 @@ import scala.sys.process._
 object SimulationRunner extends App with ConfigurationParser {
 
   logger.info("booting up simulation runner, args: " + args.toList.toString())
-  logger.info(s"CPLEX lib path env var: ${System.getenv("CPLEX_LIB_PATH")}")
-  logger.info(s"IBM_heapdumpdir env var: ${System.getenv("IBM_HEAPDUMPDIR")}")
-  logger.info(s"main env var: ${System.getenv("MAIN")}")
 
   if(args.length <3 ){
     logger.info("Not enough arguments")
