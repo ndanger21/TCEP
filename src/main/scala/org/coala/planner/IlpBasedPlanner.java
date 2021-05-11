@@ -271,11 +271,14 @@ public class IlpBasedPlanner implements Planner {
 
 			final long durationNanoSecs = TimeUnit.NANOSECONDS.convert(res.getStatistics().getDuration(),
 					TimeUnit.MILLISECONDS);
+			if(res.getStatistics().isFeasible()) {
+				bus.fireEvent(new MilpSolverFinishedEvent(durationNanoSecs, res.getObjVal()));
 
-			bus.fireEvent(new MilpSolverFinishedEvent(durationNanoSecs, res.getObjVal()));
-
-			final Config finalConfiguration = FmUtils.getConfig(fm, scaling, res);
-			return finalConfiguration;
+				final Config finalConfiguration = FmUtils.getConfig(fm, scaling, res);
+				return finalConfiguration;
+			} else {
+				throw new IllegalStateException("no feasible solution found");
+			}
 		} catch(Throwable e) {
 			logger.error("PROBLEM WHILE SOLVING ILP with CPLEX: \n" + e.toString() );
 			throw e;
