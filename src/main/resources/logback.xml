@@ -1,23 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-
-   <!-- <statusListener class="ch.qos.logback.core.status.NopStatusListener" />  suppress logging configuration output-->
     <timestamp key = "myTimestamp" datePattern="dd-MM-yyyy'_'HH-mm-ss:SSS"/>
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file> ${logFilePath}/${MAIN}-${myTimestamp}.log</file>
-        <append>false</append>
-        <!-- set immediateFlush to false for much higher logging throughput, but unflushed log entries are lost on crash -->
-        <immediateFlush>true</immediateFlush>
+        <file>${logFilePath}/${MAIN}-${myTimestamp}.log</file>
+        <immediateFlush>false</immediateFlush>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
             <fileNamePattern>logFile.%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>7</maxHistory>
-            <totalSizeCap>50MB</totalSizeCap>
         </rollingPolicy>
-
         <encoder>
-            <!-- use %X{sourceThread} to show the actual thread that executed the code, not the thread running the logger asynchronously -->
-            <pattern>%d{HH:mm:ss.SSS}  %-5level[%X{sourceThread}] %logger{36}  - %msg%n%rEx</pattern>
+            <!--<pattern>%d{HH:mm:ss.SSS}  %-5level[%X{sourceThread}] %logger{36}  - %msg%n%rEx</pattern>-->
+            <pattern>[%date{ISO8601}] [%level] [%logger] [%thread] - %msg MDC: {%mdc}%n</pattern>
         </encoder>
     </appender>
+
+    <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>8192</queueSize>
+        <neverBlock>true</neverBlock>
+        <appender-ref ref="FILE" />
+    </appender>
+
     <!-- separate logfile for placement algorithms -->
     <appender name="PLACEMENT-ALGORITHMS-FILE" class="ch.qos.logback.core.FileAppender">
         <file> ${logFilePath}/placementAlgorithms.csv</file>
@@ -25,23 +26,15 @@
         <!-- set immediateFlush to false for much higher logging throughput -->
         <immediateFlush>true</immediateFlush>
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS}; %-5level[%thread]; %logger{0} ;%msg%n%rEx</pattern>
+            <pattern>%d{HH:mm:ss.SSS}; %-5level[%X{sourceThread}]; %logger{0} ;%msg%n%rEx</pattern>
         </encoder>
     </appender>
     <!-- define separate logger for placement algorithm logging -->
     <logger name="tcep.placement.PlacementStrategy" level="DEBUG" additivity="false">
         <appender-ref ref="PLACEMENT-ALGORITHMS-FILE"/>
     </logger>
-    <!--
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <target>System.out</target>
-        <encoder>
-            <pattern>%d{HH:mm:ss.SSS}; %-5level[%thread]; %logger{0} ;%msg%n%rEx</pattern>
-        </encoder>
-    </appender>
-    -->
+
     <root level="INFO">
-        <!--<appender-ref ref="CONSOLE"/>-->
-        <appender-ref ref="FILE"/>
+        <appender-ref ref="ASYNC"/>
     </root>
 </configuration>
