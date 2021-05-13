@@ -36,7 +36,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
                      )(implicit val directory: Option[File], val baseEventRate: Double, combinedPIM: Boolean, fixedSimulationProperties: Map[Symbol, Int] = Map()
 ) extends VivaldiCoordinates with ActorLogging {
 
-  val transitionTesting = true
+  val transitionTesting = false
   val nSpeedPublishers = ConfigFactory.load().getInt("constants.number-of-speed-publisher-nodes")
   val nSections = ConfigFactory.load().getInt("constants.number-of-road-sections")
   val minNumberOfMembers = ConfigFactory.load().getInt("akka.cluster.min-nr-of-members")
@@ -421,7 +421,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
         }
 
     val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
-      log.info(s"starting $transitionMode ${placementStrategy.name} algorithm simulation number $i (progress: $percentage with requirementChanges $requirementChanges \n and query $query")
+      log.info(s"starting $transitionMode ${placementStrategy.name} algorithm simulation number $i (progress: $percentage) with requirementChanges $requirementChanges \n and query $query")
       val graph = sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback) // (start simulation time, interval, end time (s))
       graphs = graphs.+(i -> graph)
       context.system.scheduler.scheduleOnce(totalDuration)(this.shutdown())
@@ -437,7 +437,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
           val allAlgorithms = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala
           //val allAlgorithms = List(PietzuchAlgorithm.name, GlobalOptimalBDPAlgorithm.name)
           var mult = 2
-          val repetitions: Double = 1// (totalDuration.-(firstDelay).div(requirementChangeDelay) - 2) / allAlgorithms.size
+          val repetitions: Double =  (totalDuration.-(firstDelay).div(requirementChangeDelay) - 2) / allAlgorithms.size
           for (repeat <- 0 until repetitions.toInt) {
             allAlgorithms.foreach(a => {
               val t = firstDelay.+(requirementChangeDelay.mul(mult))
@@ -672,9 +672,9 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
 
       case Mode.SPLC_DATACOLLECTION =>
         val used_mapek = ConfigFactory.load().getString("constants.mapek.type")
-        this.runSimulation(1, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), TransitionConfig(TransitionModeNames.SMS, TransitionExecutionModes.CONCURRENT_MODE),
-                           () => log.info(s"MFGS $startingPlacementAlgorithm algorithm Simulation with SPLC data collection enabled ended"),
-                           Set(latencyRequirement), Some(Set(messageHopsRequirement)), used_mapek == "CONTRAST")
+        this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), transitionMode,
+          () => log.info(s"$transitionMode $startingPlacementAlgorithm algorithm Simulation with SPLC data collection enabled ended"),
+          Set(latencyRequirement), Some(Set(messageHopsRequirement)), true)
 
       case Mode.TEST_GUI => this.testGUI(0, 0, 1)
       case Mode.DO_NOTHING => log.info("simulation ended!")

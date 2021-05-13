@@ -67,7 +67,7 @@ abstract class ExecutorComponent(mapek: MAPEK) extends MAPEKComponent {
           mapek.knowledge ! SetPlacementStrategy(placementStrategy)
           log.info(s"executing $mode transition to ${placementStrategy.name}")
           client ! TransitionRequest(placementStrategy, self, TransitionStats(0, 0, System.currentTimeMillis()))
-        } else log.info(s"received ExecuteTransition message: not executing transition to $strategyName " +
+        } else log.info(s"received ExecuteTransition message: not executing $mode transition to $strategyName " +
           s"since it is already active or another transition is still in progress (status: $status)")
       }
   }
@@ -82,7 +82,7 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
   var transitionStatus: Int = 0
   var lastTransitionStats: TransitionStats = TransitionStats()
   var previousLatencies: Vector[(Long, Long)] = Vector()
-  //val freqMonitor = AverageFrequencyMonitorFactory(query, None).createNodeMonitor
+  val freqMonitor = AverageFrequencyMonitorFactory(query, None).createNodeMonitor
   var operators: Set[ActorRef] = Set()
   var backupOperators: Set[ActorRef] = Set()
 

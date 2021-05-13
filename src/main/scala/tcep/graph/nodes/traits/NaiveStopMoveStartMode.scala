@@ -151,7 +151,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
 
   def moveOperatorNSMS(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
     try {
-      transitionLog(s"executing $modeName ${this.isInstanceOf[NaiveStopMoveStartMode]} transition to ${algorithm.name} requested by ${requester}")
+      transitionLog(s"executing NaiveStopMoveStartMode ${this.isInstanceOf[NaiveStopMoveStartMode]} transition to ${algorithm.name} requested by ${requester}")
       transitionLogPublisher ! OperatorTransitionBegin(self)
       val startTime = System.currentTimeMillis()
 

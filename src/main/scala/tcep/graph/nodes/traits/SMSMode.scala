@@ -69,7 +69,7 @@ trait SMSMode extends TransitionMode {
 
   override def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
       try {
-        transitionLog(s"executing $modeName transition to ${algorithm.name} requested by ${requester}")
+        transitionLog(s"executing SMS transition to ${algorithm.name} requested by ${requester}")
         transitionLogPublisher ! OperatorTransitionBegin(self)
         val startTime = System.currentTimeMillis()
         //val updatedStats = updateTransitionStats(stats, self, stats.transitionOverheadBytes, stats.placementOverheadBytes, Some(stats.transitionTimesPerOperator.updated(self, System.currentTimeMillis())))

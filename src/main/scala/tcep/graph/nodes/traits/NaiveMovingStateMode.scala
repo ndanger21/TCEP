@@ -138,7 +138,7 @@ trait NaiveMovingStateMode extends TransitionMode {
   def moveOperatorNMS(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
    try {
      if(startOperatorMigrationTask != null) startOperatorMigrationTask.cancel()
-     transitionLog(s"executing $modeName transition to ${algorithm.name} requested by ${requester}")
+     transitionLog(s"executing NaiveMovingStateMode transition to ${algorithm.name} requested by ${requester}")
      transitionLogPublisher ! OperatorTransitionBegin(self)
      val startTime = System.currentTimeMillis()
      // immediately stop processing events

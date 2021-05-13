@@ -70,7 +70,7 @@ trait MFGSMode extends TransitionMode {
   override def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
 
     try {
-      transitionLog(s"executing $modeName ${this.isInstanceOf[MFGSMode]} transition to ${algorithm.name} requested by ${requester}")
+      transitionLog(s"executing MFGS ${this.isInstanceOf[MFGSMode]} transition to ${algorithm.name} requested by ${requester}")
       transitionLogPublisher ! OperatorTransitionBegin(self)
       val startTime = System.currentTimeMillis()
       var downTime: Option[Long] = None
