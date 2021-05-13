@@ -143,6 +143,8 @@ class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with Sy
       TCEPUtils.getMaximumBDPBetweenNodes(cluster, cluster.selfMember, target)(blockingIoDispatcher) pipeTo s // this is a future
 
     case GetNetworkHopsMap =>
+      sender() ! NetworkHopsMap(Map())
+      /*
       implicit val ec: ExecutionContext = blockingIoDispatcher
       val s = sender()
       implicit val timeout = Timeout(5 seconds)
@@ -170,7 +172,7 @@ class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with Sy
           s ! NetworkHopsMap(networkHopsMap)
         case Failure(exception) => log.error(exception, s"failed to determine network hops from ${cluster.selfAddress} to other cluster members")
       }
-
+      */
 
     case request: SingleBandwidthRequest => bandwidthEstimator.forward(request)
     case r: AllBandwidthsRequest => bandwidthEstimator.forward(r)
