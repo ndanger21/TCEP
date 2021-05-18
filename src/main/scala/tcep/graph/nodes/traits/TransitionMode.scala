@@ -1,14 +1,13 @@
 package tcep.graph.nodes.traits
 
-import java.time.Duration
-
-import akka.actor.{ActorLogging, ActorRef, Terminated}
+import akka.actor.{ActorLogging, ActorRef, Props, Terminated}
 import akka.cluster.Cluster
 import tcep.ClusterActor
 import tcep.data.Events.{Event, updateMonitoringData}
 import tcep.data.Queries.Query
 import tcep.graph.EventCallback
 import tcep.graph.nodes.traits.Node.{Dependencies, Subscribe, UnSubscribe}
+import tcep.graph.qos.OperatorQosMonitor
 import tcep.graph.transition.MAPEK.{AddOperator, RemoveOperator}
 import tcep.graph.transition._
 import tcep.machinenodes.helper.actors.ACK
@@ -16,6 +15,7 @@ import tcep.placement.{HostInfo, OperatorMetrics, PlacementStrategy}
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.utils.TCEPUtils
 
+import java.time.Duration
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.{ExecutionContext, Future}
@@ -35,6 +35,8 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
   var transitionInitiated = false
   val slidingMessageQueue: ListBuffer[(ActorRef, Event)]
   implicit val publisherEventRate: Double
+  var eventRateOut: Double = 0.0d
+  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor")
 
   def createDuplicateNode(hostInfo: HostInfo): Future[ActorRef]
   // subscribe to events from parent actors (and acquire their operator type)
@@ -67,7 +69,7 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
 
   def emitEvent(event: Event, eventCallback: Option[EventCallback]): Unit = {
     if (started) {
-      updateMonitoringData(log, event, hostInfo, currentLoad)
+      updateMonitoringData(log, event, hostInfo, currentLoad, eventRateOut)
       subscribers.keys.foreach(sub => {
         //SpecialStats.log(s"$this", s"sendEvent_${currAlgorithm}_${self.path.name}", s"STREAMING EVENT $event FROM ${s} TO ${sub}")
         //log.debug(s"STREAMING EVENT $event TO ${sub}")
@@ -76,6 +78,7 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
           eventCallback.get.apply(event)
         }
         sub ! event
+        operatorQoSMonitor ! event
       })
     } else {
       log.info(s"discarding event $event, started $started, parents: $getParentActors")
@@ -142,10 +145,13 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
 
   def notifyMAPEK(cluster: Cluster, successor: ActorRef): Future[Unit] = {
     implicit val timeout = TCEPUtils.timeout
+    val brokerQoSMonitor = context.system.actorSelection(context.system./("TaskManager")./("BrokerQosMonitor"))
+    brokerQoSMonitor ! AddOperator(successor)
+    brokerQoSMonitor ! RemoveOperator(self)
     for {
       knowledgeActor <- TCEPUtils.selectKnowledge(cluster).resolveOne().mapTo[ActorRef]
     } yield {
-      transitionLog(s"notifying MAPEK knowledge component ${knowledgeActor} about changed operator ${successor}")
+      transitionLog(s"notifying MAPEK knowledge component ${knowledgeActor} and broker QoS monitor $brokerQoSMonitor about changed operator ${successor}")
       knowledgeActor ! AddOperator(successor)
       knowledgeActor ! RemoveOperator(self)
     }

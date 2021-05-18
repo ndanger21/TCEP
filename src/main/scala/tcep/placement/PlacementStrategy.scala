@@ -1,7 +1,5 @@
 package tcep.placement
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorContext, ActorRef, Address}
 import akka.cluster.{Cluster, Member, MemberStatus}
 import akka.util.Timeout
@@ -11,12 +9,14 @@ import org.slf4j.LoggerFactory
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.machinenodes.helper.actors._
+import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.mop.RizouAlgorithm
 import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.utils.TCEPUtils.makeMapFuture
 import tcep.utils.{SizeEstimator, SpecialStats, TCEPUtils}
 
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
@@ -293,7 +293,7 @@ trait PlacementStrategy {
     if(memberLoads.contains(node)) Future { memberLoads(node) }
     else {
       val request: Future[Double] = TCEPUtils.getLoadOfMember(cluster, node)
-      this.updateOperatorMsgOverhead(operator, SizeEstimator.estimate(LoadRequest()) + SizeEstimator.estimate(LoadResponse(_)))
+      this.updateOperatorMsgOverhead(operator, SizeEstimator.estimate(GetCPULoad) + 8) // Double response is 8 Bytes
       request.onComplete {
         case Success(load: Double) =>
           memberLoads += node -> load

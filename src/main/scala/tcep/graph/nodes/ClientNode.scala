@@ -1,6 +1,6 @@
 package tcep.graph.nodes
 
-import akka.actor.{ActorLogging, ActorRef, PoisonPill}
+import akka.actor.{ActorLogging, ActorRef, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.discovery.vivaldi.DistVivaldiActor
@@ -10,6 +10,8 @@ import tcep.data.Events._
 import tcep.data.Queries.ClientDummyQuery
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, Subscribe}
 import tcep.graph.nodes.traits.{SystemLoadUpdater, TransitionConfig, TransitionModeNames}
+import tcep.graph.qos.OperatorQosMonitor
+import tcep.graph.qos.OperatorQosMonitor.UpdateEventRateOut
 import tcep.graph.transition.MAPEK.{SetLastTransitionStats, SetTransitionStatus, UpdateLatency}
 import tcep.graph.transition.{MAPEK, SuccessorStart, TransferredState, TransitionRequest}
 import tcep.machinenodes.consumers.Consumer.SetStatus
@@ -17,7 +19,7 @@ import tcep.machinenodes.helper.actors.{ACK, PlacementMessage}
 import tcep.placement.{HostInfo, OperatorMetrics}
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.simulation.tcep.GUIConnector
-import tcep.utils.{SpecialStats, TCEPUtils}
+import tcep.utils.TCEPUtils
 
 import scala.concurrent.duration._
 
@@ -32,10 +34,12 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
   var transitionStatus: Int = 0
   var guiBDPUpdateSent = false
   implicit val timeout = Timeout(5 seconds)
+  var eventRateOut: Double = 0.0d
+  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor")
 
 
   override def receive: Receive = {
-
+    case UpdateEventRateOut(rate) => eventRateOut = rate
     case TransitionRequest(strategy, requester, stats) => {
       sender() ! ACK()
       if(transitionStatus == 0) {
@@ -81,13 +85,14 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
       //Events.printEvent(event, log)
       //val arrival = System.nanoTime()
       val e2eLatency = System.currentTimeMillis() - event.monitoringData.creationTimestamp
-      Events.updateMonitoringData(log, event, hostInfo, currentLoad)
+      Events.updateMonitoringData(log, event, hostInfo, currentLoad, eventRateOut)
       if(!guiBDPUpdateSent) {
         GUIConnector.sendBDPUpdate(event.monitoringData.networkUsage.sum, DistVivaldiActor.getLatencyValues())(cluster.selfAddress, blockingIoDispatcher) // this is the total BDP of the entire graph
         guiBDPUpdateSent = true
         log.info(s"$this", s"hostInfo after update: ${hostInfo.operatorMetrics}")
       }
       consumer ! event
+      operatorQoSMonitor ! event
       //monitors.foreach(monitor => monitor.onEventEmit(event, transitionStatus))
       //val now = System.nanoTime()
       mapek.knowledge ! UpdateLatency(e2eLatency)

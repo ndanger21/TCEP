@@ -1,8 +1,5 @@
 package tcep.graph
 
-import java.util.UUID
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorContext, ActorRef, Props}
 import akka.cluster.Cluster
 import akka.pattern.ask
@@ -20,9 +17,11 @@ import tcep.graph.transition._
 import tcep.machinenodes.consumers.Consumer.SetQosMonitors
 import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.placement.{HostInfo, PlacementStrategy, QueryDependencies, SpringRelaxationLike}
-import tcep.simulation.tcep.{GUIConnector}
+import tcep.simulation.tcep.GUIConnector
 import tcep.utils.SpecialStats
 
+import java.util.UUID
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.concurrent.duration.{FiniteDuration, _}
 import scala.concurrent.{Await, ExecutionContext, Future}
@@ -57,6 +56,7 @@ class QueryGraph(query: Query,
   val placementStrategy: PlacementStrategy = PlacementStrategy.getStrategyByName(Await.result(
     mapek.knowledge ? GetPlacementStrategyName, timeout.duration).asInstanceOf[String])
   var clientNode: ActorRef = _
+  val brokerQoSMonitor: ActorRef = Await.result(context.system.actorSelection(context.system./("TaskManager")./("BrokerQosMonitor")).resolveOne(), timeout.duration)
 
   def createAndStart(eventCallback: Option[EventCallback] = None): ActorRef = {
     log.info(s"Creating and starting new QueryGraph with placement ${
@@ -174,6 +174,7 @@ class QueryGraph(query: Query,
       SpecialStats.log(s"$this", "placement", s"deployed ${ opAndHostInfo._1 } on; ${opAndHostInfo._2.member} ; with " +
         s"hostInfo ${opAndHostInfo._2.operatorMetrics}; parents: $parentOperators; path.name: ${parentOperators.map(_._1).head.path.name}")
       mapek.knowledge ! AddOperator(opAndHostInfo._1)
+
       GUIConnector.sendInitialOperator(opAndHostInfo._2.member.address, placementStrategy.name,
                                        opAndHostInfo._1.path.name, s"$transitionConfig", parentOperators.map(_._1),
                                        opAndHostInfo._2, isRootOperator)(selfAddress = cluster.selfAddress, ec)
@@ -190,7 +191,7 @@ class QueryGraph(query: Query,
     val operatorType = NodeFactory.getOperatorTypeFromQuery(operator)
     val props = Props(operatorType, transitionConfig, hostInfo, backupMode, mainNode, operator, createdCallback,
                       eventCallback, isRootOperator, baseEventRate, parentOperators)
-    NodeFactory.createOperator(cluster, context, hostInfo, props)
+    NodeFactory.createOperator(cluster, context, hostInfo, props, brokerQoSMonitor)
   }
 
   def stop(): Unit = {

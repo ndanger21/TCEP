@@ -25,6 +25,7 @@ case class StreamNode(transitionConfig: TransitionConfig,
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event if sender().equals(publisher.head) =>
+      event.updateArrivalTimestamp()
       val s = sender()
       if(s.equals(publisher.head)) {
         emitEvent(event, eventCallback)

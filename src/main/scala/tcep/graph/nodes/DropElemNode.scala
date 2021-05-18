@@ -86,6 +86,7 @@ case class DropElemNode(transitionConfig: TransitionConfig,
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
 
     case event: Event if parentActor.contains(sender()) =>
+      event.updateArrivalTimestamp()
       val newEvent = event match {
         case Event1(_) => sys.error("Panic! Control flow should never reach this point!")
         case Event2(e1, e2) => handleEvent2(e1, e2)

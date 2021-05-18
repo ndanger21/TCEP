@@ -4,17 +4,17 @@ package tcep.utils
   * Created by raheel on 16/01/2018.
   */
 
-import java.lang.management.ManagementFactory
-import java.lang.reflect.{Field, Modifier}
-import java.util.{Arrays, IdentityHashMap, Random}
-
 import com.google.common.collect.MapMaker
 import com.google.common.hash.Hashing
 import org.slf4j.LoggerFactory
 import tcep.graph.nodes.traits.Node.{Subscribe, UnSubscribe}
 import tcep.graph.transition._
 import tcep.machinenodes.helper.actors._
+import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
 
+import java.lang.management.ManagementFactory
+import java.lang.reflect.{Field, Modifier}
+import java.util.{Arrays, IdentityHashMap, Random}
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect._
 import scala.runtime.ScalaRunTime
@@ -66,7 +66,7 @@ object SizeEstimator {
       case StartExecutionWithData(_, _, _, data, _) => 512 + data.size * 480
       case StartExecutionAtTime(_, _, _) => 498
       case TransferEvents(_, _, _, data1, data2, _) =>512 + (data1.size + data2.size) * 480
-      case LoadRequest() => 167
+      case GetCPULoad => 167
       case LoadResponse(_) => 250
       case StarksTask(_, _, _) => 1243
       case StarksTaskReply(_) => 1400

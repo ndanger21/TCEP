@@ -1,7 +1,5 @@
 package tcep.graph.nodes
 
-import java.time.Duration
-
 import akka.actor.ActorRef
 import com.espertech.esper.client._
 import tcep.data.Events._
@@ -13,6 +11,8 @@ import tcep.graph.nodes.traits.TransitionModeNames.{apply => _}
 import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
+
+import java.time.Duration
 
 /**
   * Handling of [[tcep.data.Queries.JoinQuery]] is done by JoinNode.
@@ -86,7 +86,9 @@ case class JoinNode(transitionConfig: TransitionConfig,
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
 
-    case event: Event if p1List.contains(sender()) && esperInitialized => event match {
+    case event: Event if p1List.contains(sender()) && esperInitialized =>
+      event.updateArrivalTimestamp()
+      event match {
       case Event1(e1) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
       case Event2(e1, e2) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2)))
       case Event3(e1, e2, e3) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3)))
@@ -94,7 +96,9 @@ case class JoinNode(transitionConfig: TransitionConfig,
       case Event5(e1, e2, e3, e4, e5) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5)))
       case Event6(e1, e2, e3, e4, e5, e6) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5), toAnyRef(e6)))
     }
-    case event: Event if p2List.contains(sender()) && esperInitialized => event match {
+    case event: Event if p2List.contains(sender()) && esperInitialized =>
+      event.updateArrivalTimestamp()
+      event match {
       case Event1(e1) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
       case Event2(e1, e2) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2)))
       case Event3(e1, e2, e3) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3)))

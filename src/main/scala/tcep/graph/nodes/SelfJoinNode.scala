@@ -1,7 +1,5 @@
 package tcep.graph.nodes
 
-import java.time.Duration
-
 import akka.actor.{ActorLogging, ActorRef}
 import com.espertech.esper.client._
 import tcep.data.Events._
@@ -12,6 +10,8 @@ import tcep.graph.nodes.traits.TransitionModeNames.{apply => _}
 import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
+
+import java.time.Duration
 
 /**
   * Handling of [[tcep.data.Queries.SelfJoinQuery]] is done by SelfJoinNode.
@@ -34,7 +34,9 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
   var esperInitialized = false
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
-    case event: Event if parentActor.contains(sender()) && esperInitialized => event match {
+    case event: Event if parentActor.contains(sender()) && esperInitialized =>
+      event.updateArrivalTimestamp()
+      event match {
       case Event1(e1) => sendEvent("sq", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
       case Event2(e1, e2) => sendEvent("sq", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2)))
       case Event3(e1, e2, e3) => sendEvent("sq", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3)))

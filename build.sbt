@@ -20,8 +20,8 @@ libraryDependencies ++= Seq(
   "org.scalaj" %% "scalaj-http" % "2.4.1",
   "commons-lang" % "commons-lang" % "2.6",
   "com.google.guava" % "guava" % "19.0",
-  "org.scalanlp" %% "breeze" % "1.0",           //Added for Linear Algebra in Benedikt's thesisw
-  "org.scalanlp" %% "breeze-natives" % "1.0",
+  "org.scalanlp" %% "breeze" % "1.2",           //Added for Linear Algebra in Benedikt's thesisw
+  //"org.scalanlp" %% "breeze-natives" % "1.0",
   "com.typesafe.akka" %% "akka-testkit" % akkaVersion  % "test",
   "com.typesafe.akka" %% "akka-multi-node-testkit" % akkaVersion % "test",
   "org.scalatest"     %% "scalatest"    % "3.0.1"   % "test",

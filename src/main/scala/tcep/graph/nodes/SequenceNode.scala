@@ -1,7 +1,5 @@
 package tcep.graph.nodes
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorLogging, ActorRef}
 import akka.util.Timeout
 import com.espertech.esper.client._
@@ -10,6 +8,8 @@ import tcep.data.Queries._
 import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
+
+import java.util.concurrent.TimeUnit
 
 /**
   * Handling of [[tcep.data.Queries.SequenceQuery]] is done by SequenceNode.
@@ -79,7 +79,9 @@ case class SequenceNode(transitionConfig: TransitionConfig,
   }
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
-    case event: Event if sender().equals(publishers.head) && esperInitialized => event match {
+    case event: Event if sender().equals(publishers.head) && esperInitialized =>
+      event.updateArrivalTimestamp()
+      event match {
       case Event1(e1) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
       case Event2(e1, e2) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2)))
       case Event3(e1, e2, e3) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3)))

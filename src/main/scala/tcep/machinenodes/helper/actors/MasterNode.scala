@@ -4,6 +4,7 @@ import akka.actor.{ActorLogging, Address}
 import akka.cluster.Member
 import com.typesafe.config.ConfigFactory
 import tcep.graph.nodes.traits.Node.Dependencies
+import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
 import tcep.placement.HostInfo
 import tcep.placement.vivaldi.VivaldiCoordinates
 import tcep.simulation.adaptive.cep.SystemLoad
@@ -49,7 +50,7 @@ class MasterNode extends VivaldiCoordinates with ActorLogging {
       requester ! PietzuchAlgorithm.findOptimalNode(this.context, cluster, p.dependencies, p.askerInfo, p.askerInfo.operator)
     }
   }*/
-    case LoadRequest() => {
+    case GetCPULoad => {
       sender() ! SystemLoad.getSystemLoad
     }
     case _ => log.info("ignoring unknown task")

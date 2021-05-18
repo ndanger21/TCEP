@@ -1,7 +1,5 @@
 package tcep.machinenodes.helper.actors
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorLogging, ActorRef, Address, Props}
 import akka.cluster.Member
 import akka.pattern.pipe
@@ -11,18 +9,15 @@ import org.discovery.vivaldi.{Coordinates, VivaldiPosition}
 import tcep.data.Queries.Query
 import tcep.factories.NodeFactory
 import tcep.graph.nodes.traits.Node.Dependencies
-import tcep.graph.nodes.traits.SystemLoadUpdater
+import tcep.machinenodes.qos.BrokerQoSMonitor
+import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.vivaldi.VivaldiCoordinates
 import tcep.placement.{BandwidthEstimator, HostInfo}
-import tcep.utils.{SpecialStats, TCEPUtils}
+import tcep.utils.TCEPUtils
 
+import java.util.concurrent.TimeUnit
 import scala.concurrent.Future
-import scala.util.{Failure, Success}
-import scala.collection.JavaConverters._
-import scala.concurrent.{ExecutionContext, ExecutionContextExecutor, Future}
-import scala.concurrent.duration._
-import scala.sys.process._
 import scala.util.{Failure, Success}
 
 /**
@@ -44,7 +39,6 @@ case class StarksTask(operator: Query, dependencies: Dependencies, askerInfo: Ho
 }
 case class StarksTaskReply(hostInfo: HostInfo) extends PlacementMessage
 
-case class LoadRequest() extends MeasurementMessage
 case class LoadResponse(load: Double) extends MeasurementMessage
 case class SingleBandwidthRequest(target: Member) extends MeasurementMessage
 case class SingleBandwidthResponse(bandwidth: Double) extends MeasurementMessage
@@ -84,10 +78,12 @@ case object GetEventPause extends TransitionControlMessage
 /**
   * responsible for handling placement-related activities
   */
-class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with SystemLoadUpdater with ActorLogging {
+class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with ActorLogging {
 
   override implicit val ec = blockingIoDispatcher // almost all tasks are i/o bound
-  private var bandwidthEstimator: ActorRef = _
+  private val bandwidthEstimator: ActorRef = context.actorOf(Props(new BandwidthEstimator()), "BandwidthEstimator")
+  private val brokerNodeQoSMonitor: ActorRef = context.actorOf(Props(classOf[BrokerQoSMonitor]), "BrokerQosMonitor")
+
   private val timeout = Timeout(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS)
   private var publisherActorRefs: Map[String, ActorRef] = Map()
   private var taskManagerActors: Map[Member, ActorRef] = Map()
@@ -100,8 +96,7 @@ class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with Sy
 
   override def preStart(): Unit = {
     super.preStart()
-    bandwidthEstimator = cluster.system.actorOf(Props(new BandwidthEstimator()), "BandwidthEstimator")
-    log.info(s"starting taskManager on ${cluster.selfMember} as ${this.self} with mailbox type ${this.context.props.mailbox} and bandwidthEstimator $bandwidthEstimator")
+    log.info(s"starting taskManager on ${cluster.selfMember} as ${this.self} with mailbox type ${this.context.props.mailbox} and child actors ${context.children}")
   }
 
   override def receive: Receive = super.receive orElse {
@@ -113,7 +108,7 @@ class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with Sy
       if(!ongoingCreationRequests.contains(key)) { // ignore re-sends of requests by GuaranteedMessageDeliverer (due to lost ACKs)
         ongoingCreationRequests += key -> None
         for {
-          ref <- NodeFactory.createOperator(cluster, context, operatorInfo, props)(blockingIoDispatcher)
+          ref <- NodeFactory.createOperator(cluster, context, operatorInfo, props, brokerNodeQoSMonitor)(blockingIoDispatcher)
         } yield {
           ongoingCreationRequests += key -> Some(ref)
           log.info(s"operator creation request for $key complete, $ref sent back to $s")
@@ -136,7 +131,7 @@ class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with Sy
         hostRequest.map(StarksTaskReply(_)) pipeTo s
       } else ongoingPlacementRequests(s).map(StarksTaskReply(_)) pipeTo s
 
-    case LoadRequest() => sender() ! currentLoad
+    case GetCPULoad => brokerNodeQoSMonitor.forward(GetCPULoad)
 
     case BDPRequest(target: Member) =>
       val s = sender()

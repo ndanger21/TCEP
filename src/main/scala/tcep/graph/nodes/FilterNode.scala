@@ -1,7 +1,5 @@
 package tcep.graph.nodes
 
-import java.io.{File, PrintStream}
-
 import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries._
@@ -9,6 +7,8 @@ import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.SimulationRunner.logger
+
+import java.io.{File, PrintStream}
 
 /**
   * Handling of [[tcep.data.Queries.FilterQuery]] is done by FilterNode.
@@ -39,6 +39,7 @@ case class FilterNode(transitionConfig: TransitionConfig,
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
+      event.updateArrivalTimestamp()
       val s = sender()
       if (parentActor.contains(s)) {
         if (query.cond(event))

@@ -27,6 +27,7 @@ case class ObserveChangeNode(transitionConfig: TransitionConfig,
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
+      event.updateArrivalTimestamp()
       val s = sender()
       if (parentActor.contains(s)) {
         val value: List[LinearRoadDataNew] = event match {

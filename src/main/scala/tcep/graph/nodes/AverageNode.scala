@@ -49,7 +49,7 @@ case class AverageNode(
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
 
     case event: Event if parentActor.contains(sender()) =>
-
+      event.updateArrivalTimestamp()
       //log.debug(s"averageNode received event: ${event}")
       val value = event match {
         case Event1(e1) => calculateAvg(List(e1))

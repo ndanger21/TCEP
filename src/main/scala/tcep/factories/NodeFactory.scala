@@ -1,16 +1,16 @@
 package tcep.factories
 
-import java.util.UUID
-
 import akka.actor.{ActorContext, ActorRef, Props}
 import akka.cluster.Cluster
 import org.slf4j.LoggerFactory
 import tcep.data.Queries._
 import tcep.graph.nodes._
+import tcep.graph.transition.MAPEK.AddOperator
 import tcep.machinenodes.helper.actors.{CreateRemoteOperator, RemoteOperatorCreated}
 import tcep.placement.HostInfo
 import tcep.utils.TCEPUtils
 
+import java.util.UUID
 import scala.concurrent.{ExecutionContext, Future}
 
 object NodeFactory {
@@ -41,13 +41,15 @@ object NodeFactory {
   def createOperator(cluster: Cluster,
                      context: ActorContext,
                      targetHost: HostInfo,
-                     props: Props
+                     props: Props,
+                     brokerNodeQosMonitor: ActorRef
                     )(implicit ec: ExecutionContext): Future[ActorRef] = {
     if (cluster.selfMember == targetHost.member)
       Future {
         try {
           val name = s"${targetHost.operator.toString.split("\\(", 2).head}${UUID.randomUUID().toString}"
           val ref = cluster.system.actorOf(props.withMailbox("prio-mailbox"), name)
+          brokerNodeQosMonitor ! AddOperator(ref)
           log.info(s"created operator on self: $ref")
           ref
         } catch {

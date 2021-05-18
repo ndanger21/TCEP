@@ -1,8 +1,5 @@
 package tcep.utils
 
-import java.util.UUID
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorContext, ActorRef, ActorSelection, Address, Props, RootActorPath}
 import akka.cluster.{Cluster, Member, MemberStatus}
 import akka.pattern.{Patterns, ask}
@@ -12,7 +9,10 @@ import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
 import org.slf4j.LoggerFactory
 import tcep.machinenodes.helper.actors._
+import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
 
+import java.util.UUID
+import java.util.concurrent.TimeUnit
 import scala.concurrent.{ExecutionContext, Future}
 import scala.language.postfixOps
 import scala.util.{Failure, Success, Try}
@@ -67,7 +67,7 @@ object TCEPUtils {
   def getLoadOfMember(cluster: Cluster, node: Member)(implicit ec: ExecutionContext): Future[Double] = {
     for {
       taskManagerActor <- this.getTaskManagerOfMember(cluster, node)
-      request <- trySendWithRetry(taskManagerActor, LoadRequest(), retryTimeout, retries).mapTo[Double]
+      request <- trySendWithRetry(taskManagerActor, GetCPULoad, retryTimeout, retries).mapTo[Double]
     } yield request
   }
 

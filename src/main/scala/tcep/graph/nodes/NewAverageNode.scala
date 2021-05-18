@@ -25,6 +25,7 @@ case class NewAverageNode(transitionConfig: TransitionConfig,
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
+      event.updateArrivalTimestamp()
       val s = sender()
       if (parentActor.contains(s)) {
         val avgData = event match {

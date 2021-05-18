@@ -25,6 +25,7 @@ case class WindowStatisticNode(transitionConfig: TransitionConfig,
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
+      event.updateArrivalTimestamp()
       val updated = event match {
         case Event1(e1) =>
           this.store(List(e1))

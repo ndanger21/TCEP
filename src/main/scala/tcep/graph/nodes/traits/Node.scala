@@ -1,7 +1,5 @@
 package tcep.graph.nodes.traits
 
-import java.time.Instant
-
 import akka.actor.{ActorLogging, ActorRef, Address, Cancellable, PoisonPill, Props}
 import akka.pattern.ask
 import com.typesafe.config.ConfigFactory
@@ -9,9 +7,11 @@ import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, UnSubscribe, UpdateTask}
 import tcep.graph.nodes.traits.TransitionExecutionModes.ExecutionMode
 import tcep.graph.nodes.traits.TransitionModeNames.Mode
+import tcep.graph.qos.OperatorQosMonitor.UpdateEventRateOut
 import tcep.graph.transition._
 import tcep.graph.{CreatedCallback, EventCallback}
 import tcep.machinenodes.helper.actors.{CreateRemoteOperator, PlacementMessage, RemoteOperatorCreated, TransitionControlMessage}
+import tcep.machinenodes.qos.BrokerQoSMonitor.GetIOMetrics
 import tcep.placement._
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.mop.RizouAlgorithm
@@ -21,6 +21,7 @@ import tcep.simulation.adaptive.cep.SystemLoad
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.TCEPUtils
 
+import java.time.Instant
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -42,7 +43,6 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
   val createdCallback: Option[CreatedCallback]
   val eventCallback: Option[EventCallback]
   var updateTask: Cancellable = _
-  SystemLoad.newOperatorAdded()
 
   override def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
     log.info(s"${self.path.name} executing transition on $transitionConfig")
@@ -88,7 +88,8 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
       ) andThen childNodeReceive
 
   def placementReceive: Receive = {
-
+    case UpdateEventRateOut(rate) => eventRateOut = rate
+    case GetIOMetrics => operatorQoSMonitor.forward(GetIOMetrics)
     case AcknowledgeSubscription(_) if getParentActors.contains(sender()) => log.debug(s"received subscription ACK from ${sender()}")
     case StartExecution(algorithm) =>
       val s = sender()
@@ -218,6 +219,7 @@ object Node {
 case class TransitionConfig(
                              transitionStrategy: Mode = TransitionModeNames.MFGS,
                              transitionExecutionMode: ExecutionMode = TransitionExecutionModes.CONCURRENT_MODE)
+
 object TransitionExecutionModes extends Enumeration {
   type ExecutionMode = Value
   val CONCURRENT_MODE, SEQUENTIAL_MODE = Value

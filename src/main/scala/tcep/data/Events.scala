@@ -1,7 +1,5 @@
 package tcep.data
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorRef, Address}
 import akka.event.LoggingAdapter
 import com.typesafe.config.ConfigFactory
@@ -9,6 +7,7 @@ import tcep.machinenodes.helper.actors.{MySerializable, PlacementMessage}
 import tcep.placement.HostInfo
 import tcep.utils.SizeEstimator
 
+import java.util.concurrent.TimeUnit
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.FiniteDuration
 
@@ -20,6 +19,7 @@ object Events {
 
   case object DependenciesRequest extends PlacementMessage
   case class DependenciesResponse(dependencies: Seq[ActorRef]) extends PlacementMessage
+  //TODO obsolete once operator monitors are implemented
   val eventIntervalMicroseconds: Int = ConfigFactory.load().getInt("constants.event-interval-microseconds")
   val eventsPerSecond: Double = FiniteDuration(eventIntervalMicroseconds, TimeUnit.MICROSECONDS)./(FiniteDuration(1, TimeUnit.SECONDS))
 
@@ -34,9 +34,18 @@ object Events {
                                   var networkUsage: List[Double] = List(),
                                   var placementOverhead: Long = 0,
                                   var eventOverhead: Long = 0,
-                                  var creationTimestamp: Long = System.currentTimeMillis()
+                                  var creationTimestamp: Long = System.currentTimeMillis(),
+                                  var processingStats: OperatorProcessingStats = OperatorProcessingStats()
                                   )
 
+  sealed case class OperatorProcessingStats(
+                                          var processingStartNS: Long = -1,
+                                          var processingLatencyNS: Long = -1,
+                                          var departureMS: Long = -1,
+                                          var lastHopLatency: Long = -1,
+                                          var eventSizeIn: Vector[Long] = Vector(),
+                                          var eventRateIn: Vector[Double] = Vector() // out on previous, in on current operator
+                                        )
   sealed abstract class Event(var monitoringData: MonitoringData = MonitoringData()) extends MySerializable {
 
     def init()(implicit creatorAddress: Address): Unit =  {
@@ -47,26 +56,41 @@ object Events {
     }
 
     def copyMonitoringData(toCopy: MonitoringData): Unit = monitoringData = toCopy
+    // called when event is taken off mailbox by operator
+    def updateArrivalTimestamp(): Unit = {
+      this.monitoringData.processingStats.processingStartNS = System.nanoTime()
+      this.monitoringData.processingStats.lastHopLatency = System.currentTimeMillis() - this.monitoringData.processingStats.departureMS
+    }
+    // called before event is sent to subscribers
+    def updateDepartureTimestamp(eventSizeOut: Long, eventRateOut: Double): Unit = {
+      this.monitoringData.processingStats.departureMS = System.currentTimeMillis()
+      this.monitoringData.processingStats.processingLatencyNS = System.nanoTime() - this.monitoringData.processingStats.processingStartNS
+      this.monitoringData.processingStats.eventSizeIn = Vector(eventSizeOut)
+      this.monitoringData.processingStats.eventRateIn = Vector(eventRateOut) // out on current, in on next operator
+    }
   }
+
 
   /**
     * @author Niels
-    *         updates the monitoring data attached to each event, depending on whether the previous operator is hosted on this host as well or not
+    *         updates the monitoring data attached to each event before sending it to subscriber
+    *         depends on whether the previous operator is hosted on this host as well or not
     * @param event the event to update
     */
-  def updateMonitoringData(log: LoggingAdapter, event: Event, hostInfo: HostInfo, currentLoad: Double)(implicit ec: ExecutionContext): Unit = {
+  def updateMonitoringData(log: LoggingAdapter, event: Event, hostInfo: HostInfo, currentLoad: Double, eventRateOut: Double)(implicit ec: ExecutionContext): Unit = {
     try {
       //log.debug(s"updating MonitoringData start ")
       //log.debug(s"$hostInfo \n $event \n ${event.monitoringData.map("\n"+_)}")
       if (event.monitoringData == null) throw new IllegalArgumentException(s"received empty monitoringData of ${event} ${event.monitoringData}")
       if (hostInfo == null) throw new IllegalArgumentException(s"updateMonitoringData called with null hostInfo")
+      val eventSizeOut = SizeEstimator.estimate(event)
       // increment some monitoringData items only when event has a parent on a different host, i.e. had to go over the network
       if (event.monitoringData.predecessorHost.exists(!_.equals(hostInfo.member.address))) {
         event.monitoringData.messageHops = event.monitoringData.messageHops + 1
         val accumulatedBDP = event.monitoringData.networkUsage.sum
         event.monitoringData.networkUsage = List(hostInfo.operatorMetrics.operatorToParentBDP.values.sum + accumulatedBDP)
         // overhead for sending the event over the network
-        event.monitoringData.eventOverhead += SizeEstimator.estimate(event)
+        event.monitoringData.eventOverhead += eventSizeOut
       }
 
       event.monitoringData.operatorHops += 1
@@ -80,7 +104,7 @@ object Events {
       event.monitoringData.predecessorHost = List(hostInfo.member.address)
       event.monitoringData.lastUpdate = List((hostInfo.member.address, System.currentTimeMillis()))
       event.monitoringData.placementOverhead += hostInfo.operatorMetrics.accPlacementMsgOverhead
-
+      event.updateDepartureTimestamp(eventSizeOut, eventRateOut)
       //log.debug(s"updating MonitoringData complete \n $event")
     } catch {
       case e: Throwable => log.error(e, s"failed to update monitoringData of event ${event.monitoringData}")
@@ -110,6 +134,17 @@ object Events {
     event.monitoringData.predecessorHost = List(a.predecessorHost.headOption, b.predecessorHost.headOption).flatten // treat empty list with option + flatten
     event.monitoringData.lastUpdate = List(a.lastUpdate.headOption, b.lastUpdate.headOption).flatten
     event.monitoringData.creationTimestamp = math.min(a.creationTimestamp, b.creationTimestamp)
+    event.monitoringData.processingStats = OperatorProcessingStats(
+      // set by updateMonitoringData before sending event
+      processingLatencyNS = -1,
+      departureMS = -1,
+      // use the last event since its arrival triggers processing
+      processingStartNS = math.max(a.processingStats.processingStartNS, b.processingStats.processingStartNS),
+      // use the critical path (longest parent latency)
+      lastHopLatency = math.max(a.processingStats.lastHopLatency, b.processingStats.lastHopLatency),
+      eventSizeIn = Vector(a.processingStats.eventSizeIn.head, b.processingStats.eventSizeIn.head),
+      eventRateIn = Vector(a.processingStats.eventRateIn.head, b.processingStats.eventRateIn.head)
+    )
     //log.debug(s"DEBUG mergeMonitoringData complete ${event.monitoringData}")
     event
   }

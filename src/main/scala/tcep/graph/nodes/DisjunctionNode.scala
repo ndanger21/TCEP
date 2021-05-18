@@ -76,7 +76,9 @@ case class DisjunctionNode(transitionConfig: TransitionConfig,
   }
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
-    case event: Event if p1List.contains(sender()) => event match {
+    case event: Event if p1List.contains(sender()) =>
+      event.updateArrivalTimestamp()
+      event match {
       case Event1(e1) => handleEvent(Array(Left(e1)), event.monitoringData)
       case Event2(e1, e2) => handleEvent(Array(Left(e1), Left(e2)), event.monitoringData)
       case Event3(e1, e2, e3) => handleEvent(Array(Left(e1), Left(e2), Left(e3)), event.monitoringData)
@@ -84,7 +86,9 @@ case class DisjunctionNode(transitionConfig: TransitionConfig,
       case Event5(e1, e2, e3, e4, e5) => handleEvent(Array(Left(e1), Left(e2), Left(e3), Left(e4), Left(e5)), event.monitoringData)
       case Event6(e1, e2, e3, e4, e5, e6) => handleEvent(Array(Left(e1), Left(e2), Left(e3), Left(e4), Left(e5), Left(e6)), event.monitoringData)
     }
-    case event: Event if p2List.contains(sender()) => event match {
+    case event: Event if p2List.contains(sender()) =>
+      event.updateArrivalTimestamp()
+      event match {
       case Event1(e1) => handleEvent(Array(Right(e1)), event.monitoringData)
       case Event2(e1, e2) => handleEvent(Array(Right(e1), Right(e2)), event.monitoringData)
       case Event3(e1, e2, e3) => handleEvent(Array(Right(e1), Right(e2), Right(e3)), event.monitoringData)
