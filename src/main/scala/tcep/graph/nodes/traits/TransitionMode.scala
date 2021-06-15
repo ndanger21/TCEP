@@ -36,7 +36,9 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
   val slidingMessageQueue: ListBuffer[(ActorRef, Event)]
   implicit val publisherEventRate: Double
   var eventRateOut: Double = 0.0d
-  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor")
+  var eventSizeOut: Long = 0
+  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor") //TODO use custom dispatcher?
+  val brokerQoSMonitor = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))
 
   def createDuplicateNode(hostInfo: HostInfo): Future[ActorRef]
   // subscribe to events from parent actors (and acquire their operator type)
@@ -69,7 +71,7 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
 
   def emitEvent(event: Event, eventCallback: Option[EventCallback]): Unit = {
     if (started) {
-      updateMonitoringData(log, event, hostInfo, currentLoad, eventRateOut)
+      updateMonitoringData(log, event, hostInfo, currentLoad, eventRateOut, eventSizeOut)
       subscribers.keys.foreach(sub => {
         //SpecialStats.log(s"$this", s"sendEvent_${currAlgorithm}_${self.path.name}", s"STREAMING EVENT $event FROM ${s} TO ${sub}")
         //log.debug(s"STREAMING EVENT $event TO ${sub}")
@@ -145,7 +147,6 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
 
   def notifyMAPEK(cluster: Cluster, successor: ActorRef): Future[Unit] = {
     implicit val timeout = TCEPUtils.timeout
-    val brokerQoSMonitor = context.system.actorSelection(context.system./("TaskManager")./("BrokerQosMonitor"))
     brokerQoSMonitor ! AddOperator(successor)
     brokerQoSMonitor ! RemoveOperator(self)
     for {

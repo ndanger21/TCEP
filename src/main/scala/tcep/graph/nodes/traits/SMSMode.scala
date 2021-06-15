@@ -1,9 +1,5 @@
 package tcep.graph.nodes.traits
 
-import java.time.temporal.ChronoUnit
-import java.time.{Duration, Instant}
-import java.util.concurrent.{Executors, TimeUnit}
-
 import akka.actor.{ActorRef, PoisonPill}
 import tcep.data.Events.Event
 import tcep.graph.nodes.traits.Node.{UnSubscribe, UpdateTask}
@@ -15,6 +11,9 @@ import tcep.simulation.tcep.GUIConnector
 import tcep.utils.TransitionLogActor.{OperatorTransitionBegin, OperatorTransitionEnd}
 import tcep.utils.{SizeEstimator, SpecialStats, TCEPUtils}
 
+import java.time.temporal.ChronoUnit
+import java.time.{Duration, Instant}
+import java.util.concurrent.{Executors, TimeUnit}
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
@@ -127,7 +126,7 @@ trait SMSMode extends TransitionMode {
                 transitionLog(s"received ACK for StartExecutionAtTime from successor, it is BEFORE minStateTime -> scheduling event stop and child notification in ${timeLeftUntil / 1e6}ms")
               }
               Unit
-            }).mapTo[Unit].recoverWith { case e: Throwable => transitionLog(s"failed to start successor actor (started: $succStarted, retrying... ${e.toString}".toUpperCase()); startSuccessorActor(successor, newHostInfo) }
+            }).recoverWith { case e: Throwable => transitionLog(s"failed to start successor actor (started: $succStarted, retrying... ${e.toString}".toUpperCase()); startSuccessorActor(successor, newHostInfo) }
           }
         }
 

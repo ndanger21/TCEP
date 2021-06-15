@@ -3,18 +3,26 @@
 # Modified by: Sebastian Hennig
 # Description: Sets up and execute TCEP on GENI testbed
 
-work_dir="$(cd "$(dirname "$0")" ; pwd -P)/../"
-source "$work_dir/docker-swarm.cfg"
-source "$work_dir/scripts/common_functions.sh"
+
 if [ -z $2 ]; then
+  config_file="docker-swarm_local.cfg"
+  stack_file="docker-stack_local.yml"
+else
+  config_file="docker-swarm_$2.cfg"
+  stack_file="docker-stack_$2.yml"
+fi
+work_dir="$(cd "$(dirname "$0")" ; pwd -P)/../"
+source "$work_dir/$config_file"
+source "$work_dir/scripts/common_functions.sh"
+if [ -z $3 ]; then
   u=user
 else
-  u=$2
+  u=$3
 fi
-if [ -z $3 ]; then
+if [ -z $4 ]; then
   host=$manager
 else
-  host=$3
+  host=$4
 fi
 if [[ ${host} == "localhost" ]]; then
   local_run=true
@@ -49,7 +57,7 @@ all() {
     join_workers $swarm_token && \
     PUB_START=$(date +%s.%N) && \
     adjust_cfg && \
-    ./build.sh && \
+    ./build.sh "localhost" ${config_file} && \
     publish && \
     END=$(date +%s.%N) && \
     TOT_DIFF=$(echo "$END - $START" | bc) && \
@@ -128,7 +136,7 @@ join_workers() {
       ssh -T -p $port $u@$i "docker swarm join --token $1 $manager:2377"
       #ssh -T -p $port $u@$i "sudo systemctl restart docker" 2> /dev/null
       # add labels to docker nodes so replicas can be deployed according to label
-      if [ "$count" -le "$n_publisher_nodes_total" ]; then
+      if [ "$count" -le "$n_speed_streams" ]; then
         ssh -T -p $port $user@$manager "docker node update --label-add publisher=true node$count"
         echo "added label publisher=true to node$count "
       else
@@ -175,7 +183,7 @@ clear_logs() {
 
 build_image() {
   adjust_cfg && \
-  ./build.sh
+  ./build.sh "localhost" $config_file
 }
 
 publish_no_build() {
@@ -188,13 +196,14 @@ publish_no_build() {
     ssh -T -p $port $user@$manager "docker pull $registry_user/$gui_image"
 
     # stop already existing services
-    ssh $user@$manager 'docker service rm $(docker service ls -q)'
+    #ssh $user@$manager 'docker service rm $(docker service ls -q)'
+    ssh $user@$manager 'docker stack rm tcep'
 
     echo "Booting up new stack"
     ssh -p $port $u@$manager 'mkdir -p ~/logs && rm -f ~/logs/** && mkdir -p ~/src';
-    scp -P $port $work_dir/docker-stack.yml $u@$manager:~/src/docker-stack.yml
+    scp -P $port $work_dir/${stack_file} $u@$manager:~/src/${stack_file}
     #ssh -p $port $u@$manager 'cd ~/src && docker stack deploy --prune --with-registry-auth -c docker-stack.yml tcep';
-    ssh -p $port $u@$manager 'cd ~/src && docker stack deploy --with-registry-auth -c docker-stack.yml tcep';
+    ssh -p $port $u@$manager 'cd ~/src && docker stack deploy --with-registry-auth -c '${stack_file}' tcep';
     #clear_logs
 }
 

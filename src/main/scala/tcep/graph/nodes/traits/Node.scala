@@ -7,7 +7,7 @@ import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, UnSubscribe, UpdateTask}
 import tcep.graph.nodes.traits.TransitionExecutionModes.ExecutionMode
 import tcep.graph.nodes.traits.TransitionModeNames.Mode
-import tcep.graph.qos.OperatorQosMonitor.UpdateEventRateOut
+import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, UpdateEventRateOut, UpdateEventSizeOut}
 import tcep.graph.transition._
 import tcep.graph.{CreatedCallback, EventCallback}
 import tcep.machinenodes.helper.actors.{CreateRemoteOperator, PlacementMessage, RemoteOperatorCreated, TransitionControlMessage}
@@ -89,7 +89,9 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
 
   def placementReceive: Receive = {
     case UpdateEventRateOut(rate) => eventRateOut = rate
+    case UpdateEventSizeOut(size) => eventSizeOut = size
     case GetIOMetrics => operatorQoSMonitor.forward(GetIOMetrics)
+    case GetOperatorQoSMetrics => operatorQoSMonitor.forward(GetOperatorQoSMetrics)
     case AcknowledgeSubscription(_) if getParentActors.contains(sender()) => log.debug(s"received subscription ACK from ${sender()}")
     case StartExecution(algorithm) =>
       val s = sender()

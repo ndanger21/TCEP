@@ -34,7 +34,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.simulation.tcep.SimulationRunner
-      - ARGS=--dir ./logs --mode 5 --ip simulator --port 2500 --query AccidentDetection --eventRate 1000 --mapek LearnOn --req load --transitionStrategy SMS --transitionExecutionMode 1 --duration 1000 --loadTestMax 1
+      - ARGS=--dir ./logs --mode 5 --ip simulator --port 2500 --query AccidentDetection --eventRate 1000 --mapek LearnOn --req load --transitionStrategy MFGS --transitionExecutionMode 1 --duration 1800 --loadTestMax 1 --initialAlgorithm Relaxation
       - LOG_FILE_PATH=/app/logs
       - JMX_PORT=8484
     ports:

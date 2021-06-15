@@ -1,8 +1,5 @@
 package tcep.simulation.tcep
 
-import java.io.File
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorLogging, ActorRef, Address, Cancellable, CoordinatedShutdown, RootActorPath}
 import akka.cluster.ClusterEvent.CurrentClusterState
 import akka.cluster.{Member, MemberStatus}
@@ -21,8 +18,10 @@ import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.placement.vivaldi.VivaldiCoordinates
 import tcep.placement.{GlobalOptimalBDPAlgorithm, MobilityTolerantAlgorithm, PlacementStrategy, RandomAlgorithm}
 import tcep.publishers.Publisher.StartStreams
-import tcep.utils.{SpecialStats, TCEPUtils}
+import tcep.utils.TCEPUtils
 
+import java.io.File
+import java.util.concurrent.TimeUnit
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
@@ -36,7 +35,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
                      )(implicit val directory: Option[File], val baseEventRate: Double, combinedPIM: Boolean, fixedSimulationProperties: Map[Symbol, Int] = Map()
 ) extends VivaldiCoordinates with ActorLogging {
 
-  val transitionTesting = false
+  val transitionTesting = true
   val nSpeedPublishers = ConfigFactory.load().getInt("constants.number-of-speed-publisher-nodes")
   val nSections = ConfigFactory.load().getInt("constants.number-of-road-sections")
   val minNumberOfMembers = ConfigFactory.load().getInt("akka.cluster.min-nr-of-members")
@@ -57,8 +56,8 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   val startTime = System.currentTimeMillis()
   val totalDuration = if(durationInMinutes.isDefined) FiniteDuration(durationInMinutes.get, TimeUnit.MINUTES) else FiniteDuration(defaultDuration, TimeUnit.MINUTES)
   val startDelay = new FiniteDuration(5, TimeUnit.SECONDS)
-  val samplingInterval = new FiniteDuration(1, TimeUnit.SECONDS)
-  val requirementChangeDelay = new FiniteDuration(10, TimeUnit.SECONDS)
+  val samplingInterval = new FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
+  val requirementChangeDelay = new FiniteDuration(15, TimeUnit.SECONDS)
   val ws = slidingWindow(1.seconds) // join window size
   val latencyRequirement = latency < timespan(1100.milliseconds) otherwise None
   val messageHopsRequirement = hops < 3 otherwise None

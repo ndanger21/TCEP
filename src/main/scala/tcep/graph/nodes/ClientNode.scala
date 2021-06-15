@@ -19,7 +19,7 @@ import tcep.machinenodes.helper.actors.{ACK, PlacementMessage}
 import tcep.placement.{HostInfo, OperatorMetrics}
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.simulation.tcep.GUIConnector
-import tcep.utils.TCEPUtils
+import tcep.utils.{SizeEstimator, TCEPUtils}
 
 import scala.concurrent.duration._
 
@@ -35,6 +35,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
   var guiBDPUpdateSent = false
   implicit val timeout = Timeout(5 seconds)
   var eventRateOut: Double = 0.0d
+  var eventSizeOut: Long = 0
   val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor")
 
 
@@ -82,28 +83,30 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
     }
 
     case event: Event if sender().equals(rootOperator) && hostInfo != null => {
+      event.updateArrivalTimestamp()
+      //SpecialStats.log(s"$this", "clientNodeEvents", s"received event $event from ${sender()}")
       //Events.printEvent(event, log)
       //val arrival = System.nanoTime()
       val e2eLatency = System.currentTimeMillis() - event.monitoringData.creationTimestamp
-      Events.updateMonitoringData(log, event, hostInfo, currentLoad, eventRateOut)
       if(!guiBDPUpdateSent) {
         GUIConnector.sendBDPUpdate(event.monitoringData.networkUsage.sum, DistVivaldiActor.getLatencyValues())(cluster.selfAddress, blockingIoDispatcher) // this is the total BDP of the entire graph
         guiBDPUpdateSent = true
+        eventSizeOut = SizeEstimator.estimate(event)
         log.info(s"$this", s"hostInfo after update: ${hostInfo.operatorMetrics}")
       }
+      Events.updateMonitoringData(log, event, hostInfo, currentLoad, eventRateOut, eventSizeOut)
+
       consumer ! event
       operatorQoSMonitor ! event
       //monitors.foreach(monitor => monitor.onEventEmit(event, transitionStatus))
       //val now = System.nanoTime()
       mapek.knowledge ! UpdateLatency(e2eLatency)
-      //SpecialStats.log(s"$this", "clientNodeEvents", s"received event $event from $s;
-      // ${event.monitoringData.lastUpdate.map(e => e._1 -> (System.currentTimeMillis() - e._2) ).mkString(";")};
-      // e2e latency: ${e2eLatency}ms; time since arrival: ${(now - arrival) / 1e6}ms;
-      // event size: ${SizeEstimator.estimate(event)}")
+
     }
 
     case event: Event if !sender().equals(rootOperator) =>
-      log.info(s"unknown sender ${sender().path.name} my parent is ${rootOperator.path.name}")
+      log.info(s"received event from unknown sender ${sender().path.name} my parent is ${rootOperator.path.name}")
+      //Events.printEvent(event, log)
 
     case SetTransitionStatus(status) =>
       this.transitionStatus = status

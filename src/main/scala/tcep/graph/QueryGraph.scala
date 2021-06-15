@@ -56,7 +56,7 @@ class QueryGraph(query: Query,
   val placementStrategy: PlacementStrategy = PlacementStrategy.getStrategyByName(Await.result(
     mapek.knowledge ? GetPlacementStrategyName, timeout.duration).asInstanceOf[String])
   var clientNode: ActorRef = _
-  val brokerQoSMonitor: ActorRef = Await.result(context.system.actorSelection(context.system./("TaskManager")./("BrokerQosMonitor")).resolveOne(), timeout.duration)
+  val brokerQoSMonitor: ActorRef = Await.result(context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*")).resolveOne(), timeout.duration)
 
   def createAndStart(eventCallback: Option[EventCallback] = None): ActorRef = {
     log.info(s"Creating and starting new QueryGraph with placement ${

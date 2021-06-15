@@ -1,11 +1,11 @@
 package tcep.publishers
 
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.{Executors, ScheduledFuture, TimeUnit}
-
 import tcep.data.Events._
 import tcep.publishers.Publisher.StartStreams
-import tcep.utils.SpecialStats
+import tcep.utils.{SizeEstimator, SpecialStats}
+
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.{Executors, ScheduledFuture, TimeUnit}
 
 object RegularPublisher {
   case object SendEventTickKey
@@ -26,7 +26,9 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
   var startedPublishing = false
   var emitEventTask: ScheduledFuture[_] = _
   var logTask: ScheduledFuture[_] = _
-  var sched = Executors.newSingleThreadScheduledExecutor()
+  var sched = Executors.newSingleThreadScheduledExecutor() //TODO replace with timer?
+  val eventSizeOut: Long = SizeEstimator.estimate(createEventFromId(0))
+  val eventRateOut: Double = 1000000 / waitTime // events/s
 
   override def preStart() = {
     log.info(s"starting regular publisher with interval $waitTime microseconds (${1e6 / waitTime }/s) and roles ${cluster.getSelfRoles}")
@@ -52,6 +54,7 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
       case SendEventTick =>
         val event: Event = createEventFromId(id.incrementAndGet())
         event.init()(cluster.selfAddress)
+        event.updateDepartureTimestamp(eventSizeOut, eventRateOut)
         subscribers.keys.foreach(_ ! event)
 
       case LogEventsSentTick => SpecialStats.log(self.toString(), "eventsSent", s"total: ${id.get()}")

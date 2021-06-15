@@ -5,7 +5,6 @@ import akka.event.LoggingAdapter
 import com.typesafe.config.ConfigFactory
 import tcep.machinenodes.helper.actors.{MySerializable, PlacementMessage}
 import tcep.placement.HostInfo
-import tcep.utils.SizeEstimator
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.ExecutionContext
@@ -39,12 +38,13 @@ object Events {
                                   )
 
   sealed case class OperatorProcessingStats(
-                                          var processingStartNS: Long = -1,
-                                          var processingLatencyNS: Long = -1,
-                                          var departureMS: Long = -1,
-                                          var lastHopLatency: Long = -1,
-                                          var eventSizeIn: Vector[Long] = Vector(),
-                                          var eventRateIn: Vector[Double] = Vector() // out on previous, in on current operator
+                                             var processingStartNS: Long = -1,
+                                             var processingLatencyNS: Long = -1,
+                                             var departureMS: Long = -1,
+                                             var lastHopLatency: Long = -1,
+                                             var eventSizeIn: Vector[Long] = Vector(),
+                                             var eventRateIn: Vector[Double] = Vector(), // updated upon event arrival, unchanged when reaching monitor unlike parentEventRateOut (updated before send);
+                                             var parentEventRateOut: Vector[Double] = Vector() // out on previous, in on current operator
                                         )
   sealed abstract class Event(var monitoringData: MonitoringData = MonitoringData()) extends MySerializable {
 
@@ -60,13 +60,14 @@ object Events {
     def updateArrivalTimestamp(): Unit = {
       this.monitoringData.processingStats.processingStartNS = System.nanoTime()
       this.monitoringData.processingStats.lastHopLatency = System.currentTimeMillis() - this.monitoringData.processingStats.departureMS
+      this.monitoringData.processingStats.eventRateIn = this.monitoringData.processingStats.parentEventRateOut
     }
     // called before event is sent to subscribers
     def updateDepartureTimestamp(eventSizeOut: Long, eventRateOut: Double): Unit = {
       this.monitoringData.processingStats.departureMS = System.currentTimeMillis()
       this.monitoringData.processingStats.processingLatencyNS = System.nanoTime() - this.monitoringData.processingStats.processingStartNS
       this.monitoringData.processingStats.eventSizeIn = Vector(eventSizeOut)
-      this.monitoringData.processingStats.eventRateIn = Vector(eventRateOut) // out on current, in on next operator
+      this.monitoringData.processingStats.parentEventRateOut = Vector(eventRateOut) // out on current, in on next operator
     }
   }
 
@@ -77,13 +78,13 @@ object Events {
     *         depends on whether the previous operator is hosted on this host as well or not
     * @param event the event to update
     */
-  def updateMonitoringData(log: LoggingAdapter, event: Event, hostInfo: HostInfo, currentLoad: Double, eventRateOut: Double)(implicit ec: ExecutionContext): Unit = {
+  def updateMonitoringData(log: LoggingAdapter, event: Event, hostInfo: HostInfo, currentLoad: Double, eventRateOut: Double, eventSizeOut: Long)(implicit ec: ExecutionContext): Unit = {
     try {
+      //val start = System.nanoTime()
       //log.debug(s"updating MonitoringData start ")
       //log.debug(s"$hostInfo \n $event \n ${event.monitoringData.map("\n"+_)}")
       if (event.monitoringData == null) throw new IllegalArgumentException(s"received empty monitoringData of ${event} ${event.monitoringData}")
       if (hostInfo == null) throw new IllegalArgumentException(s"updateMonitoringData called with null hostInfo")
-      val eventSizeOut = SizeEstimator.estimate(event)
       // increment some monitoringData items only when event has a parent on a different host, i.e. had to go over the network
       if (event.monitoringData.predecessorHost.exists(!_.equals(hostInfo.member.address))) {
         event.monitoringData.messageHops = event.monitoringData.messageHops + 1
@@ -105,7 +106,7 @@ object Events {
       event.monitoringData.lastUpdate = List((hostInfo.member.address, System.currentTimeMillis()))
       event.monitoringData.placementOverhead += hostInfo.operatorMetrics.accPlacementMsgOverhead
       event.updateDepartureTimestamp(eventSizeOut, eventRateOut)
-      //log.debug(s"updating MonitoringData complete \n $event")
+      //log.info(s"updating MonitoringData complete after ${System.nanoTime() - start}")
     } catch {
       case e: Throwable => log.error(e, s"failed to update monitoringData of event ${event.monitoringData}")
     }
@@ -143,6 +144,7 @@ object Events {
       // use the critical path (longest parent latency)
       lastHopLatency = math.max(a.processingStats.lastHopLatency, b.processingStats.lastHopLatency),
       eventSizeIn = Vector(a.processingStats.eventSizeIn.head, b.processingStats.eventSizeIn.head),
+      parentEventRateOut = Vector(a.processingStats.parentEventRateOut.head, b.processingStats.parentEventRateOut.head),
       eventRateIn = Vector(a.processingStats.eventRateIn.head, b.processingStats.eventRateIn.head)
     )
     //log.debug(s"DEBUG mergeMonitoringData complete ${event.monitoringData}")

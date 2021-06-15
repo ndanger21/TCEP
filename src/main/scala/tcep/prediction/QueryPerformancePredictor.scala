@@ -1,0 +1,132 @@
+package tcep.prediction
+
+import akka.actor.{Actor, ActorLogging, ActorRef, Address, RootActorPath}
+import akka.cluster.Cluster
+import akka.pattern.{ask, pipe}
+import akka.util.Timeout
+import com.typesafe.config.ConfigFactory
+import tcep.data.Queries._
+import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics}
+import tcep.machinenodes.qos.BrokerQoSMonitor.{BrokerQosMetrics, GetBrokerMetrics}
+import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Throughput}
+import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
+
+import java.util.concurrent.TimeUnit
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.{ExecutionContext, Future}
+
+class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLogging {
+  implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
+  implicit val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
+
+
+  override def receive: Receive = {
+    case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates) =>
+      println("received prediction request")
+      val placementMap: Map[Query, (Address, Option[ActorRef])] = newPlacement.map(e => e._1 -> (e._2, if (currentPlacement.isDefined) currentPlacement.get.get(e._1) else None))
+      println(s"placement map is $placementMap")
+      val perQueryPrediction: Future[MetricPredictions] = Future.traverse(placementMap)(query => {
+        for {
+          brokerSamples: BrokerQosMetrics <- getBrokerSamples(query._2._1, query._2._2)
+          operatorSamples: Option[OperatorQoSMetrics] <- getOperatorSamples(query._2._2)
+        } yield {
+          println(s"samples for ${query._1} are $brokerSamples and $operatorSamples")
+          query._1 -> (brokerSamples, operatorSamples)
+        }
+      }) map { samples =>
+        getPerOperatorPredictions(rootOperator, samples.toMap, publisherEventRates)
+      } map { perOperatorPredictions =>
+        println(s"per-operator predictions are \n ${perOperatorPredictions.mkString("\n")}")
+        combinePerOperatorPredictions(rootOperator, perOperatorPredictions) }
+      pipe(perQueryPrediction) to sender()
+
+    case m => log.error(s"received unknown message $m")
+  }
+
+  def getBrokerSamples(broker: Address, previousOperatorInstance: Option[ActorRef]): Future[BrokerQosMetrics] = cluster.system.actorSelection(RootActorPath(broker) / "user" / "TaskManager*" / "BrokerQosMonitor*")
+    .resolveOne() // broker actorRef
+    .flatMap(monitor => (monitor ? GetBrokerMetrics(previousOperatorInstance)).mapTo[BrokerQosMetrics])
+
+  def getOperatorSamples(operator: Option[ActorRef]): Future[Option[OperatorQoSMetrics]] =
+  // transition placement, can fetch metrics and predictions from deployed operators
+    if (operator.isDefined)
+      cluster.system.actorSelection(operator.get.path.child("operatorQosMonitor"))
+        .resolveOne() // operator actorRef
+        .flatMap(monitor => (monitor ? GetOperatorQoSMetrics).mapTo[OperatorQoSMetrics])
+        .map(Some(_))
+    //TODO insert default estimates here
+    //initial placement, no measured metrics for operators yet
+    else Future(None)
+
+  /**
+    * traverses the query tree from publishers towards root and predicts metrics for each operator. Predicted Throughput of parent serves as input event rate of child
+    * @param rootOperator root operator of the query
+    * @param operatorSampleMap current values of context features
+    * @param publisherEventRates base event rates of all publishers
+    * @return metric predictions for each operator (currently throughput and end-to-end latency)
+    */
+  def getPerOperatorPredictions(rootOperator: Query, operatorSampleMap: Map[Query, (BrokerQosMetrics, Option[OperatorQoSMetrics])], publisherEventRates: Map[String, Throughput]): Map[Query, MetricPredictions] = {
+      // start predictions at publishers; use parent throughput predictions as input event rate for child operators
+    def getPerOperatorPredictionsRec(curOp: Query): Map[Query, MetricPredictions] = {
+      curOp match {
+        case b: BinaryQuery =>
+          val parentPredictions = getPerOperatorPredictionsRec(b.sq1) ++ getPerOperatorPredictionsRec(b.sq2)
+          val latencyPredictions = predictLatency(operatorSampleMap(b), parentPredictions(b.sq1).THROUGHPUT, parentPredictions(b.sq2).THROUGHPUT)
+          val throughputPredictions = predictThroughput(operatorSampleMap(b), parentPredictions(b.sq1).THROUGHPUT, parentPredictions(b.sq2).THROUGHPUT)
+          parentPredictions.updated(b, MetricPredictions(latencyPredictions, throughputPredictions))
+
+        case u: UnaryQuery =>
+          val parentPredictions = getPerOperatorPredictionsRec(u.sq)
+          val latencyPredictions = predictLatency(operatorSampleMap(u), parentPredictions(u.sq).THROUGHPUT)
+          val throughputPredictions = predictThroughput(operatorSampleMap(u), parentPredictions(u.sq).THROUGHPUT)
+          parentPredictions.updated(u, MetricPredictions(latencyPredictions, throughputPredictions))
+
+        case s: StreamQuery => Map(s -> MetricPredictions(
+          E2E_LATENCY = predictLatency(operatorSampleMap(s), publisherEventRates(s.publisherName)),
+          THROUGHPUT = predictThroughput(operatorSampleMap(s), publisherEventRates(s.publisherName))
+        ))
+        case s: SequenceQuery => Map(s -> MetricPredictions(
+          E2E_LATENCY = predictLatency(operatorSampleMap(s), publisherEventRates(s.s1.publisherName), publisherEventRates(s.s2.publisherName)),
+          THROUGHPUT = predictThroughput(operatorSampleMap(s), publisherEventRates(s.s1.publisherName), publisherEventRates(s.s2.publisherName))
+        ))
+        case _ => throw new IllegalArgumentException(s"unknown operator type $curOp")
+      }
+    }
+    getPerOperatorPredictionsRec(rootOperator)
+  }
+
+  //TODO implement prediction models
+  def predictLatency(samples: (BrokerQosMetrics, Option[OperatorQoSMetrics]), parentEventRates: Throughput*): EndToEndLatency = EndToEndLatency(1 millisecond)
+  def predictThroughput(samples: (BrokerQosMetrics, Option[OperatorQoSMetrics]), parentEventRates: Throughput*): Throughput = Throughput(1, 1 second)
+
+  /**
+    * combine per-operator predictions according to query graph structure into per-query prediction for each metric
+    * @param rootOperator root operator of query
+    * @param predictionsPerOperator map of per-operator predictions
+    */
+  def combinePerOperatorPredictions(rootOperator: Query, predictionsPerOperator: Map[Query, MetricPredictions]): MetricPredictions = {
+    def combinePerOperatorPredictionsRec(curOp: Query): MetricPredictions = {
+      curOp match {
+        case b: BinaryQuery => predictionsPerOperator(b) + MetricPredictions(
+          // take critical path (highest predicted latency of two parents)
+          E2E_LATENCY = List(
+            combinePerOperatorPredictionsRec(b.sq1).E2E_LATENCY,
+            combinePerOperatorPredictionsRec(b.sq2).E2E_LATENCY).maxBy(_.amount),
+          // throughput is always current operator's output (since parent's predicted output rates are input for current operator)
+          THROUGHPUT = predictionsPerOperator(curOp).THROUGHPUT
+        )
+        case u: UnaryQuery => predictionsPerOperator(u) + combinePerOperatorPredictionsRec(u.sq)
+        case s: LeafQuery => predictionsPerOperator(s)
+        case _ => throw new IllegalArgumentException(s"unknown operator type $curOp")
+      }
+    }
+
+    combinePerOperatorPredictionsRec(rootOperator)
+  }
+}
+
+object QueryPerformancePredictor {
+  case class GetPredictionForPlacement(query: Query, currentPlacement: Option[Map[Query, ActorRef]], newPlacement: Map[Query, Address], baseEventRates: Map[String, Throughput])
+  case class QosPredictions()
+  private case class PlacementBrokerMonitors(brokerMonitors: List[ActorRef], predictionRequester: ActorRef)
+}

@@ -5,11 +5,10 @@ import akka.cluster.Cluster
 import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
-import tcep.data.Events.{Event, Event1}
+import tcep.data.Events.Event
 import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.qos.AverageFrequencyMonitorFactory
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK
 import tcep.graph.transition.mapek.learnon.LearnOnMAPEK
@@ -23,7 +22,7 @@ import tcep.utils.SpecialStats
 
 import java.time.Instant
 import java.util.concurrent.TimeUnit
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 trait MAPEKComponent extends Actor with ActorLogging {
@@ -82,7 +81,7 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
   var transitionStatus: Int = 0
   var lastTransitionStats: TransitionStats = TransitionStats()
   var previousLatencies: Vector[(Long, Long)] = Vector()
-  val freqMonitor = AverageFrequencyMonitorFactory(query, None).createNodeMonitor
+  //val freqMonitor = AverageFrequencyMonitorFactory(query, None).createNodeMonitor
   var operators: Set[ActorRef] = Set()
   var backupOperators: Set[ActorRef] = Set()
 

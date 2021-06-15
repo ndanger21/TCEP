@@ -8,11 +8,12 @@ import tcep.graph.nodes.traits.SystemLoadUpdater
 import tcep.graph.transition.MAPEK.{AddOperator, RemoveOperator}
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BandwidthUnit, BytePerSec, KBytePerSec, MBytePerSec}
 import tcep.machinenodes.qos.BrokerQoSMonitor._
+import tcep.utils.TCEPUtils
 
 import java.util.concurrent.TimeUnit
 import scala.collection.mutable
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.FiniteDuration
-import scala.concurrent.{ExecutionContext, Future}
 
 /**
   * monitoring actor present on every cluster node
@@ -32,7 +33,7 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
   val cpuThreadCount: Int = Runtime.getRuntime.availableProcessors()
   var operatorsOnNode: mutable.Set[ActorRef] = mutable.Set.empty
-  var currentNodeIOMetrics: IOMetrics = IOMetrics()
+  var currentNodeIOMetrics: Map[ActorRef, IOMetrics] = Map()
 
   override def preStart(): Unit = {
     super.preStart()
@@ -43,20 +44,25 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
     case GetCPULoad => sender() ! currentLoad //TODO currently returns avg jvm load of last minute from JMXBean; alternative would be mpstat for entire node over arbitrary interval
     case GetCPUThreadCount => sender() ! cpuThreadCount
     case GetNodeOperatorCount => sender() ! operatorsOnNode.size
-    case GetIOMetrics => sender() ! currentNodeIOMetrics
-    case GetNodeMetrics => sender() ! NodeQosMetrics(currentLoad, cpuThreadCount, operatorsOnNode.size, currentNodeIOMetrics)
-    case AddOperator(ref) => operatorsOnNode += ref
+    case GetIOMetrics => sender() ! currentNodeIOMetrics.values.fold(IOMetrics())((a,b) => a + b)
+    case GetBrokerMetrics(withoutOperator) =>
+      val ioMetrics = if(withoutOperator.isDefined) currentNodeIOMetrics.filterNot(_._1.equals(withoutOperator.get)).values.fold(IOMetrics())((a, b) => a + b)
+                      else currentNodeIOMetrics.values.fold(IOMetrics())((a, b) => a + b)
+      sender() ! BrokerQosMetrics(currentLoad, cpuThreadCount, operatorsOnNode.size, ioMetrics)
+
+    case AddOperator(ref) => if(ref.path.address.equals(self.path.address)) operatorsOnNode += ref
     case RemoveOperator(ref) => operatorsOnNode -= ref
     case IOMetricUpdateTick =>
-      log.info(s"IOMetric UpdateTick for operators $operatorsOnNode")
-      Future.traverse(operatorsOnNode)(op => (op ? GetIOMetrics).mapTo[IOMetrics])
-        .map(e => {
-          log.info(s"processing IOMetrics ${e}")
-          e.fold(IOMetrics())((a, b) => a + b)
-        })
+      TCEPUtils.makeMapFuture(operatorsOnNode.map(op => op -> (op ? GetIOMetrics).mapTo[IOMetrics]).toMap)
         .map(e => IOMetricUpdate(e))
+        .pipeTo(self)
+      /*
+      val start = System.nanoTime()
+      Future.traverse(operatorsOnNode)(op => (op ? GetIOMetrics).mapTo[IOMetrics])
+        .map(e => e.fold(IOMetrics())((a, b) => a + b))
+        .map(e => { log.info(s"BrokerQosMonitor UpdateTick for ${operatorsOnNode.size} operators took ${System.nanoTime() - start}"); IOMetricUpdate(e) })
         .pipeTo(self) // pipe future as msg to self to avoid closing over state (currentNodeIOMetrics)
-
+      */
     case IOMetricUpdate(update) =>
       currentNodeIOMetrics = update
       log.info(s"BrokerNode QoS update: load $currentLoad, threads $cpuThreadCount, operators ${operatorsOnNode.size}, IO $currentNodeIOMetrics}")
@@ -73,9 +79,9 @@ object BrokerQoSMonitor {
   case object GetIncomingBandwidth
   case object GetOutgoingBandwidth
   case object GetIOMetrics
-  case object GetNodeMetrics
-  case class NodeQosMetrics(cpuLoad: Double, cpuThreadCount: Int, deployedOperators: Int, IOMetrics: IOMetrics)
-  private case class IOMetricUpdate(ioMetrics: IOMetrics)
+  case class GetBrokerMetrics(withoutOperator: Option[ActorRef] = None)
+  case class BrokerQosMetrics(cpuLoad: Double, cpuThreadCount: Int, deployedOperators: Int, IOMetrics: IOMetrics, timestamp: Long = System.currentTimeMillis())
+  private case class IOMetricUpdate(ioMetrics: Map[ActorRef, IOMetrics])
   private case object IOMetricUpdateTick
   private case object IOMetricUpdateKey
   case class IOMetrics(
@@ -104,6 +110,7 @@ object BrokerQoSMonitor {
         case _ => throw new IllegalArgumentException(s"unknown bandwidth unit $a")
       }
     }
+    def toUnit(otherUnit: BandwidthUnit): Bandwidth = Bandwidth((amount * conversionFactor(this.unit)) / conversionFactor(otherUnit), otherUnit)
   }
   object BandwidthUnit extends Enumeration {
     type BandwidthUnit = Value

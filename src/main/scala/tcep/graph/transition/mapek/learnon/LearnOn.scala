@@ -204,7 +204,7 @@ class LearnOn(cfm: CFM, latencyPIMPath: String, loadPIMPath: String) extends Lea
         }
       }
     }
-    log.info(s"Logdata is: ${logData}")
+    //log.info(s"Logdata is: ${logData}")
     logData
   }
 
@@ -674,7 +674,7 @@ class LearnOn(cfm: CFM, latencyPIMPath: String, loadPIMPath: String) extends Lea
         this.lastDataChunc = Some(newDataChunk)
         this.dataStorage = None
       }
-      log.info(s"BETAS are: ${this.perfModelBetas}, Hid is: ${this.lastHId}")
+      //log.info(s"BETAS are: ${this.perfModelBetas}, Hid is: ${this.lastHId}")
     } else
       log.info("No learning done, because turned off in configuration file.")
     true

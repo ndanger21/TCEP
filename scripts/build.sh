@@ -4,8 +4,13 @@
 # Modified by: Niels Danger
 # Description: Builds and creates the docker image of TCEP
 
+if [ -z $2 ]; then
+  config_file="docker-swarm_local.cfg"
+else
+  config_file=$2
+fi
 work_dir="$(cd "$(dirname "$0")" ; pwd -P)/.."
-source "${work_dir}/docker-swarm.cfg"
+source "${work_dir}/${config_file}"
 remote_build='false'
 sbt_remote='false'
 
@@ -21,7 +26,7 @@ build_local() {
     docker login
   fi
   mkdir $work_dir/dockerbuild
-  printf "\nBuilding image\n"
+  printf "\nBuilding image with registry_user $registry_user\n"
   cp $work_dir/target/scala-2.12/tcep_2.12-0.0.1-SNAPSHOT-one-jar.jar $work_dir/dockerbuild
   cp $work_dir/Dockerfile $work_dir/dockerbuild
   cp $work_dir/docker-entrypoint.sh $work_dir/dockerbuild

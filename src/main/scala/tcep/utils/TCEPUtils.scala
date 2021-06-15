@@ -86,14 +86,14 @@ object TCEPUtils {
     * retrieves all bandwidth measurements between all nodes (only for mininet where bandwidth is set constant)
     */
   def getAllBandwidthsFromLocalTaskManager(cluster: Cluster)(implicit ec: ExecutionContext): Future[Map[(Member, Member), Double]] = {
-    SpecialStats.log(this.toString, "placement", s"asking local taskManager actor for all its bandwidth measurements")
+    //SpecialStats.log(this.toString, "placement", s"asking local taskManager actor for all its bandwidth measurements")
     val request = for {
       taskManager <- this.getTaskManagerOfMember(cluster, cluster.selfMember)
       allBandwidthsResponse <- trySendWithRetry(taskManager, AllBandwidthsRequest(), retryTimeout, retries).mapTo[AllBandwidthsResponse]
     } yield allBandwidthsResponse.bandwidthMap
     request.onComplete {
-      case Failure(exception) => SpecialStats.log(this.toString, "placement", s"failed to get all bandwidths from local taskmanager, cause: $exception")
-      case Success(value) => SpecialStats.log(this.toString, "placement", s"retrieved all bandwidths from local taskmanager (${value.size} total)")
+      case Failure(exception) => //SpecialStats.log(this.toString, "placement", s"failed to get all bandwidths from local taskmanager, cause: $exception")
+      case Success(value) => //SpecialStats.log(this.toString, "placement", s"retrieved all bandwidths from local taskmanager (${value.size} total)")
     }
     request
   }
