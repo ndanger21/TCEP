@@ -1,7 +1,5 @@
 package tcep.data
 
-import java.time.Duration
-
 import akka.actor.Address
 import tcep.data.Events._
 import tcep.data.Structures.MachineLoad
@@ -11,6 +9,7 @@ import tcep.placement.QueryDependencies
 import tcep.simulation.tcep.MobilityData
 import tcep.utils.SizeEstimator
 
+import java.time.Duration
 import scala.collection.mutable
 import scala.collection.mutable.HashMap
 import scala.reflect.runtime.universe.{TypeTag, typeOf}
@@ -108,7 +107,14 @@ object Queries {
   type EventRateEstimate = Double
   type EventSizeEstimate = Long
   type EventBandwidthEstimate = Double
-  def extractOperators(query: Query, baseEventRate: Double): mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)] = {
+  type QueryDependencyMap = mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
+
+  /**
+    * @param query root operator of the query
+    * @param baseEventRate average event publication rate of publishers in the query (assumes equal event publishing rates for all publishers)
+    * @return returns a map with an entry for each operator in the query specifying its parent and child operators, as well as estimates for outgoing event rate, size and bandwidth
+    */
+  def extractOperators(query: Query, baseEventRate: Double): QueryDependencyMap = {
     /**
       * recursively extracts the operators and their dependent child and parent operators
       * as well as their estimated output event rate and size (depending on parent operators), and used bandwidth in [Bytes / s]
@@ -117,8 +123,7 @@ object Queries {
       * @param child child operator
       * @return the sorted map of all operators and their dependencies, with the root operator as the second to last map entry
       */
-    def extractOperatorsRec(operator: Query, child: Option[Query] = Some(ClientDummyQuery())
-                           ): mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)] = {
+    def extractOperatorsRec(operator: Query, child: Option[Query] = Some(ClientDummyQuery())): QueryDependencyMap = {
       operator match {
         case b: BinaryQuery =>
           val left = extractOperatorsRec(b.sq1, Some(b))
