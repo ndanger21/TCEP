@@ -56,13 +56,12 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
                        createdCallback: Option[CreatedCallback],
                        consumer: ActorRef = null)
                       (implicit override val context: ActorContext,
-                       override implicit val cluster: Cluster,
-                       override implicit val baseEventRate: Double
+                       override implicit val cluster: Cluster
                       )
     extends QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, createdCallback, consumer) {
 
     override def createAndStart(eventCallback: Option[EventCallback]): ActorRef = {
-      val queryDependencies = extractOperators(query, baseEventRate)
+      val queryDependencies = extractOperators(query)
       val root = startDeployment(eventCallback, queryDependencies)
       mapek.knowledge ! SetClient(subscriberActor)
       mapek.knowledge ! SetTransitionMode(transitionConfig)
@@ -97,7 +96,6 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
 
     val wrapper = system.actorOf(Props(new Actor {
       implicit val cluster: Cluster = Cluster(context.system)
-      implicit val baseEventRate: EventRateEstimate = 1.0
       try {
         val graphFactory: TestQueryGraph = new TestQueryGraph(query, subscriberActor, TransitionConfig(), publishers, None, None)
         println("Created TestQueryGraph")

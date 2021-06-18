@@ -82,7 +82,7 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
       eventSamples.clear()
       operator ! UpdateEventRateOut(eventRateOut)
       operator ! UpdateEventSizeOut(eventSizeOut)
-      brokerQoSMonitor ! GetBrokerMetrics(Some(operator))
+      brokerQoSMonitor ! GetBrokerMetrics(Some(Set(operator)))
 
     case BrokerQosMetrics(cpuLoad, cpuThreadCount, deployedOperators, ioMetrics, timestamp) =>
       // log feature and metric values

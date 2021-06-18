@@ -19,8 +19,7 @@ case class ObserveChangeNode(transitionConfig: TransitionConfig,
                              createdCallback: Option[CreatedCallback],
                              eventCallback: Option[EventCallback],
                              isRootOperator: Boolean,
-                             publisherEventRate: Double,
-                             _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+                                  _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
 
   var storage: HashMap[Int, AnyVal] = HashMap.empty[Int, AnyVal]
   var lastEmit: Double = System.currentTimeMillis().toDouble

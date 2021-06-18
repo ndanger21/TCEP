@@ -187,7 +187,7 @@ object DistVivaldiActor {
       if(localRequest.isDefined) Future { CoordinatesResponse(localRequest.get) }
       else { // no coordinates of remote node available
         implicit val ec: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
-        logger.warn(s"coordinate request for  $address failed since no local entry is available yet, asking explicitly")
+        //logger.warn(s"coordinate request for  $address failed since no local entry is available yet, asking explicitly")
         val remoteRequest = for {
           distViv <- TCEPUtils.selectDistVivaldiOn(cluster, address).resolveOne()
           response <- (distViv ? CoordinatesRequest(address)).mapTo[CoordinatesResponse]

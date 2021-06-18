@@ -4,6 +4,7 @@ import akka.actor.{ActorLogging, ActorRef, Props, Terminated}
 import akka.cluster.Cluster
 import tcep.ClusterActor
 import tcep.data.Events.{Event, updateMonitoringData}
+import tcep.data.Queries
 import tcep.data.Queries.Query
 import tcep.graph.EventCallback
 import tcep.graph.nodes.traits.Node.{Dependencies, Subscribe, UnSubscribe}
@@ -34,7 +35,6 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
   val hostInfo: HostInfo
   var transitionInitiated = false
   val slidingMessageQueue: ListBuffer[(ActorRef, Event)]
-  implicit val publisherEventRate: Double
   var eventRateOut: Double = 0.0d
   var eventSizeOut: Long = 0
   val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor") //TODO use custom dispatcher?
@@ -161,10 +161,10 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
   // helper functions for retrying intermediate steps upon failure
   def findSuccessorHost(algorithm: PlacementStrategy, dependencies: Dependencies)(implicit ec: ExecutionContext): Future[HostInfo] = {
     val req = for {
-      wasInitialized <- algorithm.initialize(caller = Some(self))
+      wasInitialized <- algorithm.initialize()
       successorHost: HostInfo <- {
         transitionLog(s"initialized algorithm $algorithm (was initialized: $wasInitialized), looking for new host...");
-        algorithm.findOptimalNode(hostInfo.operator, dependencies, HostInfo(cluster.selfMember, hostInfo.operator, OperatorMetrics()))
+        algorithm.findOptimalNode(hostInfo.operator, hostInfo.operator, dependencies, HostInfo(cluster.selfMember, hostInfo.operator, OperatorMetrics()))
       }
     } yield {
       transitionLog(s"found new host ${successorHost.member.address}")

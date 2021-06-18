@@ -23,24 +23,25 @@ trait SpringRelaxationLike extends PlacementStrategy {
 
   // place a single operator
   def collectInformationAndExecute(operator: Query, dependencies: Dependencies)
-                                  (implicit ec: ExecutionContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] = {
-    val operatorDependenciesAndBandwidths = Queries.extractOperators(operator, baseEventRate)
-    val operatorDependencyMap = operatorDependenciesAndBandwidths.mapValues(_._1).toMap
-    val outputBandwidthEstimates = operatorDependenciesAndBandwidths.mapValues(_._4).toMap
-    if(operator.isInstanceOf[StreamQuery]) {
-      assert(dependencies.parents.values.exists(_.isInstanceOf[PublisherDummyQuery]), s"dependencies for streamOperator must contain PublisherDummyQuery: $dependencies")
-    }
-    log.error(s"dependencies: \n${dependencies.parents.mkString("\n")} \n ${dependencies.subscribers}")
+                                  (implicit ec: ExecutionContext, cluster: Cluster): Future[HostInfo] = {
 
     val res = for {
-      init <- this.initialize()
+      _ <- this.initialize()
     } yield {
+      val operatorDependenciesAndBandwidths = Queries.extractOperators(operator)
+      val operatorDependencyMap = operatorDependenciesAndBandwidths.mapValues(_._1).toMap
+      val outputBandwidthEstimates = operatorDependenciesAndBandwidths.mapValues(_._4).toMap
+      if(operator.isInstanceOf[StreamQuery]) {
+        assert(dependencies.parents.values.exists(_.isInstanceOf[PublisherDummyQuery]), s"dependencies for streamOperator must contain PublisherDummyQuery: $dependencies")
+      }
+      log.error(s"dependencies: \n${dependencies.parents.mkString("\n")} \n ${dependencies.subscribers}")
+
       // start requests in parallel
       val candidateCoordRequest = getCoordinatesOfMembers(findPossibleNodesToDeploy(cluster), Some(operator))
       val dependencyCoordRequest = getCoordinatesOfNodes((dependencies.parents.keys ++ dependencies.subscribers.keys.flatten).toSeq, Some(operator))
       val selfCoordRequest = getCoordinatesOfNode(cluster.selfMember, Some(operator))
       val clientCoordinatesRequest = TCEPUtils.getCoordinatesOfNode(cluster, cluster.state.members.filter(_.hasRole("Subscriber")).head.address) // do not log overhead since this call is due to implementation
-      val publisherRequest = TCEPUtils.getPublisherActors(cluster)
+      val publisherRequest = TCEPUtils.getPublisherActors()
 
       val hostRequest = for {
         candidateCoordinates <- candidateCoordRequest
@@ -76,8 +77,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
     * @return a map from operator to host
     */
   def initialVirtualOperatorPlacement(query: Query, publishers: Map[String, ActorRef])
-                                     (implicit ec: ExecutionContext, cluster: Cluster, baseEventRate: Double,
-                                      queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
+                                     (implicit ec: ExecutionContext, cluster: Cluster, queryDependencies: QueryDependencyMap
                                      ): Future[Map[Query, Coordinates]] = {
 
     val clientNode = cluster.state.members.filter(m => m.roles.contains("Subscriber"))
@@ -86,6 +86,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
     val publisherMembers = publishers.map(p => cluster.state.members.find(_.address == p._2.path.address).getOrElse(cluster.selfMember))
     val publisherCoordRequest = getCoordinatesOfMembers(publisherMembers.toSet, Some(query))
     val virtualOperatorPlacementRequest = for {
+      _ <- this.initialize()
       publisherCoordinates <- publisherCoordRequest
       clientCoordinates <- getCoordinatesOfNode(clientNode.head, Some(query))
     } yield {
@@ -108,10 +109,11 @@ trait SpringRelaxationLike extends PlacementStrategy {
     * @param query the query consisting of the operators to be placed
     */
   def calculateVirtualPlacementWithCoords(query: Query, clientCoordinates: Coordinates, publisherCoordinates: Map[String, Coordinates])
-                                         (implicit ec: ExecutionContext, cluster: Cluster, baseEventRate: Double,
-                                          queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
+                                         (implicit ec: ExecutionContext, cluster: Cluster,
+                                          queryDependencies: QueryDependencyMap
                                          ): Map[Query, Coordinates] = {
-    val operatorDependenciesAndBandwidths = Queries.extractOperators(query, baseEventRate)
+
+    val operatorDependenciesAndBandwidths = Queries.extractOperators(query)
     val operatorDependencyMap = operatorDependenciesAndBandwidths.mapValues(_._1).toMap
     val outputBandwidthEstimates = operatorDependenciesAndBandwidths.mapValues(_._4).toMap
     //println("client Coordinates: " + clientCoordinates)
@@ -155,7 +157,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
                                          currentOperatorCoordinates: Map[Query, Coordinates],
                                          publisherDummyCoordinates: Map[String, Coordinates], clientDummyCoordinates: Coordinates
                                         ): QueryDependenciesWithCoordinates = {
-    log.info(s"operator: $operator \n dependencymap: \n ${operatorDependencyMap.keys.mkString("\n")} \n coordinatemap: \n${currentOperatorCoordinates.mkString("\n")} \n publisherDummyCoords: ${publisherDummyCoordinates.mkString("\n")} \n clientDummyCoords: $clientDummyCoordinates")
+    log.debug(s"operator: $operator \n dependencymap: \n ${operatorDependencyMap.keys.mkString("\n")} \n coordinatemap: \n${currentOperatorCoordinates.mkString("\n")} \n publisherDummyCoords: ${publisherDummyCoordinates.mkString("\n")} \n clientDummyCoords: $clientDummyCoordinates")
     // deep queries cause lookup failures, use string representation instead
     val operatorCoordStrMap = currentOperatorCoordinates.map(e => e._1.toString() -> e._2)
     try {
@@ -257,7 +259,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
 
   def makeVCStep(previousVC: Coordinates, stepSize: Double, previousRoundForce: Double, iteration: Int = 0, consecutiveStepAdjustments: Int = 0)
                 (implicit ec: ExecutionContext, operator: Query, dependencyCoordinates: QueryDependenciesWithCoordinates,
-                 dependenciesDataRateEstimates: Map[Query, Double]): Future[Coordinates]
+                 dependenciesDataRateEstimates: Map[Query, EventBandwidthEstimate]): Future[Coordinates]
 
   /**
     * called once the virtual coordinates have been determined to place an operator on a host

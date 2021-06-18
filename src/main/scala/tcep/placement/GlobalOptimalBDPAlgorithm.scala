@@ -2,8 +2,10 @@ package tcep.placement
 import akka.actor.{ActorContext, ActorRef}
 import akka.cluster.{Cluster, Member}
 import org.discovery.vivaldi.Coordinates
+import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.Dependencies
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.utils.TCEPUtils
 
 import scala.collection.mutable
@@ -13,7 +15,8 @@ import scala.concurrent.{ExecutionContext, Future}
 object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
 
   override val name: String = "GlobalOptimalBDP"
-  var singleNodePlacement: Option[(Member, Double)] = None
+  var singleNodePlacement: Option[SingleNodePlacement] = None
+  case class SingleNodePlacement(host: Member, minBDP: Double)
 
   override def hasInitialPlacementRoutine(): Boolean = true
 
@@ -24,9 +27,9 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
     *
     * @return HostInfo, containing the address of the host node
     */
-  override def findOptimalNode(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                              (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] =
-    applyGlobalOptimalBDPAlgorithm(operator, dependencies).map(_._1)
+  override def findOptimalNode(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                              (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[HostInfo] =
+    applyGlobalOptimalBDPAlgorithm(operator, rootOperator, dependencies).map(_._1)
 
 
   /**
@@ -34,10 +37,10 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
     *
     * @return HostInfo, containing the address of the host nodes
     */
-  override def findOptimalNodes(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                               (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, HostInfo)] = {
+  override def findOptimalNodes(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                               (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[(HostInfo, HostInfo)] = {
     for {
-      mainNode <- findOptimalNode(operator, dependencies, askerInfo)
+      mainNode <- findOptimalNode(operator, rootOperator, dependencies, askerInfo)
     } yield {
       val backup = HostInfo(cluster.selfMember, operator, OperatorMetrics())
       (mainNode, backup)
@@ -53,56 +56,54 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
     * @param operator operator to be placed
     * @return Host with minimum bdp
     */
-  def applyGlobalOptimalBDPAlgorithm(operator: Query, dependencies: Dependencies)
-                                    (implicit ec: ExecutionContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, Double)] = {
-    val allParentDependencies = extractOperators(operator, baseEventRate)
-    val outputBandwidthEstimates = allParentDependencies.map(e => e._1 -> e._2._4).toMap
+  def applyGlobalOptimalBDPAlgorithm(operator: Query, rootOperator: Query, dependencies: Dependencies)
+                                    (implicit ec: ExecutionContext, cluster: Cluster): Future[(HostInfo, Double)] = {
     val res = for {
-      init <- this.initialize()
-      publisherActors <- TCEPUtils.getPublisherActors(cluster)
+      _ <- this.initialize()
     } yield {
-      cluster.system.scheduler.scheduleOnce(5 seconds)(() => this.singleNodePlacement = None) // reset
+      val queryDependencyMap = Queries.extractOperators(rootOperator)
+      val outputBandwidthEstimates = queryDependencyMap.map(e => e._1 -> e._2._4).toMap
       if (this.singleNodePlacement.isDefined) {
-        println(s"already placed one operator, current op $operator")
-        for { bdpUpdate <- this.updateOperatorToParentBDP(operator, this.singleNodePlacement.get._1, dependencies.parents, outputBandwidthEstimates) } yield
-          (HostInfo(this.singleNodePlacement.get._1, operator, this.getPlacementMetrics(operator)), this.singleNodePlacement.get._2)
+        log.info(s"already placed one operator on ${singleNodePlacement.get.host}, reusing ost for current op $operator")
+        for {
+          bdpUpdate <- this.updateOperatorToParentBDP(operator, this.singleNodePlacement.get.host, dependencies.parents, outputBandwidthEstimates)
+        } yield (HostInfo(this.singleNodePlacement.get.host, operator, this.getPlacementMetrics(operator)), this.singleNodePlacement.get.minBDP)
       } else {
-        // get publishers that appear in the query
-        val publishersInQuery = cluster.state.members.filter(_.hasRole("Publisher")).flatMap(p => {
-          val publisherName = publisherActors.find(_._2.path.address == p.address).getOrElse(
-            // get self from list if called on that publisher
-            publisherActors.find(a => a._2.path.address.host.isEmpty && a._2.path.address.port.isEmpty).get)._1
-          val publisherDummyQuery = allParentDependencies.find(
-            d => d._1.isInstanceOf[PublisherDummyQuery] && d._1.asInstanceOf[PublisherDummyQuery].p == publisherName)
-          // only add an entry if the publisher is used in the query
-          if (publisherDummyQuery.isDefined) Some(publisherDummyQuery.get._1 -> p) else None
-        }).toMap
-        val subscriber = cluster.state.members.find(_.hasRole("Subscriber"))
-        assert(publishersInQuery.nonEmpty && subscriber.nonEmpty, "could not find publisher and client members!")
-
-        println(s"no operator placed yet, publishers: \n $publishersInQuery")
-
+        cluster.system.scheduler.scheduleOnce(5 seconds)(() => this.singleNodePlacement = None) // reset
         for {
           allCoordinates <- getCoordinatesOfMembers(cluster.state.members, Some(operator))
+          // get publishers that appear in the ENTIRE query
+          allPublisherActors: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
+          allQueryPublishers = Queries.getPublishers(rootOperator)
+          allQueryPublisherMembers: Map[PublisherDummyQuery, Member] = allPublisherActors
+            .filter(p => allQueryPublishers.contains(p._1))
+            .map(e => PublisherDummyQuery(e._1) -> cluster.state.members.find(_.address.equals(e._2.path.address)).getOrElse(cluster.selfMember))
+
+            subscriber = {
+              val subscriber = cluster.state.members.find(_.hasRole("Subscriber"))
+              assert(allQueryPublisherMembers.nonEmpty && subscriber.nonEmpty, "could not find publisher and client members!")
+              log.debug(s"no operator placed before $operator, \n publishersInQuery are: $allQueryPublisherMembers \n publisherActors are $allPublisherActors")
+              subscriber
+            }
+
           minBDPCandidate = allCoordinates.filter(_._1.hasRole("Candidate"))
-                                          .map(c => calculateSingleHostPlacementBDP(c._1, subscriber.get, publishersInQuery, allCoordinates, outputBandwidthEstimates)).minBy(_._2)
+                                          .map(c => calculateSingleHostPlacementBDP(c._1, subscriber.get, allQueryPublisherMembers, allCoordinates, outputBandwidthEstimates)).minBy(_._2)
           bdpUpdate <- this.updateOperatorToParentBDP(operator, minBDPCandidate._1, dependencies.parents, outputBandwidthEstimates)
         } yield {
           val hostInfo = HostInfo(minBDPCandidate._1, operator, this.getPlacementMetrics(operator))
           placementMetrics.remove(operator) // placement of operator complete, clear entry
-          this.singleNodePlacement = Some((minBDPCandidate))
+          this.singleNodePlacement = Some(SingleNodePlacement(minBDPCandidate._1, minBDPCandidate._2)) // cache publisher event rate lookup for next operator
           (hostInfo, minBDPCandidate._2)
         }
 
       }
     }
     res.flatten
-
   }
 
   def calculateSingleHostPlacementBDP(candidate: Member,
                                       subscriber: Member,
-                                      publishers: Map[Query, Member],
+                                      publishers: Map[PublisherDummyQuery, Member],
                                       allCoordinates: Map[Member, Coordinates],
                                       outputBandwidthEstimates: Map[Query, EventBandwidthEstimate]): (Member, Double) = {
     // distance: ms, bandwidthEstimates: Bytes/s
@@ -113,13 +114,12 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
 
   // called during the initial placement in QueryGraph
   override def initialVirtualOperatorPlacement(query: Query, publishers: Map[String, ActorRef])
-                                                (implicit ec: ExecutionContext, cluster: Cluster, baseEventRate: Double,
-                                                 queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
+                                                (implicit ec: ExecutionContext, cluster: Cluster, queryDependencies: QueryDependencyMap
                                                 ): Future[Map[Query, Coordinates]] = {
     // calling applyGlobalOptimalBDPAlgorithm calculates the optimal single-host placement while using the root operator's estimated data rate
     // (instead of the stream operator's when using the normal recursive initial deployment)
     // dependencies not needed here, BDP is updated when calling findHost
-    for {_ <- applyGlobalOptimalBDPAlgorithm(query, Dependencies(Map(), Map())) } yield {
+    for {_ <- applyGlobalOptimalBDPAlgorithm(query, query, Dependencies(Map(), Map())) } yield {
       // coordinates are not used during deployment with findHost(), see selectHostFromCandidates() below
       assert(this.singleNodePlacement.isDefined, "should have an optimal host after calling initialVirtualOperatorPlacement()")
       Map(query -> Coordinates.origin)
@@ -130,9 +130,9 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
                                         memberToCoordinates: Map[Member, Coordinates],
                                         operator: Option[Query])
                                        (implicit ec: ExecutionContext,
-                                        cluster: Cluster): Future[(Member, Map[Member, EventRateEstimate])] = {
+                                        cluster: Cluster): Future[(Member, Map[Member, Double])] = {
     assert(singleNodePlacement.isDefined, "findHost must be called after virtual placement; no singleNodePlacement is available yet")
-    Future {(singleNodePlacement.get._1, Map())}
+    Future {(singleNodePlacement.get.host, Map())}
   }
   /*
   def findGlobalOptimalPlacement(rootOperator: Query, hosts: List[Member], allPairMetrics: Map[(Member, Member), Double],
@@ -198,13 +198,13 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
   */
   // not used
   override def makeVCStep(previousVC: Coordinates,
-                          stepSize: EventRateEstimate,
-                          previousRoundForce: EventRateEstimate,
+                          stepSize: Double,
+                          previousRoundForce: Double,
                           iteration: Int,
                           consecutiveStepAdjustments: Int = 0)
                          (implicit ec: ExecutionContext,
                           operator: Query,
                           dependencyCoordinates: QueryDependenciesWithCoordinates,
-                          dependenciesDataRateEstimates: Map[Query, EventRateEstimate]): Future[Coordinates] = ???
+                          dependenciesDataRateEstimates: Map[Query, EventBandwidthEstimate]): Future[Coordinates] = ???
 
 }

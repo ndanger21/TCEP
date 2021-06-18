@@ -20,7 +20,6 @@ case class StreamNode(transitionConfig: TransitionConfig,
                       createdCallback: Option[CreatedCallback],
                       eventCallback: Option[EventCallback],
                       isRootOperator: Boolean,
-                      publisherEventRate: Double,
                       publisher: ActorRef*) extends LeafNode with ActorLogging {
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {

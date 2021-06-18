@@ -2,6 +2,7 @@ package tcep.placement
 
 import akka.actor.{ActorContext, ActorRef, Address}
 import akka.cluster.{Cluster, Member, MemberStatus}
+import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
@@ -13,6 +14,8 @@ import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.mop.RizouAlgorithm
 import tcep.placement.sbon.PietzuchAlgorithm
+import tcep.prediction.PredictionHelper.Throughput
+import tcep.publishers.RegularPublisher.GetEventsPerSecond
 import tcep.utils.TCEPUtils.makeMapFuture
 import tcep.utils.{SizeEstimator, SpecialStats, TCEPUtils}
 
@@ -33,13 +36,13 @@ trait PlacementStrategy {
   val requestTimeout = Duration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS)
   val log = LoggerFactory.getLogger(classOf[PlacementStrategy])
   var placementMetrics: mutable.Map[Query, OperatorMetrics] = mutable.Map()
-  var publishers: Map[String, ActorRef] = Map()
   var memberBandwidths = Map.empty[(Member, Member), Double] // cache values here to prevent asking taskManager each time (-> msgOverhead)
   var memberCoordinates = Map.empty[Member, Coordinates]
+  implicit var publisherEventRates: Map[String, Throughput] = Map()
   var memberLoads = mutable.Map.empty[Member, Double] // cache loads, evict entries if an operator is deployed
   private val defaultLoad = ConfigFactory.load().getDouble("constants.default-load")
   private val defaultBandwidth = ConfigFactory.load().getDouble("constants.default-data-rate")
-  protected var initialized = false
+  @volatile protected var initialized = false
   private lazy val coordRequestSize: Long = SizeEstimator.estimate(CoordinatesRequest(Address("tcp", "tcep", "speedPublisher", 1)))
 
   val name: String
@@ -48,37 +51,35 @@ trait PlacementStrategy {
 
   /**
     * Find optimal node for the operator to place
-    *
+    * @param operator the operator to be placed
+    * @param rootOperator the root operator of the query that the operator is part of (true root for initial placement, operator for transition placements since root is not known to parents)
+    * @param dependencies immediate parent and child operator instances
     * @return HostInfo, containing the address of the host node
     */
-  def findOptimalNode(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo]
+  def findOptimalNode(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[HostInfo]
 
   /**
     * Find two optimal nodes for the operator placement, one node for hosting the operator and one backup node for high reliability
     *
     * @return HostInfo, containing the address of the host nodes
     */
-  def findOptimalNodes(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                      (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, HostInfo)]
+  def findOptimalNodes(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                      (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[(HostInfo, HostInfo)]
 
-  def initialize(caller: Option[ActorRef] = None)(implicit ec: ExecutionContext, cluster: Cluster): Future[Boolean] = {
+  def initialize()(implicit ec: ExecutionContext, cluster: Cluster): Future[Boolean] = {
     if(initialized){
       Future { true }
     } else synchronized {
       this.placementMetrics.clear()
-      log.info(s" placementStrategy was not yet initialized, fetching publisherActor list and bandwidths from local taskManager")
       for {
-        publisherMap <- TCEPUtils.getPublisherActors(cluster)
-        bandwidthMap <- TCEPUtils.getAllBandwidthsFromLocalTaskManager(cluster)
+        publisherActors <- TCEPUtils.getPublisherActors()
+        publisherEventRates <- getPublisherEventRates(publisherActors.keySet) // get current event rate of all publisher actors and store it for next operators
       } yield {
-        log.info(s" bw and pub requests complete (${bandwidthMap.size} bws, ${publisherMap.size} pubs")
-        this.publishers = publisherMap
+        this.publisherEventRates = publisherEventRates
         initialized = true
-        log.info(s" algorithm initialization complete \n publishers: \n ${publishers.keys.mkString("\n")}")
         false
       }
-
     }
   }
   // used for tests only
@@ -88,6 +89,13 @@ trait PlacementStrategy {
         m -> TCEPUtils.getCoordinatesOfNode(cluster, m.address).map { result => memberCoordinates = memberCoordinates.updated(m, result); result }
       }).toMap)
     //log.info(s"member coordinates: \n ${memberCoordinates.map(m => s"\n ${m._1.address} | ${m._2} " )} \n")
+  }
+
+  def getPublisherEventRates(publishers: Set[String])(implicit cluster: Cluster, ec: ExecutionContext): Future[Map[String, Throughput]] = {
+    for {
+      publisherActorMap <- TCEPUtils.getPublisherActors()
+      publisherEventRates <- TCEPUtils.makeMapFuture(publishers.map(p => p ->  (publisherActorMap(p) ? GetEventsPerSecond).mapTo[Throughput]).toMap)
+    } yield publisherEventRates
   }
 
   protected def updateOperatorToParentBDP(operator: Query, host: Member, parents: Map[ActorRef, Query],

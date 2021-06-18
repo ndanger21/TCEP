@@ -99,7 +99,7 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
       runOn(client) {
         val op = stream[Int](pNames(0))
         val dependencyCoords = QueryDependenciesWithCoordinates(Map(PublisherDummyQuery(pNames(0)) -> Coordinates(50, 0, 0)), Map(ClientDummyQuery() -> Coordinates(50, 50, 0)))
-        val dataRateEstimates = Queries.estimateOutputBandwidths(op, baseEventRate)
+        val dataRateEstimates = Queries.estimateOutputBandwidths(op)
         val virtualCoords = Await.result(uut.calculateVCSingleOperator(op, dependencyCoords, dataRateEstimates), uut.requestTimeout)
         assert(virtualCoords.distance(Coordinates(50, 25, 0)) <= 6.0d, "virtual coordinates should be in the middle of parent and client")
       }
@@ -129,7 +129,7 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
         val w = Dsl.slidingWindow(Dsl.Seconds(3))
         val op = s1.join(s2, w, w) // we assume streams are already deployed on publishers
         val dependencyCoords = QueryDependenciesWithCoordinates(Map(s1 -> publisher1, s2 -> publisher2), Map(ClientDummyQuery() -> clientC))
-        val dataRateEstimates = Queries.estimateOutputBandwidths(op, baseEventRate)
+        val dataRateEstimates = Queries.estimateOutputBandwidths(op)
         val virtualCoords = Await.result(uut.calculateVCSingleOperator(op, dependencyCoords, dataRateEstimates), uut.requestTimeout)
         //println(virtualCoords)
         assert(virtualCoords.x > -1 && virtualCoords.y > -50 &&
@@ -171,11 +171,11 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
     "return a map of all operators and their assorted parent and child operators that exist in a query" in {
       runOn(client) {
         val query =
-          stream[Boolean]("A")
-            .and(stream[Boolean]("B"))
-            .and(stream[Boolean]("C").where(_ == true))
+          stream[Boolean](pNames(0))
+            .and(stream[Boolean](pNames(1)))
+            .and(stream[Boolean](pNames(0)).where(_ == true))
 
-        val result = Queries.extractOperators(query, 10.0)
+        val result = Queries.extractOperators(query)
         assert(result.nonEmpty)
         assert(result.size == 10, "result must contain all 6 operators, 3 publisher dummy operators, and 1 ClientDummyOperator")
         assert(result.count(o => o._1.isInstanceOf[Stream1[_]]) == 3, "result must contain 3 stream operators")
@@ -211,7 +211,7 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
 
       runOn(client) {
         val query = stream[Int](pNames(0))
-        implicit val dependencyData = Queries.extractOperators(query, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(query)
         val result = uut.calculateVirtualPlacementWithCoords(query, clientC, Map(pNames(0) -> publisher1))
         assert(result(query).distance(new Coordinates(-50, 0, 0)) <= 2.0, "single operator should be placed between client and publisher")
       }
@@ -233,7 +233,7 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
         val s = stream[Int](pNames(0))
         val f1 = Filter1[Int](s, _ => true, Set())
         val f2 = Filter1[Int](f1, _ => true, Set())
-        implicit val dependencyData = Queries.extractOperators(f2, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(f2)
         val result = uut.calculateVirtualPlacementWithCoords(f2, clientC, Map(pNames(0) -> publisher1))
         val eps = 8.0
         assert(result(s).distance(new Coordinates(-75, 0, 0)) <= eps,"stream operator should be near publisher")
@@ -262,8 +262,8 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
         val s = stream[Int](publishers.head._1)
         val f1 = Filter1[Int](s, _ => true, Set())
         val f2 = Filter1[Int](f1, _ => true, Set())
-        implicit val dependencyData = Queries.extractOperators(f2, baseEventRate)
-        val dataRateEstimates = Queries.estimateOutputBandwidths(f2, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(f2)
+        val dataRateEstimates = Queries.estimateOutputBandwidths(f2)
         val candidates = Await.result(uut.getCoordinatesOfMembers(uut.findPossibleNodesToDeploy(cluster)), uut.requestTimeout)
         val virtualCoordinates: Map[Query, Coordinates] = Await.result(uut.initialVirtualOperatorPlacement(f2, publishers), uut.requestTimeout)
         val physicalPlacements: Map[Query, Member] = virtualCoordinates.map(o => o._1 -> Await.result(uut.findHost(o._2, candidates, o._1, Dependencies(Map(), Map()), dataRateEstimates), uut.requestTimeout).member)
@@ -318,8 +318,8 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
         //println(s"\nDEBUG minimum BDP: $minBDP")
 
         uut.k = 1 // disable load-based host choice for repeatable tests
-        implicit val dependencyData = Queries.extractOperators(f1, baseEventRate)
-        val dataRateEstimates = Queries.estimateOutputBandwidths(f1, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(f1)
+        val dataRateEstimates = Queries.estimateOutputBandwidths(f1)
         val virtualCoords: Map[Query, Coordinates] = uut.calculateVirtualPlacementWithCoords(f1, clientC, Map(pNames(0) -> publisher1))
         // dependencies empty since they're only needed for statistics update
         val physicalPlacement: Map[Query, (Member, Coordinates)] = virtualCoords.map(vc => vc._1 -> Await.result(

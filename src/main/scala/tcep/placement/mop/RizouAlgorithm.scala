@@ -4,7 +4,7 @@ import akka.actor.ActorContext
 import akka.cluster.{Cluster, Member}
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.Coordinates
-import tcep.data.Queries.Query
+import tcep.data.Queries.{Query, QueryDependencyMap}
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.placement._
 
@@ -39,13 +39,13 @@ object RizouAlgorithm extends SpringRelaxationLike {
     * @return the address of member where operator will be deployed
     */
   // this should only be called during transitions or in case of missing operators during the initial placement
-  def findOptimalNode(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] = {
+  def findOptimalNode(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[HostInfo] = {
     collectInformationAndExecute(operator, dependencies)
   }
 
-  def findOptimalNodes(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                      (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, HostInfo)] =
+  def findOptimalNodes(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                      (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[(HostInfo, HostInfo)] =
     for {
       mainNode <- collectInformationAndExecute(operator, dependencies)
     } yield {

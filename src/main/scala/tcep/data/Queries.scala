@@ -104,6 +104,19 @@ object Queries {
     }
   }
 
+  def getPublishers(rootOp: Query): Set[String] = {
+    def getPublishersRec(curOp: Query): Set[String] = {
+      curOp match {
+        case query: StreamQuery => Set(query.publisherName)
+        case query: SequenceQuery => Set(query.s1.publisherName, query.s2.publisherName)
+        case query: UnaryQuery => getPublishersRec(query.sq)
+        case query: BinaryQuery => getPublishersRec(query.sq1) ++ getPublishersRec(query.sq2)
+        case _ => Set()
+      }
+    }
+    getPublishersRec(rootOp)
+  }
+
   type EventRateEstimate = Double
   type EventSizeEstimate = Long
   type EventBandwidthEstimate = Double

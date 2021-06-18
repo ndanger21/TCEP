@@ -73,10 +73,10 @@ object SimulationRunner extends App with ConfigurationParser {
         None
       }
       val fixedSimulationProperties = Map('baseLatency -> baseLatency.toInt, 'maxPubToClientHops -> maxPubToClientHops.toInt)
-      val taskManagerActorProps = Props(classOf[TaskManagerActor], baseEventRate).withMailbox("prio-mailbox")
+      val taskManagerActorProps = Props(classOf[TaskManagerActor]).withMailbox("prio-mailbox")
       val simulatorActorProps = Props(
         new SimulationSetup(mode.toInt, TransitionConfig(transitionStrategy, transitionExecutionMode),
-          Some(duration.toInt), initialAlgorithm, query, mapek, requirement, loadTestMax)(directory, baseEventRate, combinedPIM == "1", fixedSimulationProperties)).withMailbox("prio-mailbox")
+          Some(duration.toInt), initialAlgorithm, query, mapek, requirement, loadTestMax)(directory, combinedPIM == "1", fixedSimulationProperties)).withMailbox("prio-mailbox")
       logger.info(s"taskManager mailbox: ${taskManagerActorProps.mailbox} \n simulator mailbox: ${simulatorActorProps.mailbox}")
       actorSystem.actorOf(taskManagerActorProps, "TaskManager")
       actorSystem.actorOf(simulatorActorProps, "SimulationSetup")

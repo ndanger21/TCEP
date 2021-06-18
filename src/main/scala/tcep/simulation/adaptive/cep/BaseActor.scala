@@ -65,7 +65,7 @@ case class BaseActor() extends Actor {
   val monitors: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query1, Option.empty),
                                               DummyMonitorFactory(query1))
 
-  val graphFactory = new QueryGraph(query1, TransitionConfig(), publishers, None, None, self)(context, cluster, 1.0 )
+  val graphFactory = new QueryGraph(query1, TransitionConfig(), publishers, None, None, self)(context, cluster)
 
   graphFactory.createAndStart(
     eventCallback = Some({

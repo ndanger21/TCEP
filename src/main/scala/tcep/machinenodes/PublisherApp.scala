@@ -31,7 +31,7 @@ object PublisherApp extends ConfigurationParser with App {
     implicit val creatorAddress: Address = cluster.selfAddress
     DistVivaldiActor.createVivIfNotExists(actorSystem)
     // publishers can host operators
-    actorSystem.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
+    actorSystem.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
     val publisherName = s"P:${options.getOrElse('ip, ipDefault)}:${options.getOrElse('port, 0)}"
     val eventIntervalMicros = (1000000 / baseEventRate).toLong
     val logFilePathStr = System.getProperty("logFilePath").split("/")

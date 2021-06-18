@@ -22,8 +22,7 @@ case class SlidingWindowNode(transitionConfig: TransitionConfig,
                              createdCallback: Option[CreatedCallback],
                              eventCallback: Option[EventCallback],
                              isRootOperator: Boolean,
-                             publisherEventRate: Double,
-                             _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+                                  _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
 
   var storage: ListBuffer[(Double, Double)] = ListBuffer.empty[(Double, Double)]
   var lastEmit: Double = System.currentTimeMillis().toDouble

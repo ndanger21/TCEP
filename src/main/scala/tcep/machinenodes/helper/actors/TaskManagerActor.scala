@@ -6,7 +6,7 @@ import akka.pattern.pipe
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.{Coordinates, VivaldiPosition}
-import tcep.data.Queries.Query
+import tcep.data.Queries.{Query, QueryDependencyMap}
 import tcep.factories.NodeFactory
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.machinenodes.qos.BrokerQoSMonitor
@@ -78,7 +78,7 @@ case object GetEventPause extends TransitionControlMessage
 /**
   * responsible for handling placement-related activities
   */
-class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with ActorLogging {
+class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
 
   override implicit val ec = blockingIoDispatcher // almost all tasks are i/o bound
   private val bandwidthEstimator: ActorRef = context.actorOf(Props(new BandwidthEstimator()), "BandwidthEstimator")
@@ -125,7 +125,7 @@ class TaskManagerActor(baseEventRate: Double) extends VivaldiCoordinates with Ac
       log.debug(s"$this ", s"$s sent starks task $st, is first request: ${!ongoingPlacementRequests.contains(s)}")
       if(!ongoingPlacementRequests.contains(s)) {
         val starks = StarksAlgorithm
-        val hostRequest: Future[HostInfo] = starks.findOptimalNode(st.operator, st.dependencies, st.askerInfo)(blockingIoDispatcher, context, cluster, baseEventRate)
+        val hostRequest: Future[HostInfo] = starks.findOptimalNode(st.operator, st.operator, st.dependencies, st.askerInfo)(blockingIoDispatcher, context, cluster)
         ongoingPlacementRequests += s -> hostRequest
         hostRequest.onComplete(_ => context.system.scheduler.scheduleOnce(timeout.duration)(clearPlacementRequest(s))) // delay clearing a bit to avoid re-send arriving while sending reply
         hostRequest.map(StarksTaskReply(_)) pipeTo s

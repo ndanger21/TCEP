@@ -3,6 +3,7 @@ package tcep.simulation.tcep
 import akka.actor.{ActorLogging, ActorRef, Address, Cancellable, CoordinatedShutdown, RootActorPath}
 import akka.cluster.ClusterEvent.CurrentClusterState
 import akka.cluster.{Member, MemberStatus}
+import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import tcep.data.Queries._
@@ -17,7 +18,9 @@ import tcep.placement.mop.RizouAlgorithm
 import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.placement.vivaldi.VivaldiCoordinates
 import tcep.placement.{GlobalOptimalBDPAlgorithm, MobilityTolerantAlgorithm, PlacementStrategy, RandomAlgorithm}
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.StartStreams
+import tcep.publishers.RegularPublisher.GetEventsPerSecond
 import tcep.utils.TCEPUtils
 
 import java.io.File
@@ -32,7 +35,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
                       queryString: String = "AccidentDetection",
                       mapek: String = "requirementBased", requirementStr: String = "latency", loadTestMax: Int = 1,
                       overridePublisherPorts: Option[Set[Int]] = None
-                     )(implicit val directory: Option[File], val baseEventRate: Double, combinedPIM: Boolean, fixedSimulationProperties: Map[Symbol, Int] = Map()
+                     )(implicit val directory: Option[File], val combinedPIM: Boolean, fixedSimulationProperties: Map[Symbol, Int] = Map()
 ) extends VivaldiCoordinates with ActorLogging {
 
   val transitionTesting = true
@@ -45,6 +48,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   val speedPublisherNodePorts = publisherBasePort until publisherBasePort + nSpeedPublishers
   // publisher naming convention: P:hostname:port, e.g. "P:p1:2502", or "P:localhost:2501" (for local testing)
   var publishers: Map[String, ActorRef] = Map.empty[String, ActorRef]
+  implicit var publisherEventRates: Map[String, Throughput] = Map()
   val publisherPorts: Set[Int] = if(overridePublisherPorts.isDefined && overridePublisherPorts.get.size >= 2) overridePublisherPorts.get // for unit/integration testing
                        else densityPublisherNodePort :: speedPublisherNodePorts.toList toSet
   var consumers: Set[ActorRef] = Set()
@@ -284,12 +288,15 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
     if(member.address.port.getOrElse(-1) >= densityPublisherNodePort) { // densityPublisher node -> multiple publisher actors
       0 until nSections foreach { i =>
         if (!publishers.keys.exists(_.contains(s"densityPublisher-$i-"))) {
-          val publisherActorRef = for {ref <- context.actorSelection(RootActorPath(member.address) / "user" / s"P:*-densityPublisher-$i-*").resolveOne()} yield ref
-          publisherActorRef.onComplete {
-            case Success(ref) =>
-              val name = ref.toString.split("/").last.split("#").head
-              log.info(s"saving density publisher ${ref} as $name")
-              this.savePublisher(name -> ref)
+          val publisherActor = for {
+            ref <- context.actorSelection(RootActorPath(member.address) / "user" / s"P:*-densityPublisher-$i-*").resolveOne()
+            publisherEventRate <- (ref ? GetEventsPerSecond).mapTo[Throughput]
+          } yield (ref, publisherEventRate)
+          publisherActor.onComplete {
+            case Success(info) =>
+              val name = info._1.toString.split("/").last.split("#").head
+              log.info(s"saving density publisher ${info} as $name")
+              this.savePublisher(name -> info)
             case Failure(exception) =>
               log.warning(s"failed to resolve publisher actor on member $member, due to ${exception.getMessage}, retrying")
               extractProducers(member)
@@ -299,14 +306,15 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
     } else {
         val resolvePublisher = for {
           publisherActorRef <- context.actorSelection(RootActorPath(member.address) / "user" / "P:*").resolveOne() // speedPublisher node -> only one publisher actor
+          publisherEventRate <- (publisherActorRef ? GetEventsPerSecond).mapTo[Throughput]
         } yield {
-          publisherActorRef
+          (publisherActorRef, publisherEventRate)
         }
         resolvePublisher.onComplete {
-          case Success(publisherActorRef) =>
-            val name = publisherActorRef.toString.split("/").last.split("#").head
-            log.info(s"saving publisher ${publisherActorRef} as $name")
-            this.savePublisher(name -> publisherActorRef)
+          case Success(publisherInfo) =>
+            val name = publisherInfo._1.toString.split("/").last.split("#").head
+            log.info(s"saving publisher ${publisherInfo} as $name")
+            this.savePublisher(name -> publisherInfo)
             log.info(s"current publishers: \n ${publishers.keys}")
           case Failure(exception) =>
             log.warning(s"failed to resolve publisher actor on member $member, due to ${exception.getMessage}, retrying")
@@ -315,7 +323,10 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       }
   }
   // avoid insert being lost when both resolve futures complete at the same time
-  def savePublisher(publisher: (String, ActorRef)): Unit = publishers.synchronized { publishers += publisher }
+  def savePublisher(publisher: (String, (ActorRef, Throughput))): Unit = {
+    publishers.synchronized { publishers += publisher._1 -> publisher._2._1 }
+    publisherEventRates.synchronized { publisherEventRates += publisher._1 -> publisher._2._2}
+  }
   def saveConsumer(consumer: ActorRef): Unit = consumers.synchronized { consumers = consumers + consumer }
 
   //If

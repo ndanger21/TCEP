@@ -25,7 +25,6 @@ case class SequenceNode(transitionConfig: TransitionConfig,
                         createdCallback: Option[CreatedCallback],
                         eventCallback: Option[EventCallback],
                         isRootOperator: Boolean,
-                        publisherEventRate: Double,
                         publishers: ActorRef*) extends LeafNode with EsperEngine with ActorLogging {
 
   override val esperServiceProviderUri: String = name

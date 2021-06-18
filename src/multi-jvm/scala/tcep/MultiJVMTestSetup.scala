@@ -1,7 +1,6 @@
 package tcep
 
 import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorRef, ActorSelection, Address, Props}
 import akka.cluster.{Cluster, Member, MemberStatus}
 import akka.remote.testkit.MultiNodeSpec
@@ -15,6 +14,7 @@ import tcep.data.Events.Event1
 import tcep.data.Queries.{Filter1, Query, Stream1}
 import tcep.machinenodes.helper.actors.{StartVivaldiUpdates, TaskManagerActor}
 import tcep.placement.PlacementStrategy
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.StartStreams
 import tcep.publishers.RegularPublisher
 import tcep.utils.TCEPUtils
@@ -33,15 +33,19 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
   val logger: Logger = LoggerFactory.getLogger(getClass)
 
   implicit var cluster: Cluster = _
-  var pNames: Vector[String] = Vector()
+  def pNames(idx: Int): String = {
+    val p1Addr = node(publisher1).address
+    val p2Addr = node(publisher2).address
+    val pNames = Vector(s"P:${p1Addr.host.get}:${p1Addr.port.get}", s"P:${p2Addr.host.get}:${p2Addr.port.get}")
+    pNames(idx)
+  }
   var publishers: Map[String, ActorRef] = Map()
   var clientProbe: TestProbe = _
   implicit var creatorAddress: Address = _
   implicit var ec: ExecutionContext = _
   val errorMargin = 0.05
   val eventIntervalMicros: Long = 500e3.toLong // 500ms
-  implicit val baseEventRate: Double = 1e6 / eventIntervalMicros // 2
-
+  implicit var baseEventRates: Map[String, Throughput] = Map() // 2 per second
   override def initialParticipants = numNodes
 
   override def beforeAll() = {
@@ -51,14 +55,14 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
     ec = system.dispatcher
 
     runOn(client) {
-      system.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
+      system.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
       DistVivaldiActor.createVivIfNotExists(system)
       clientProbe = TestProbe("client")
       println("Client created: " + node(client))
     }
     runOn(publisher1) {
       // taskmanager for bandwidth measurements, not for hosting operators
-      system.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
+      system.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
       val address = node(publisher1).address
       val pub1 = system.actorOf(Props(RegularPublisher(eventIntervalMicros, id => Event1(id))), s"P:${address.host.get}:${address.port.get}")
       DistVivaldiActor.createVivIfNotExists(system)
@@ -66,7 +70,7 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
     }
     runOn(publisher2) {
       // taskmanager for bandwidth measurements, not for hosting operators
-      system.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
+      system.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
       val address = node(publisher2).address
       val pub2 = system.actorOf(Props(RegularPublisher(eventIntervalMicros, id => Event1(id))), s"P:${address.host.get}:${address.port.get}")
       DistVivaldiActor.createVivIfNotExists(system)
@@ -74,12 +78,12 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
     }
     if(numNodes > 3) {
       runOn(node1) {
-        system.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
+        system.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
         DistVivaldiActor.createVivIfNotExists(system)
         println("created node1: " + node(node1))
       }
       runOn(node2) {
-        system.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
+        system.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
         DistVivaldiActor.createVivIfNotExists(system)
         println("created node2: " + node(node2))
       }
@@ -94,14 +98,17 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
 
     val p1Addr = node(publisher1).address
     val p2Addr = node(publisher2).address
-    pNames = Vector(s"P:${p1Addr.host.get}:${p1Addr.port.get}", s"P:${p2Addr.host.get}:${p2Addr.port.get}")
+
     val publisherRef1 = getPublisherOn(cluster.state.members.find(_.address == p1Addr).head, pNames(0)).get
     val publisherRef2 = getPublisherOn(cluster.state.members.find(_.address == p2Addr).head, pNames(1)).get
     publishers = Map(pNames(0) -> publisherRef1, pNames(1) -> publisherRef2) // need to override publisher map here because all nodes have hostname localhost during test
+    baseEventRates = List(0, 1).map(pNames).map(_ -> Throughput(1, FiniteDuration(eventIntervalMicros, TimeUnit.MICROSECONDS))).toMap
 
     runOn(client) {
       println(cluster.state.members.map(m => m + " " + m.roles).mkString("\n"))
-      println(publishers)
+      println(s"publishers: \n${publishers.mkString("\n")}")
+      println(s"publisher event rates: \n${baseEventRates.mkString("\n")}")
+
       publishers.values.foreach(_ ! StartStreams())
     }
   }

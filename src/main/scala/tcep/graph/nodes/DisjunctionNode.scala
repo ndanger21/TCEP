@@ -20,8 +20,7 @@ case class DisjunctionNode(transitionConfig: TransitionConfig,
                            createdCallback: Option[CreatedCallback],
                            eventCallback: Option[EventCallback],
                            isRootOperator: Boolean,
-                           publisherEventRate: Double,
-                           parents: ActorRef*) extends BinaryNode {
+                              parents: ActorRef*) extends BinaryNode {
 
   assert(parents.size == 2)
   var parentNode1 = parents.head

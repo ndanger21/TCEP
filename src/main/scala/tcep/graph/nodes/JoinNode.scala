@@ -27,7 +27,6 @@ case class JoinNode(transitionConfig: TransitionConfig,
                     createdCallback: Option[CreatedCallback],
                     eventCallback: Option[EventCallback],
                     isRootOperator: Boolean,
-                    publisherEventRate: Double,
                     parents: ActorRef*) extends BinaryNode with EsperEngine {
 
   var parentNode1 = parents.head

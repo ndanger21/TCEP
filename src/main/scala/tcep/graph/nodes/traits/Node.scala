@@ -131,7 +131,7 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
           val dependencies = getDependencies()
           for {
             init <- algorithm.initialize()
-            optimalHost: HostInfo <- algorithm.findOptimalNode(hostInfo.operator, dependencies, HostInfo(cluster.selfMember, hostInfo.operator))
+            optimalHost: HostInfo <- algorithm.findOptimalNode(hostInfo.operator, hostInfo.operator, dependencies, HostInfo(cluster.selfMember, hostInfo.operator))
           } yield {
             if (!cluster.selfAddress.equals(optimalHost.member.address)) {
               log.info(s"Relaxation periodic placement update for $query: " +
@@ -174,7 +174,7 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
 
   def createDuplicateNode(nodeInfo: HostInfo): Future[ActorRef] = {
     val startTime = System.currentTimeMillis()
-    val props = Props(getClass, transitionConfig, nodeInfo, backupMode, mainNode, query, createdCallback, eventCallback, isRootOperator, publisherEventRate, getParentActors())
+    val props = Props(getClass, transitionConfig, nodeInfo, backupMode, mainNode, query, createdCallback, eventCallback, isRootOperator, getParentActors())
     for {
       taskManager <- TCEPUtils.getTaskManagerOfMember(cluster, nodeInfo.member)
       deployDuplicate <- TCEPUtils.guaranteedDelivery(context, taskManager, CreateRemoteOperator(nodeInfo, props), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher)).mapTo[RemoteOperatorCreated]

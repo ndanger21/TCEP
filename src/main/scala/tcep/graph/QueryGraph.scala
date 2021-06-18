@@ -76,9 +76,7 @@ class QueryGraph(query: Query,
     root
   }
 
-  protected def startDeployment(implicit eventCallback: Option[EventCallback],
-                                queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
-                               ): ActorRef = {
+  protected def startDeployment(implicit eventCallback: Option[EventCallback], queryDependencies: QueryDependencyMap): ActorRef = {
 
     val startTime = System.currentTimeMillis()
     val res = for {init <- placementStrategy.initialize( )} yield {
@@ -108,7 +106,7 @@ class QueryGraph(query: Query,
   }
 
   protected def deployOperatorGraphRec(currentOperator: Query, isRootOperator: Boolean = false)
-                                      (implicit eventCallback: Option[EventCallback], queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)],
+                                      (implicit eventCallback: Option[EventCallback], queryDependencies: QueryDependencyMap,
                                        initialPlacement: Map[Query, Coordinates] = Map()): Future[ActorRef] = {
 
     implicit val _isRoot: Boolean = isRootOperator
@@ -138,7 +136,7 @@ class QueryGraph(query: Query,
                               (implicit eventCallback: Option[EventCallback],
                                isRootOperator: Boolean,
                                initialOperatorPlacement: Map[Query, Coordinates],
-                               queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
+                               queryDependencies: QueryDependencyMap
                               ): Future[ActorRef] = {
     // child is not deployed yet -> None as placeholder
     val dependencies = Dependencies(parentOperators.toMap, Map(None -> queryDependencies(operator)._1.child.get))
@@ -159,7 +157,7 @@ class QueryGraph(query: Query,
         }
 
       } else { // no initial placement or operator is missing
-          for {hostInfo <- placementStrategy.findOptimalNode(operator, dependencies, HostInfo(cluster.selfMember, operator))
+          for {hostInfo <- placementStrategy.findOptimalNode(operator, query, dependencies, HostInfo(cluster.selfMember, operator))
                deployedOperator <- createOperator(operator, hostInfo, false, None, parentOperators.map(_._1 ): _ *)} yield {
             if (reliabilityReqPresent) {
             // for now, start duplicate on self (just like relaxation does in this case)
@@ -187,10 +185,10 @@ class QueryGraph(query: Query,
                                backupMode: Boolean,
                                mainNode: Option[ActorRef],
                                parentOperators: ActorRef*)
-                              (implicit eventCallback: Option[EventCallback], isRootOperator: Boolean, baseEventRate: Double): Future[ActorRef] = {
+                              (implicit eventCallback: Option[EventCallback], isRootOperator: Boolean): Future[ActorRef] = {
     val operatorType = NodeFactory.getOperatorTypeFromQuery(operator)
     val props = Props(operatorType, transitionConfig, hostInfo, backupMode, mainNode, operator, createdCallback,
-                      eventCallback, isRootOperator, baseEventRate, parentOperators)
+                      eventCallback, isRootOperator, parentOperators)
     NodeFactory.createOperator(cluster, context, hostInfo, props, brokerQoSMonitor)
   }
 

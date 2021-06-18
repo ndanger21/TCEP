@@ -165,12 +165,10 @@ object TCEPUtils {
   }
 
   /**
-    * finds all publisher actors in the cluster; blocks until all are identified!
+    * finds all publisher actors in the cluster
     * (only used in PlacementStrategy initialization)
     */
-  def getPublisherActors(cluster: Cluster)(implicit ec: ExecutionContext): Future[Map[String, ActorRef]] = {
-    // in this implementation, each publisher member (PublisherApp) runs at most one publisher!
-    //Await.result(makeMapFuture(publisherHosts.map(m => m._1 -> selectPublisherOn(cluster, m._2.address).resolveOne() )), timeout.duration)
+  def getPublisherActors()(implicit cluster: Cluster, ec: ExecutionContext): Future[Map[String, ActorRef]] = {
     for {
       taskManager <- this.getTaskManagerOfMember(cluster, cluster.selfMember)
       publisherActors <- (taskManager ? PublisherActorRefsRequest()).mapTo[PublisherActorRefsResponse]

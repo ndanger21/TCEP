@@ -1,17 +1,21 @@
 package tcep.publishers
 
 import tcep.data.Events._
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.StartStreams
 import tcep.utils.{SizeEstimator, SpecialStats}
 
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.{Executors, ScheduledFuture, TimeUnit}
+import scala.concurrent.duration._
+import scala.language.postfixOps
 
 object RegularPublisher {
   case object SendEventTickKey
   case object SendEventTick
   case object LogEventsSentTickKey
   case object LogEventsSentTick
+  case object GetEventsPerSecond
 }
 /**
   * Publishes the events at regular interval
@@ -58,6 +62,8 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
         subscribers.keys.foreach(_ ! event)
 
       case LogEventsSentTick => SpecialStats.log(self.toString(), "eventsSent", s"total: ${id.get()}")
+
+      case GetEventsPerSecond => sender() ! Throughput(eventRateOut, 1 second)
 
     }
   }

@@ -18,8 +18,7 @@ case class ShrinkingFilterNode(transitionConfig: TransitionConfig,
                                createdCallback: Option[CreatedCallback],
                                eventCallback: Option[EventCallback],
                                isRootOperator: Boolean,
-                               publisherEventRate: Double,
-                               _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+                                      _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>

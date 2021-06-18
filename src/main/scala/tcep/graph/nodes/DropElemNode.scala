@@ -21,7 +21,6 @@ case class DropElemNode(transitionConfig: TransitionConfig,
                         createdCallback: Option[CreatedCallback],
                         eventCallback: Option[EventCallback],
                         isRootOperator: Boolean,
-                        publisherEventRate: Double,
                         _parentActor: Seq[ActorRef]
                       ) extends UnaryNode(_parentActor) {
 

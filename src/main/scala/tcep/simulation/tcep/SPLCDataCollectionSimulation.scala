@@ -20,6 +20,7 @@ import tcep.graph.transition.mapek.learnon.LightweightMessages.GetLightweightLog
 import tcep.graph.transition.mapek.learnon.ModelRLMessages.GetModelRLLogData
 import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
 import tcep.placement.PlacementStrategy
+import tcep.prediction.PredictionHelper.Throughput
 
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
@@ -43,7 +44,7 @@ class SPLCDataCollectionSimulation(
                                   name: String, query: Query, transitionConfig: TransitionConfig, publishers: Map[String, ActorRef],
                                   consumer: ActorRef, startingPlacementAlgorithm: Option[PlacementStrategy],
                                   mapekType: String = "CONTRAST"
-                                  )(implicit cluster: Cluster, context: ActorContext, baseEventRate: Double, directory: Option[File],
+                                  )(implicit cluster: Cluster, context: ActorContext, publisherEventRates: Map[String, Throughput], directory: Option[File],
                                     fixedSimulationProperties: Map[Symbol, Int] = Map(), pimPaths: (String, String) = ("", ""))
   extends Simulation(name, query, transitionConfig, publishers, consumer, startingPlacementAlgorithm, mapekType) {
 

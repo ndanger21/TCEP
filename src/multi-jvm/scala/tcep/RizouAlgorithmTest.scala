@@ -51,7 +51,7 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
         val s2 = stream[Int](pNames(1))
         val op = s1.and(s2) // we assume streams are already deployed on publishers
         val dependencyCoords = QueryDependenciesWithCoordinates(Map(s1 -> publisher1, s2 -> publisher2), Map(ClientDummyQuery() -> clientC))
-        val dataRateEstimates = Queries.estimateOutputBandwidths(op, baseEventRate)
+        val dataRateEstimates = Queries.estimateOutputBandwidths(op)
         val virtualCoords = Await.result(uut.calculateVCSingleOperator(op, dependencyCoords, dataRateEstimates), uut.requestTimeout)
         assert(virtualCoords.x < 0 && virtualCoords.y < 0 &&
                  virtualCoords.x > -25 && virtualCoords.y > -25,
@@ -102,7 +102,7 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
 
       runOn(client) {
         val query = stream[Int](pNames(0))
-        implicit val dependencyData = Queries.extractOperators(query, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(query)
         val result = uut.calculateVirtualPlacementWithCoords(query, clientC, Map(pNames(0) -> publisher1))
         val deps = QueryDependenciesWithCoordinates(Map(PublisherDummyQuery(pNames(0)) -> publisher1), Map(ClientDummyQuery() -> clientC))
         val resultBDP = calculateBDPSum(query, deps, result(query))
@@ -128,7 +128,7 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
         val s1 = stream[Int](pNames(0))
         val s2 = stream[Int](pNames(1))
         val query = s1.and(s2)
-        implicit val dependencyData = Queries.extractOperators(query, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(query)
         val publisherCoords = Map(pNames(0) -> publisher1, pNames(1) -> publisher2)
         val result: Map[Query, Coordinates] = uut.calculateVirtualPlacementWithCoords(query, clientC, publisherCoords)
 
@@ -182,7 +182,7 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
         val f1 = Filter1[Int](s, _ => true, Set())
         val f2 = Filter1[Int](f1, _ => true, Set())
         val publisherCoords = Map(pNames(0) -> publisher1, pNames(1) -> publisher2)
-        implicit val dependencyData = Queries.extractOperators(f2, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(f2)
 
         val result = uut.calculateVirtualPlacementWithCoords(f2, clientC, Map(pNames(0) -> publisher1))
         // since this query contains only unary operators, their optimal coordinates are not unique (operator data rate is constant) -> only test for min bdp
@@ -223,8 +223,8 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
         val f1 = Filter1[Int](s, _ => true, Set())
         val f2 = Filter1[Int](f1, _ => true, Set())
         val candidates = uut.findPossibleNodesToDeploy(cluster).map(c => c -> uut.getCoordinatesOfNodeBlocking(c)).toMap
-        implicit val dependencyData = Queries.extractOperators(f2, baseEventRate)
-        val dataRateEstimates = Queries.estimateOutputBandwidths(f2, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(f2)
+        val dataRateEstimates = Queries.estimateOutputBandwidths(f2)
         val virtualCoordinates: Map[Query, Coordinates] = Await.result(uut.initialVirtualOperatorPlacement(f2, publishers), uut.requestTimeout)
         val physicalPlacements: Map[Query, Member] = virtualCoordinates.map(o => o._1 -> Await.result(uut.findHost(o._2, candidates, o._1, Dependencies(Map(), Map()), dataRateEstimates), uut.requestTimeout).member)
         assert(physicalPlacements.values.toSet.map((m: Member) => m.address).subsetOf(
@@ -277,8 +277,8 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
         //println(s"\nDEBUG minimum BDP: $minBDP")
 
         uut.k = 1 // disable load-based host choice for repeatable tests
-        implicit val dependencyData = Queries.extractOperators(f1, baseEventRate)
-        val dataRateEstimates = Queries.estimateOutputBandwidths(f1, baseEventRate)
+        implicit val dependencyData = Queries.extractOperators(f1)
+        val dataRateEstimates = Queries.estimateOutputBandwidths(f1)
         val virtualCoords: Map[Query, Coordinates] = uut.calculateVirtualPlacementWithCoords(f1, clientC, Map(pNames(0) -> publisher1))
         val physicalPlacement: Map[Query, (Member, Coordinates)] = virtualCoords.map(vc => vc._1 -> Await.result(
           uut.findHost(vc._2, candidates, vc._1, Dependencies(Map(), Map()), dataRateEstimates), uut.requestTimeout))

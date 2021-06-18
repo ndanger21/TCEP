@@ -28,7 +28,7 @@ class System(context: ActorContext) {
   def runQuery(query: Query, publishers: Map[String, ActorRef], createdCallback: Option[CreatedCallback], eventCallback: Option[EventCallback]) = {
     val monitorFactories: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query, Option.empty),
       DummyMonitorFactory(query))
-    val graphFactory = new QueryGraph(query, TransitionConfig(), publishers, None, createdCallback, null)(context, Cluster(context.system), 1.0)
+    val graphFactory = new QueryGraph(query, TransitionConfig(), publishers, None, createdCallback, null)(context, Cluster(context.system))
 
     roots += graphFactory.createAndStart(eventCallback)
   }

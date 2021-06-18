@@ -1,8 +1,5 @@
 package tcep.simulation.tcep
 
-import java.io.{File, PrintStream}
-import java.time.{Instant, LocalDateTime, ZoneOffset}
-import java.util.concurrent.TimeUnit
 import akka.actor.{ActorContext, ActorRef, Cancellable}
 import akka.cluster.Cluster
 import akka.pattern.ask
@@ -19,15 +16,19 @@ import tcep.graph.transition.mapek.lightweight.LightweightKnowledge.GetLogData
 import tcep.machinenodes.GraphCreatedCallback
 import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords, GetMonitorFactories, SetQosMonitors}
 import tcep.placement.PlacementStrategy
+import tcep.prediction.PredictionHelper.Throughput
 
+import java.io.{File, PrintStream}
+import java.time.{Instant, LocalDateTime, ZoneOffset}
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 
-class Simulation(name: String,  query: Query, transitionConfig: TransitionConfig,
+class Simulation(name: String, query: Query, transitionConfig: TransitionConfig,
                  publishers: Map[String, ActorRef], consumer: ActorRef, startingPlacementStrategy: Option[PlacementStrategy],
                  mapekType: String = ConfigFactory.load().getString("constants.mapek.type"))
-                (implicit context: ActorContext, cluster: Cluster, baseEventRate: Double, directory: Option[File], pimPaths: (String, String),
-                 fixedSimulationProperties: Map[Symbol, Int] = Map() ) {
+                (implicit context: ActorContext, cluster: Cluster, publisherEventRates: Map[String, Throughput], directory: Option[File], pimPaths: (String, String),
+                 fixedSimulationProperties: Map[Symbol, Int] = Map()) {
 
   lazy val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
   implicit val ec: ExecutionContext = blockingIoDispatcher
@@ -41,6 +42,7 @@ class Simulation(name: String,  query: Query, transitionConfig: TransitionConfig
   protected var callback: () => Any = _
   implicit private val timeout = Timeout(5 seconds)
   private val LIGHTWEIGHT = "lightweight"
+  val baseEventRate: Double = if(publisherEventRates.nonEmpty) publisherEventRates.values.map(_.getEventsPerSec).sum / publisherEventRates.size else 0
   /**
     *
     * @param startTime Start Time of Simulation (in Seconds)

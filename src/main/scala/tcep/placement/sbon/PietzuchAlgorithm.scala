@@ -32,8 +32,8 @@ object PietzuchAlgorithm extends SpringRelaxationLike {
   override def hasPeriodicUpdate(): Boolean = ConfigFactory.load().getBoolean("constants.placement.update.relaxation")
 
   // this should only be called during transitions or in case of missing operators during the initial placement
-  override def findOptimalNode(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] = {
+  override def findOptimalNode(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[HostInfo] = {
     try {
       collectInformationAndExecute(operator, dependencies)
     } catch {
@@ -43,8 +43,8 @@ object PietzuchAlgorithm extends SpringRelaxationLike {
     }
   }
 
-  override def findOptimalNodes(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                               (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, HostInfo)] = {
+  override def findOptimalNodes(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                               (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[(HostInfo, HostInfo)] = {
     for {
       mainNode <- collectInformationAndExecute(operator, dependencies)
     } yield {

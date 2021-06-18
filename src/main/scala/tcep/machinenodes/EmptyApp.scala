@@ -14,7 +14,7 @@ object EmptyApp extends ConfigurationParser with App {
 
   val actorSystem: ActorSystem = ActorSystem(config.getString("clustering.cluster.name"), config)
   DistVivaldiActor.createVivIfNotExists(actorSystem)
-  val taskManager = actorSystem.actorOf(Props(classOf[TaskManagerActor], baseEventRate), "TaskManager")
+  val taskManager = actorSystem.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
   logger.info(s"booting up EmptyApp with taskManager actor $taskManager")
   override def getRole: String = "Candidate"
   override def getArgs: Array[String] = args

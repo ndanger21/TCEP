@@ -22,8 +22,7 @@ case class ConjunctionNode(transitionConfig: TransitionConfig,
                            createdCallback: Option[CreatedCallback],
                            eventCallback: Option[EventCallback],
                            isRootOperator: Boolean,
-                           publisherEventRate: Double,
-                           parents: ActorRef*) extends BinaryNode with EsperEngine {
+                              parents: ActorRef*) extends BinaryNode with EsperEngine {
 
   var parentNode1 = parents.head
   var parentNode2 = parents.last

@@ -80,7 +80,7 @@ class Subscriber extends VivaldiCoordinates with ActorLogging {
         .or(stream[String]("D"))
 
     val monitors: Array[MonitorFactory] = Array(AverageFrequencyMonitorFactory(query1, Option.empty), DummyMonitorFactory(query1))
-    val queryGraph = new QueryGraph(query1, TransitionConfig(), publishers, None, Some(GraphCreatedCallback()), self)(this.context, cluster, 1.0 )
+    val queryGraph = new QueryGraph(query1, TransitionConfig(), publishers, None, Some(GraphCreatedCallback()), self)(this.context, cluster)
 
     queryGraph.createAndStart(Some(EventPublishedCallback()))
 

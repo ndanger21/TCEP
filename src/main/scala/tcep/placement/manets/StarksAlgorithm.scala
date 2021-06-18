@@ -5,7 +5,7 @@ import akka.cluster.{Cluster, Member}
 import akka.util.Timeout
 import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
 import tcep.data.Queries
-import tcep.data.Queries.{BinaryQuery, Query}
+import tcep.data.Queries.{BinaryQuery, Query, QueryDependencyMap}
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.machinenodes.helper.actors.{Message, StarksTask, StarksTaskReply}
 import tcep.placement.{HostInfo, PlacementStrategy}
@@ -25,12 +25,13 @@ object StarksAlgorithm extends PlacementStrategy {
   override def hasPeriodicUpdate(): Boolean = false // TODO implement
   private val k = 2 // nearest neighbours to try in case task manager for nearest neighbour cannot be found
 
-  def findOptimalNode(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[HostInfo] = {
-    val outputBandwidthEstimates = Queries.estimateOutputBandwidths(operator, baseEventRate)
+  def findOptimalNode(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                     (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[HostInfo] = {
+
     val res: Future[Future[HostInfo]] = for {
       init <- this.initialize()
     } yield {
+      val outputBandwidthEstimates = Queries.estimateOutputBandwidths(operator)
       if (askerInfo.visitedMembers.contains(cluster.selfMember)) { // prevent forwarding in circles, i.e. (rare) case when distances are equal
         val hostInfo = HostInfo(cluster.selfMember, operator, askerInfo.operatorMetrics, askerInfo.visitedMembers) // if this node is asked a second time, stop forwarding and deploy on self
         for {
@@ -81,8 +82,8 @@ object StarksAlgorithm extends PlacementStrategy {
     res.flatten
   }
 
-  def findOptimalNodes(operator: Query, dependencies: Dependencies, askerInfo: HostInfo)
-                      (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster, baseEventRate: Double): Future[(HostInfo, HostInfo)] = {
+  def findOptimalNodes(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
+                      (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[(HostInfo, HostInfo)] = {
     throw new RuntimeException("Starks algorithm does not support reliability")
   }
 
