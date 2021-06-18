@@ -45,11 +45,6 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
     case GetCPUThreadCount => sender() ! cpuThreadCount
     case GetNodeOperatorCount => sender() ! operatorsOnNode.size
     case GetIOMetrics => sender() ! currentNodeIOMetrics.values.fold(IOMetrics())((a,b) => a + b)
-    case GetBrokerMetrics(withoutOperator) =>
-      val ioMetrics = if(withoutOperator.isDefined) currentNodeIOMetrics.filterNot(_._1.equals(withoutOperator.get)).values.fold(IOMetrics())((a, b) => a + b)
-                      else currentNodeIOMetrics.values.fold(IOMetrics())((a, b) => a + b)
-      sender() ! BrokerQosMetrics(currentLoad, cpuThreadCount, operatorsOnNode.size, ioMetrics)
-
     case AddOperator(ref) => if(ref.path.address.equals(self.path.address)) operatorsOnNode += ref
     case RemoveOperator(ref) => operatorsOnNode -= ref
     case IOMetricUpdateTick =>
@@ -66,6 +61,19 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
     case IOMetricUpdate(update) =>
       currentNodeIOMetrics = update
       log.info(s"BrokerNode QoS update: load $currentLoad, threads $cpuThreadCount, operators ${operatorsOnNode.size}, IO $currentNodeIOMetrics}")
+
+    case GetBrokerMetrics(withoutOperators) =>
+      val response = if(withoutOperators.isDefined) {
+        val ioMetrics = currentNodeIOMetrics.filter(e => !withoutOperators.get.contains(e._1)).values
+                                            .fold(IOMetrics())((a, b) => a + b)
+        //TODO how to exclude load of operators that will be removed from currentLoad?<
+        BrokerQosMetrics(currentLoad, cpuThreadCount, operatorsOnNode.diff(withoutOperators.get).size, ioMetrics)
+      } else {
+        val ioMetrics = currentNodeIOMetrics.values.fold(IOMetrics())((a, b) => a + b)
+        BrokerQosMetrics(currentLoad, cpuThreadCount, operatorsOnNode.size, ioMetrics)
+      }
+      sender() ! response
+
   }
 
 }
@@ -79,7 +87,7 @@ object BrokerQoSMonitor {
   case object GetIncomingBandwidth
   case object GetOutgoingBandwidth
   case object GetIOMetrics
-  case class GetBrokerMetrics(withoutOperator: Option[ActorRef] = None)
+  case class GetBrokerMetrics(withoutOperators: Option[Set[ActorRef]] = None) // withoutOperators: operators to be excluded from broker metrics since they will be moved
   case class BrokerQosMetrics(cpuLoad: Double, cpuThreadCount: Int, deployedOperators: Int, IOMetrics: IOMetrics, timestamp: Long = System.currentTimeMillis())
   private case class IOMetricUpdate(ioMetrics: Map[ActorRef, IOMetrics])
   private case object IOMetricUpdateTick

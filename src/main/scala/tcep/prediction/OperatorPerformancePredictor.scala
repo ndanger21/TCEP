@@ -11,7 +11,7 @@ import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Thr
 import java.util.concurrent.TimeUnit
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.ExecutionContext
-import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
+import scala.concurrent.duration.{FiniteDuration, MICROSECONDS, MILLISECONDS, NANOSECONDS, SECONDS}
 
 class OperatorPerformancePredictor(operator: Option[ActorRef], brokerMonitor: ActorRef, defaultOperatorQosMetrics: Option[OperatorQoSMetrics] = None) extends Actor with ActorLogging with Timers {
 
@@ -112,9 +112,20 @@ object PredictionHelper {
     def metricHeader: String = "end-to-end latency [ms]"
   }
 
-  case class Throughput(amount: Int, interval: FiniteDuration) extends PerformanceMetric {
-    override def toString: String = f"${amount}"
-    def metricHeader = s"throughput [per ${interval}]"
+  case class Throughput(amount: Double, interval: FiniteDuration) extends PerformanceMetric {
+    override def toString: String = f"${getEventsPerSec}"
+    def metricHeader = s"throughput [per second]"
+    def getEventsPerSec: Double = {
+      val conversionFactor = interval.unit match {
+        case SECONDS => 1
+        case MILLISECONDS => 1000
+        case MICROSECONDS => 1000000
+        case NANOSECONDS => 1000000000
+        case _ => throw new IllegalArgumentException(s"invalid throughput interval $this")
+      }
+      (amount * conversionFactor) / interval.length
+    }
+    def +(that: Throughput): Throughput = Throughput(this.getEventsPerSec + that.getEventsPerSec, FiniteDuration(1, TimeUnit.SECONDS))
   }
 
   case class MetricPredictions(E2E_LATENCY: EndToEndLatency, THROUGHPUT: Throughput) {

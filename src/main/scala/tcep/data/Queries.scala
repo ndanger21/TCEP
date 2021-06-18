@@ -6,12 +6,15 @@ import tcep.data.Structures.MachineLoad
 import tcep.dsl.Dsl.{Frequency, FrequencyMeasurement, LatencyMeasurement, LoadMeasurement, MessageHopsMeasurement}
 import tcep.machinenodes.helper.actors.MySerializable
 import tcep.placement.QueryDependencies
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.simulation.tcep.MobilityData
 import tcep.utils.SizeEstimator
 
 import java.time.Duration
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.collection.mutable.HashMap
+import scala.concurrent.duration.FiniteDuration
 import scala.reflect.runtime.universe.{TypeTag, typeOf}
 
 /**
@@ -117,17 +120,17 @@ object Queries {
     getPublishersRec(rootOp)
   }
 
-  type EventRateEstimate = Double
-  type EventSizeEstimate = Long
-  type EventBandwidthEstimate = Double
+  type EventRateEstimate = Throughput // [events / second ]
+  type EventSizeEstimate = Long // [ Byte ]
+  type EventBandwidthEstimate = Double // [ Byte / second ]
   type QueryDependencyMap = mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
 
   /**
     * @param query root operator of the query
-    * @param baseEventRate average event publication rate of publishers in the query (assumes equal event publishing rates for all publishers)
+    * @param baseEventRates average event publication rate of publishers in the query (assumes equal event publishing rates for all publishers)
     * @return returns a map with an entry for each operator in the query specifying its parent and child operators, as well as estimates for outgoing event rate, size and bandwidth
     */
-  def extractOperators(query: Query, baseEventRate: Double): QueryDependencyMap = {
+  def extractOperators(query: Query)(implicit baseEventRates: Map[String, Throughput]): QueryDependencyMap = {
     /**
       * recursively extracts the operators and their dependent child and parent operators
       * as well as their estimated output event rate and size (depending on parent operators), and used bandwidth in [Bytes / s]
@@ -143,24 +146,25 @@ object Queries {
           val right = extractOperatorsRec(b.sq2, Some(b))
           val estimatedEventRate = estimateEventRate(operator, (left ++ right).toMap)
           val estimatedEventSize = b.estimateEventSize
-          left ++= right += b -> (QueryDependencies(Some(List(b.sq1, b.sq2)), child), estimatedEventRate, estimatedEventSize, estimatedEventRate * estimatedEventSize)
+          left ++= right += b -> (QueryDependencies(Some(List(b.sq1, b.sq2)), child), estimatedEventRate, estimatedEventSize, estimatedEventRate.getEventsPerSec * estimatedEventSize)
 
         case u: UnaryQuery =>
           val parentRes = extractOperatorsRec(u.sq, Some(u))
           val estimatedEventRate = parentRes(u.sq)._2
           val estimatedEventSize = u.estimateEventSize
-          parentRes += u -> (QueryDependencies(Some(List(u.sq)), child), estimatedEventRate, estimatedEventSize, estimatedEventSize * estimatedEventRate)
+          parentRes += u -> (QueryDependencies(Some(List(u.sq)), child), estimatedEventRate, estimatedEventSize, estimatedEventRate.getEventsPerSec * estimatedEventSize)
 
         case s: StreamQuery => // stream nodes have no parent operators, they depend on publishers
           val estimatedEventSize = s.estimateEventSize
-          val streamOp = s -> (QueryDependencies(Some(List(PublisherDummyQuery(s.publisherName))), child), baseEventRate, estimatedEventSize, baseEventRate * estimatedEventSize)
-          val publisherDummy = PublisherDummyQuery(s.publisherName) -> (QueryDependencies(None, Some(s)), baseEventRate, estimatedEventSize, baseEventRate * estimatedEventSize)
+          val publisherEventRate = baseEventRates(s.publisherName)
+          val streamOp = s -> (QueryDependencies(Some(List(PublisherDummyQuery(s.publisherName))), child), publisherEventRate, estimatedEventSize, publisherEventRate.getEventsPerSec * estimatedEventSize)
+          val publisherDummy = PublisherDummyQuery(s.publisherName) -> (QueryDependencies(None, Some(s)), publisherEventRate, estimatedEventSize, publisherEventRate.getEventsPerSec * estimatedEventSize)
           mutable.LinkedHashMap(publisherDummy, streamOp)
 
         case seq: SequenceQuery =>
           mutable.LinkedHashMap(seq -> (QueryDependencies(
             Some(List(PublisherDummyQuery(seq.s1.publisherName), PublisherDummyQuery(seq.s2.publisherName))), child),
-            baseEventRate, seq.estimateEventSize, baseEventRate * seq.estimateEventSize))
+            baseEventRates(seq.s1.publisherName), seq.estimateEventSize, baseEventRates(seq.s1.publisherName).getEventsPerSec * seq.estimateEventSize))
 
         case _ => throw new RuntimeException(s"cannot extract dependency operators from $query")
       }
@@ -173,7 +177,7 @@ object Queries {
   }
 
   def estimateEventRate(operator: Query,
-                        parentOperators: Map[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]): Double = {
+                        parentOperators: Map[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]): EventRateEstimate = {
 
     // the window size in seconds
     // TODO must treat sliding and tumbling windows separately! see esper doc
@@ -183,29 +187,29 @@ object Queries {
       case TumblingInstances(instances) => instances / rate
       case TumblingTime(time) => time
     }
-    def calculateEventRateFromWindows(w1: Window, eventRate1: Double, w2: Window, eventRate2: Double): Double = {
+    def calculateEventRateFromWindows(w1: Window, eventRate1: Double, w2: Window, eventRate2: Double): EventRateEstimate = {
       val (w1Size, w2Size) = (getWindowSize(w1, eventRate1), getWindowSize(w2, eventRate2))
       val window1Volume = w1Size * eventRate1
       val window2Volume = w1Size * eventRate2 // amount of events within window duration
       val eventsTotal = window1Volume * window2Volume * 2 // e.g. @10[Events/s]: 5 * 10 * 5 * 10 = 2500/5 = 500; multiply by 2 since we get this from both parents
-      eventsTotal / math.max(w1Size, w2Size) // events/second
+      Throughput((eventsTotal / math.max(w1Size, w2Size)).toInt, FiniteDuration(1, TimeUnit.SECONDS)) // events/second
     }
 
-    val eventRateToChild: Double = operator match {
+    val eventRateToChild: EventRateEstimate = operator match {
       // event rate depends on window size and event rate of parents
-      case j: JoinQuery => calculateEventRateFromWindows(j.w1, parentOperators(j.sq1)._2, j.w2, parentOperators(j.sq2)._2)
-      case sj: SelfJoinQuery => calculateEventRateFromWindows(sj.w1, parentOperators(sj.sq)._2, sj.w2, parentOperators(sj.sq)._2)
+      case j: JoinQuery => calculateEventRateFromWindows(j.w1, parentOperators(j.sq1)._2.getEventsPerSec, j.w2, parentOperators(j.sq2)._2.getEventsPerSec)
+      case sj: SelfJoinQuery => calculateEventRateFromWindows(sj.w1, parentOperators(sj.sq)._2.getEventsPerSec, sj.w2, parentOperators(sj.sq)._2.getEventsPerSec)
       // an event is sent whenever all parents have sent an event -> slowest parent event rate
-      case c: ConjunctionQuery => parentOperators.minBy(_._2._2)._2._2
+      case c: ConjunctionQuery => parentOperators.minBy(_._2._2.getEventsPerSec)._2._2
       // an event is sent whenever either parent sends
       case d: DisjunctionQuery => parentOperators(d.sq1)._2 + parentOperators(d.sq2)._2
       // otherwise use the highest parent event rate
-      case _ => parentOperators.maxBy(_._2._2)._2._2
+      case _ => parentOperators.maxBy(_._2._2.getEventsPerSec)._2._2
     }
     eventRateToChild
   }
 
-  def estimateOutputBandwidths(operator: Query, baseEventRate: Double): Map[Query, Double] = extractOperators(operator, baseEventRate).map(e => e._1 -> e._2._4).toMap
+  def estimateOutputBandwidths(operator: Query)(implicit baseEventRates: Map[String, Throughput]): Map[Query, Double] = extractOperators(operator).map(e => e._1 -> e._2._4).toMap
 
   sealed trait LeafQuery   extends Query
   sealed trait UnaryQuery  extends Query { val sq: Query }

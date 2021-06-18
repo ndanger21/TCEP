@@ -17,6 +17,7 @@ import tcep.graph.transition._
 import tcep.machinenodes.consumers.Consumer.SetQosMonitors
 import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.placement.{HostInfo, PlacementStrategy, QueryDependencies, SpringRelaxationLike}
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.SpecialStats
 
@@ -42,7 +43,7 @@ class QueryGraph(query: Query,
                  mapekType: String = "requirementBased")
                 (implicit val context: ActorContext,
                  implicit val cluster: Cluster,
-                 implicit val baseEventRate: Double,
+                 implicit val baseEventRates: Map[String, Throughput] = Map(),
                  implicit val fixedSimulationProperties: Map[Symbol, Int] = Map(),
                  implicit val pimPaths: (String, String) = ("", "")
                  ) {
@@ -61,7 +62,7 @@ class QueryGraph(query: Query,
   def createAndStart(eventCallback: Option[EventCallback] = None): ActorRef = {
     log.info(s"Creating and starting new QueryGraph with placement ${
       if (startingPlacementStrategy.isDefined) startingPlacementStrategy.get.name else "default (depends on MAPEK implementation)"} and publishers \n ${publishers.mkString("\n")}")
-    val queryDependencies = extractOperators(query, baseEventRate)
+    val queryDependencies = extractOperators(query)
     val root = startDeployment(eventCallback, queryDependencies)
     consumer ! SetQosMonitors
     clientNode = context.system.actorOf(Props(classOf[ClientNode], root, mapek, consumer, transitionConfig, queryDependencies(query)._4),

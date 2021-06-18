@@ -4,7 +4,10 @@ import akka.actor.{Actor, ActorLogging, ActorRef, Address, RootActorPath}
 import akka.cluster.Cluster
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
+import breeze.stats.meanAndVariance
+import breeze.stats.meanAndVariance.MeanAndVariance
 import com.typesafe.config.ConfigFactory
+import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics}
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.BytePerSec
@@ -24,13 +27,75 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
 
   override def receive: Receive = {
     case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates) =>
+      val queryDependencyMap = Queries.extractOperators(rootOperator)(publisherEventRates)
+      val publishers = TCEPUtils.getPublisherHosts(cluster)
+
+      println(s"publisherEventRate map:\n${publisherEventRates.mkString("\n")}\n")
+      println(s"queryDependencyMap: \n${queryDependencyMap.mkString("\n")}\n")
+      // ===== helper functions =====
+      def getBrokerSamples(broker: Address): Future[BrokerQosMetrics] = {
+        val withoutPrevInstances: Option[Set[ActorRef]] = currentPlacement.map(_.values.filter(_.path.address == broker).toSet)
+        println(s"retrieving brokerSamples from $broker without $withoutPrevInstances")
+        cluster.system.actorSelection(RootActorPath(broker) / "user" / "TaskManager*" / "BrokerQosMonitor*")
+          .resolveOne() // broker actorRef
+          .flatMap(monitor => (monitor ? GetBrokerMetrics(withoutPrevInstances)).mapTo[BrokerQosMetrics])
+      }
+
+      def getOperatorSamples(operator: (Query, Option[ActorRef])): Future[Option[OperatorQoSMetrics]] = {
+        val parents = queryDependencyMap(operator._1)._1.parents.get
+      // transition placement, can fetch metrics and predictions from deployed operators
+        if (operator._2.isDefined)
+          cluster.system.actorSelection(operator._2.get.path.child("operatorQosMonitor"))
+            .resolveOne() // operator actorRef
+            .flatMap(monitor => (monitor ? GetOperatorQoSMetrics).mapTo[OperatorQoSMetrics])
+            .map(Some(_))
+
+        //TODO insert default estimates here
+        //initial placement, no measured metrics for operators yet -> use default estimates
+        else for {
+          newParentCoords <- Future.traverse(parents
+            .map(p => p -> TCEPUtils.getCoordinatesOfNode(cluster, newPlacement.getOrElse(p,
+              publishers(p.asInstanceOf[PublisherDummyQuery].p).address)))
+          )(e => e._2.map(e._1 -> _))
+          newOpCoord <- TCEPUtils.getCoordinatesOfNode(cluster, newPlacement(operator._1))
+        } yield {
+          val vivDistToParents = newParentCoords.map(_._2.distance(newOpCoord))
+          val parentEventRates = parents.map(p => p -> queryDependencyMap(p)._2.getEventsPerSec).toMap
+          val parentEventBandwidth = parentEventRates.map(p => p._2 * queryDependencyMap(p._1)._3)
+          val outgoingEventRate = queryDependencyMap(operator._1)._2.getEventsPerSec
+          val defaultIOMetrics = IOMetrics(
+            incomingEventRate = parentEventRates.values.sum,
+            outgoingEventRate = outgoingEventRate,
+            incomingBandwidth = Bandwidth(parentEventBandwidth.sum, BytePerSec),
+            outgoingBandwidth = Bandwidth(outgoingEventRate * queryDependencyMap(operator._1)._3, BytePerSec)
+          )
+          Some(
+          OperatorQoSMetrics(
+            eventSizeIn = parents.map(queryDependencyMap(_)._3),
+            eventSizeOut = queryDependencyMap(operator._1)._3,
+            selectivity = defaultIOMetrics.outgoingEventRate / defaultIOMetrics.incomingEventRate,
+            interArrivalLatency = meanAndVariance(List(1 / parentEventRates.values.sum)),
+            processingLatency = meanAndVariance(List(1.0)), //TODO how reasonably to estimate this?
+            networkToParentLatency = meanAndVariance(vivDistToParents),
+            endToEndLatency = MeanAndVariance(-1, 0, 0),
+            ioMetrics = defaultIOMetrics
+          ))
+        }
+      }
+      // ==== helper functions end ====
+
       println("received prediction request")
       val placementMap: Map[Query, (Address, Option[ActorRef])] = newPlacement.map(e => e._1 -> (e._2, if (currentPlacement.isDefined) currentPlacement.get.get(e._1) else None))
       println(s"placement map is $placementMap")
+      //TODO better to include sampling data retrieval in recursive prediction, so we can include parent throughput predictions in child samples for initial placement
+      //TODO broker metrics: include placement information to update number of operators, cumul eventrate (or bandwidth), cpu load (how?)
+      //TODO get current publisher event rate from publishers; should do same during transition (currently passing initial event rate around among successors)
+      //TODO use throughput predictions to replace input event rate estimates if possible?
       val perQueryPrediction: Future[MetricPredictions] = Future.traverse(placementMap)(query => {
         for {
-          brokerSamples: BrokerQosMetrics <- getBrokerSamples(query._2._1, query._2._2)
-          operatorSamples: Option[OperatorQoSMetrics] <- getOperatorSamples(query._2._2)
+          brokerSamples: BrokerQosMetrics <- getBrokerSamples(query._2._1)
+          _ = println(s"brokerSamples $brokerSamples")
+          operatorSamples: Option[OperatorQoSMetrics] <- getOperatorSamples(query._1, query._2._2)
         } yield {
           println(s"samples for ${query._1} are $brokerSamples and $operatorSamples")
           query._1 -> (brokerSamples, operatorSamples)
@@ -45,20 +110,6 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
     case m => log.error(s"received unknown message $m")
   }
 
-  def getBrokerSamples(broker: Address, previousOperatorInstance: Option[ActorRef]): Future[BrokerQosMetrics] = cluster.system.actorSelection(RootActorPath(broker) / "user" / "TaskManager*" / "BrokerQosMonitor*")
-    .resolveOne() // broker actorRef
-    .flatMap(monitor => (monitor ? GetBrokerMetrics(previousOperatorInstance)).mapTo[BrokerQosMetrics])
-
-  def getOperatorSamples(operator: Option[ActorRef]): Future[Option[OperatorQoSMetrics]] =
-  // transition placement, can fetch metrics and predictions from deployed operators
-    if (operator.isDefined)
-      cluster.system.actorSelection(operator.get.path.child("operatorQosMonitor"))
-        .resolveOne() // operator actorRef
-        .flatMap(monitor => (monitor ? GetOperatorQoSMetrics).mapTo[OperatorQoSMetrics])
-        .map(Some(_))
-    //TODO insert default estimates here
-    //initial placement, no measured metrics for operators yet
-    else Future(None)
 
   /**
     * traverses the query tree from publishers towards root and predicts metrics for each operator. Predicted Throughput of parent serves as input event rate of child
