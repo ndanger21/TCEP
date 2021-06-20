@@ -8,7 +8,9 @@ import akka.testkit.{TestKit, TestProbe}
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.Coordinates
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, FunSuiteLike}
+import org.slf4j.LoggerFactory
 import tcep.data.Events._
+import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.dsl.Dsl._
 import tcep.graph.nodes.traits.Node.Subscribe
@@ -17,7 +19,9 @@ import tcep.graph.transition.MAPEK.{AddOperator, SetClient, SetDeploymentStatus,
 import tcep.graph.transition.{AcknowledgeStart, StartExecution}
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.machinenodes.consumers.Consumer.AllRecords
+import tcep.machinenodes.helper.actors.TaskManagerActor
 import tcep.placement.{HostInfo, MobilityTolerantAlgorithm, PlacementStrategy, QueryDependencies}
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.publishers.TestPublisher
 
@@ -27,13 +31,15 @@ import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.reflect.runtime.universe.typeOf
 
 class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseString("akka.test.single-expect-default = 5000").withFallback(ConfigFactory.load()))) with FunSuiteLike with BeforeAndAfterAll with BeforeAndAfterEach {
+  val log = LoggerFactory.getLogger(getClass)
   implicit val ec: ExecutionContext = system.dispatcher
   implicit val creatorAddress: Address = Address("tcp", "tcep", "localhost", 0)
   var actors: List[ActorRef] = List()
   var subscriber: TestProbe = _ // use a TestProbe instead of testActor so that we have an empty mailbox for each test (-> no false failures due to previous failed tests)
   def subAckMsg(implicit query: Query) = AcknowledgeSubscription(query)
   var rootOperator: ActorRef = _
-
+  val defaultThroughput = Throughput(1, FiniteDuration(1, TimeUnit.SECONDS))
+  implicit val baseEventRates: Map[String, Throughput] = Map("A" -> defaultThroughput, "B" -> defaultThroughput, "C" -> defaultThroughput)
 
   def createTestPublisher(name: String): ActorRef = {
     val pub = system.actorOf(Props(TestPublisher()), name)
@@ -56,36 +62,38 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
                        createdCallback: Option[CreatedCallback],
                        consumer: ActorRef = null)
                       (implicit override val context: ActorContext,
-                       override implicit val cluster: Cluster
+                       override implicit val cluster: Cluster,
+                       baseEventRates: Map[String, Queries.EventRateEstimate]
                       )
     extends QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, createdCallback, consumer) {
 
-    override def createAndStart(eventCallback: Option[EventCallback]): ActorRef = {
+    override def createAndStart(eventCallback: Option[EventCallback]): Future[ActorRef] = {
       val queryDependencies = extractOperators(query)
-      val root = startDeployment(eventCallback, queryDependencies)
-      mapek.knowledge ! SetClient(subscriberActor)
-      mapek.knowledge ! SetTransitionMode(transitionConfig)
-      mapek.knowledge ! SetDeploymentStatus(true)
-      println(s"started query ${query} in mode ${transitionConfig} with clientNode $subscriberActor")
-      actors = root :: actors
-      root
+      for {
+        root <- startDeployment(eventCallback, queryDependencies)
+      } yield {
+        mapek.knowledge ! SetClient(subscriberActor)
+        mapek.knowledge ! SetTransitionMode(transitionConfig)
+        mapek.knowledge ! SetDeploymentStatus(true)
+        actors = root :: actors
+        root
+      }
     }
 
     protected override def startDeployment(implicit eventCallback: Option[EventCallback],
-                                           queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
-                                          ): ActorRef =
-      Await.result(deployOperatorGraphRec(query, true), FiniteDuration(5, TimeUnit.SECONDS))
+                                           queryDependencies: QueryDependencyMap
+                                          ): Future[ActorRef] = deployOperatorGraphRec(query, true)
 
     protected override def deployOperator(operator: Query, parentOperators: (ActorRef, Query)*)
                                          (implicit eventCallback: Option[EventCallback],
                                           isRootOperator: Boolean,
                                           initialOperatorPlacement: Map[Query, Coordinates],
-                                          queryDependencies: mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]
+                                          queryDependencies: QueryDependencyMap
                                          ): Future[ActorRef] = {
 
       for { operatorActor <- createOperator(operator, HostInfo(cluster.selfMember, operator), false, None, parentOperators.map(_._1):_*)}
         yield {
-          println(s"deploy: created $operator with created callback $createdCallback: $operatorActor")
+          //println(s"deploy: created $operator with created callback $createdCallback: $operatorActor")
           mapek.knowledge ! AddOperator(operatorActor)
           operatorActor
         }
@@ -98,9 +106,9 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
       implicit val cluster: Cluster = Cluster(context.system)
       try {
         val graphFactory: TestQueryGraph = new TestQueryGraph(query, subscriberActor, TransitionConfig(), publishers, None, None)
-        println("Created TestQueryGraph")
-        rootOperator = graphFactory.createAndStart(None)
-        println(s"instantiated query $query with root operator $rootOperator")
+        log.debug("Created TestQueryGraph")
+        rootOperator = Await.result(graphFactory.createAndStart(None), FiniteDuration(15, TimeUnit.SECONDS))
+        log.debug(s"instantiated query $query with root operator $rootOperator")
         subscriber.send(rootOperator, Subscribe(subscriber.ref, ClientDummyQuery()))
         subscriber.send(rootOperator, StartExecution(MobilityTolerantAlgorithm.name))
 
@@ -134,6 +142,11 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
     actors.foreach(stopActor)
   }
 
+  override def beforeAll(): Unit = {
+    super.beforeAll()
+    system.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
+  }
+
   override def beforeEach(): Unit = {
     super.beforeEach()
     subscriber = TestProbe()
@@ -149,6 +162,33 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
   override def afterAll(): Unit = {
     system.terminate()
   }
+
+  test(" extractOperators() must return a map of all operators and their assorted parent and child operators that exist in a query") {
+      val query =
+        stream[Boolean]("A")
+          .and(stream[Boolean]("B"))
+          .and(stream[Boolean]("C").where(_ == true))
+
+      val result = Queries.extractOperators(query)
+      assert(result.nonEmpty)
+      assert(result.size == 10, "result must contain all 6 operators, 3 publisher dummy operators, and 1 ClientDummyOperator")
+      assert(result.count(o => o._1.isInstanceOf[Stream1[_]]) == 3, "result must contain 3 stream operators")
+      assert(result.count(o => o._1.isInstanceOf[Filter1[_]]) == 1, "result must contain one filter operator")
+      assert(result.count(o => o._1.isInstanceOf[Conjunction21[_, _, _]]) == 1,
+        "result must contain one conjunction21 operator")
+      assert(result.count(o => o._1.isInstanceOf[Conjunction11[_, _]]) == 1,
+        "result must contain one conjunction11 operator")
+      assert(result.filter(o => o._1.isInstanceOf[Stream1[_]]).forall(o =>
+        o._2._1.parents.isDefined && o._2._1.parents.get.nonEmpty && o._2._1.parents.get.head.isInstanceOf[PublisherDummyQuery]),
+        "stream operators must have dummy operator parents")
+      assert(result.exists(o => o._1.isInstanceOf[Conjunction21[_, _, _]] && o._2._1.child.isDefined && o._2._1.child.get.isInstanceOf[ClientDummyQuery]),
+        "conjunction21 operator is the root of the query and has no children")
+      assert(result.exists(o => o._1.isInstanceOf[Conjunction21[_, _, _]] &&
+        o._2._1.parents.get.exists(p => p.isInstanceOf[Filter1[_]]) &&
+        o._2._1.parents.get.exists(p => p.isInstanceOf[Conjunction11[_, _]])),
+        "conjunction21 operator has filter and conjunction11 as parents")
+      assert(result.exists(o => o._1.isInstanceOf[ClientDummyQuery] && o._2._1.parents.isDefined && o._2._1.parents.get.head == query && o._2._1.child.isEmpty))
+    }
 
     test("Query should be serializable when sent between actors") {
       val serialization = SerializationExtension(system)
@@ -224,9 +264,9 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
       sequence(nStream[Int, Int]("A") -> nStream[String, String]("B"))
     val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
     subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
-    a ! Event2(21, 42)
+    a ! Event2(21, 42).updateDepartureTimestamp(1, 1)
     Thread.sleep(50)
-    b ! Event2("21", "42")
+    b ! Event2("21", "42").updateDepartureTimestamp(1, 1)
     subscriber.expectMsg(Event4(21, 42, "21", "42"))
   }
 
@@ -237,17 +277,17 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
       sequence(nStream[Int, Int]("A") -> nStream[String, String]("B"))
     val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
     subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
-    a ! Event2(1, 1)
+    a ! Event2(1, 1).updateDepartureTimestamp(1, 1)
     Thread.sleep(50)
-    a ! Event2(2, 2)
+    a ! Event2(2, 2).updateDepartureTimestamp(1, 1)
     Thread.sleep(50)
-    a ! Event2(3, 3)
+    a ! Event2(3, 3).updateDepartureTimestamp(1, 1)
     Thread.sleep(50)
-    b ! Event2("1", "1")
+    b ! Event2("1", "1").updateDepartureTimestamp(1, 1)
     Thread.sleep(50)
-    b ! Event2("2", "2")
+    b ! Event2("2", "2").updateDepartureTimestamp(1, 1)
     Thread.sleep(50)
-    b ! Event2("3", "3")
+    b ! Event2("3", "3").updateDepartureTimestamp(1, 1)
     subscriber.expectMsg(Event4(1, 1, "1", "1"))
   }
 
@@ -276,9 +316,7 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
       a ! Event2(42, 42)
       a ! Event2(43, 42)
       val x = subscriber.expectMsg(Event2(41, 42))
-      println("expect1 result: " + x)
       val y = subscriber.expectMsg(Event2(42, 42))
-      println("expect2 result: " + y)
       subscriber.expectNoMessage()
     }
 
@@ -527,7 +565,8 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
         stream[Int]("A")
           .and(stream[Float]("B"))
       val graph: ActorRef = createTestGraph(query, Map("A" -> a, "B" -> b), subscriber.ref)
-      subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
+      val starts = subscriber.expectMsgAllOf(subAckMsg, AcknowledgeStart())
+      log.info(s"STARTED $starts")
       a ! Event1(21)
       b ! Event1(21.0f)
       Thread.sleep(50)

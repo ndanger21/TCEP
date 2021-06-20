@@ -1,7 +1,6 @@
 package tcep.system
 
 import java.util.concurrent.atomic.AtomicInteger
-
 import akka.actor.{ActorContext, ActorRef}
 import akka.cluster.Cluster
 import akka.pattern.ask
@@ -12,6 +11,7 @@ import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration._
@@ -30,7 +30,7 @@ class System(context: ActorContext) {
       DummyMonitorFactory(query))
     val graphFactory = new QueryGraph(query, TransitionConfig(), publishers, None, createdCallback, null)(context, Cluster(context.system))
 
-    roots += graphFactory.createAndStart(eventCallback)
+    roots += Await.result(graphFactory.createAndStart(eventCallback), FiniteDuration(15, TimeUnit.SECONDS))
   }
 
   def consumers: Seq[Operator] = {

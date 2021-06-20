@@ -1,11 +1,16 @@
 package tcep.prediction
 
-import akka.actor.Props
+import akka.actor.{ActorRef, Props}
 import akka.pattern.ask
-import akka.testkit.TestActorRef
+import akka.testkit.{TestActorRef, TestProbe}
 import akka.util.Timeout
-import tcep.data.Queries.Query2
+import tcep.data.Queries.{Query, Query2}
 import tcep.dsl.Dsl.{query1ToQuery1Helper, query2ToQuery2Helper, stream}
+import tcep.graph.QueryGraph
+import tcep.graph.nodes.traits.TransitionConfig
+import tcep.machinenodes.helper.actors.SetPublisherActorRefsACK
+import tcep.machinenodes.qos.BrokerQoSMonitor.{BrokerQosMetrics, GetBrokerMetrics}
+import tcep.placement.MobilityTolerantAlgorithm
 import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Throughput}
 import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
 import tcep.{MultiJVMTestSetup, TCEPMultiNodeConfig}
@@ -23,16 +28,15 @@ class QueryPerformancePredictorMultiJvmPublisher2 extends QueryPerformancePredic
 abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
 
   import TCEPMultiNodeConfig._
+  val streamA = stream[Int](pNames(0))
+  val streamB = stream[Float](pNames(1))
+  val conjunction: Query2[Int, Float] = streamA.and(streamB)
+  val filter: Query2[Int, Float] = conjunction.where((_, _) => true)
 
   "A QueryPerformancePredictor" should {
-    val streamA = stream[Int](pNames(0))
-    val streamB = stream[Float](pNames(1))
-    val conjunction: Query2[Int, Float] = streamA.and(streamB)
-    val filter: Query2[Int, Float] = conjunction.where((_, _) => true)
-    val baseEventRates = Map(pNames(0) -> Throughput(5, 1 second), pNames(1) -> Throughput(8, 1 second))
-
     "correctly combine per-operator end-to-end latency and throughput predictions into a per-query prediction" in {
       runOn(client) {
+        val baseEventRates = Map(pNames(0) -> Throughput(5, 1 second), pNames(1) -> Throughput(8, 1 second))
         val perOperatorPredictions = Map(
           streamA -> MetricPredictions(EndToEndLatency(5 milliseconds), Throughput(5, 1 second)),
           streamB -> MetricPredictions(EndToEndLatency(1 seconds), Throughput(5, 1 second)),
@@ -47,7 +51,7 @@ abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
       testConductor.enter("test passed")
     }
 
-    "reply with a valid prediction for an initial placement (no previous operator instances of the query are running)" in within(5 seconds) {
+    "reply with a valid prediction for an initial placement (no previous operator instances of the query are running)" in within(15 seconds) {
       runOn(client) {
         val initialPlacement = Map(
           streamA -> node(publisher1).address,
@@ -58,6 +62,7 @@ abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
         val queryPerformancePredictor = system.actorOf(Props(classOf[QueryPerformancePredictor], cluster))
         implicit val timeout: Timeout = Timeout(remaining)
         val f = (queryPerformancePredictor ? GetPredictionForPlacement(filter, None, initialPlacement, baseEventRates)).mapTo[MetricPredictions]
+        ec
         f.onComplete {
           case Failure(exception) => exception.printStackTrace()
           case Success(value) => value
@@ -74,6 +79,28 @@ abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
 
     "reply with a valid prediction for a transition placement (previous operator instances are running and monitors have gathered metrics)" in {
 
+    }
+
+
+  }
+
+
+  "A BrokerQosMonitor" should {
+    "exclude information of operators that will be moved to another broker as a result of a new placement" in within(15 seconds) {
+      runOn(client) {
+        implicit val timeout = Timeout(remaining)
+        val consumer = TestProbe()
+        val queryGraphWrapper = createTestGraph(filter, publishers, consumer, MobilityTolerantAlgorithm)
+        Thread.sleep(100)
+        queryGraphWrapper ! GetOperatorMap
+        val operatorMap = expectMsgClass(classOf[Map[Query, ActorRef]])
+        assert(operatorMap.nonEmpty)
+        getBrokerQosMonitor(node(client).address).resolveOne().map(monitor => {
+          monitor ! GetBrokerMetrics(None)
+          expectMsgClass(classOf[BrokerQosMetrics])
+        })
+      }
+      testConductor.enter("end")
     }
   }
 }

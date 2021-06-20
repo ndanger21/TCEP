@@ -27,7 +27,7 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
   import TCEPMultiNodeConfig._
 
   val bdpAccuracy = 0.1
-  val coordAccuracy = 3.0
+  val coordAccuracy = 4.0
 
   private def initUUT(): RizouAlgorithm.type = {
     val uut = RizouAlgorithm
@@ -159,13 +159,14 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
         //   s2 (25, -50)
         //  /
         // pub2 (0, -100)
+        println("final coords " + result(query))
         assert(result(query).distance(new Coordinates(55, 0, 0)) <= coordAccuracy)
         assert(result(s1).distance(new Coordinates(28, 50, 0)) <= coordAccuracy)
         assert(result(s2).distance(new Coordinates(28, -50, 0)) <= coordAccuracy)
       }
-      testConductor.enter("test calculateVirtualPlacementWithCoords() with binary operator complete")
     }
   }
+  testConductor.enter("test calculateVirtualPlacementWithCoords() with binary operator complete")
 
   "RizouAlgorithm - calculateVirtualPlacementWithCoords() - unary operator query" must {
     "return the mapping of operator to coordinates that has minimal bdp for the given unary operator query" in {

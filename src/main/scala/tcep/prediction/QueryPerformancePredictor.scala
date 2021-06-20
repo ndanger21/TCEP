@@ -30,8 +30,8 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       val queryDependencyMap = Queries.extractOperators(rootOperator)(publisherEventRates)
       val publishers = TCEPUtils.getPublisherHosts(cluster)
 
-      println(s"publisherEventRate map:\n${publisherEventRates.mkString("\n")}\n")
-      println(s"queryDependencyMap: \n${queryDependencyMap.mkString("\n")}\n")
+      //println(s"publisherEventRate map:\n${publisherEventRates.mkString("\n")}\n")
+      //println(s"queryDependencyMap: \n${queryDependencyMap.mkString("\n")}\n")
       // ===== helper functions =====
       def getBrokerSamples(broker: Address): Future[BrokerQosMetrics] = {
         val withoutPrevInstances: Option[Set[ActorRef]] = currentPlacement.map(_.values.filter(_.path.address == broker).toSet)
@@ -87,8 +87,8 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       println("received prediction request")
       val placementMap: Map[Query, (Address, Option[ActorRef])] = newPlacement.map(e => e._1 -> (e._2, if (currentPlacement.isDefined) currentPlacement.get.get(e._1) else None))
       println(s"placement map is $placementMap")
-      //TODO better to include sampling data retrieval in recursive prediction, so we can include parent throughput predictions in child samples for initial placement
-      //TODO broker metrics: include placement information to update number of operators, cumul eventrate (or bandwidth), cpu load (how?)
+      //TODO initial placement prediction: include parent event rate prediction in child's operator samples default values
+      //DONE broker metrics: include placement information to update number of operators, cumul eventrate (or bandwidth), cpu load (how?)
       //TODO get current publisher event rate from publishers; should do same during transition (currently passing initial event rate around among successors)
       //TODO use throughput predictions to replace input event rate estimates if possible?
       val perQueryPrediction: Future[MetricPredictions] = Future.traverse(placementMap)(query => {

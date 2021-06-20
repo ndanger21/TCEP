@@ -57,7 +57,6 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
 
       case SendEventTick =>
         val event: Event = createEventFromId(id.incrementAndGet())
-        event.init()(cluster.selfAddress)
         event.updateDepartureTimestamp(eventSizeOut, eventRateOut)
         subscribers.keys.foreach(_ ! event)
 

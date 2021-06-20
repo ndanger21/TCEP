@@ -45,7 +45,7 @@ case class DatabaseJoinNode(transitionConfig: TransitionConfig,
           emitEvent(dbEvent, eventCallback)
         }
       }
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
   def handle(dataList: List[Any]) = {

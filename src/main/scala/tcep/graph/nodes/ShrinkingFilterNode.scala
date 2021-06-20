@@ -63,7 +63,7 @@ case class ShrinkingFilterNode(transitionConfig: TransitionConfig,
           emitEvent(outEvent.get, eventCallback)
         }
       }
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
   def handle(dataList: List[Any]) = {

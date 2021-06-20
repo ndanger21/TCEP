@@ -54,7 +54,7 @@ case class SlidingWindowNode(transitionConfig: TransitionConfig,
         avgEvent.copyMonitoringData(event.monitoringData)
         emitEvent(avgEvent, eventCallback)
       }
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
   def emitAvg(): Unit = {

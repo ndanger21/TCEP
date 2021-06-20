@@ -13,6 +13,9 @@ import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 import java.time.Duration
+import java.util.concurrent.TimeUnit
+import scala.concurrent.Await
+import scala.concurrent.duration.FiniteDuration
 
 /**
   * Handling of [[tcep.data.Queries.JoinQuery]] is done by JoinNode.
@@ -37,7 +40,7 @@ case class JoinNode(transitionConfig: TransitionConfig,
 
   override def preStart(): Unit = {
     super.preStart()
-    for {
+    val init = for {
       type1 <- addEventType("sq1", createArrayOfNames(query.sq1), createArrayOfClasses(query.sq1))(blockingIoDispatcher)
       type2 <- addEventType("sq2", createArrayOfNames(query.sq2), createArrayOfClasses(query.sq2))(blockingIoDispatcher)
       epStatement: EPStatement <- createEpStatement(s"select * from " +
@@ -45,9 +48,6 @@ case class JoinNode(transitionConfig: TransitionConfig,
         s"sq2.${createWindowEplString(query.w2)} as sq2 ")(blockingIoDispatcher)
     } yield {
     val updateListener: UpdateListener = (newEventBeans: Array[EventBean], _) => newEventBeans.foreach(eventBean => {
-      /**
-        * @author Niels
-        */
       val values1: Array[Any] = eventBean.get("sq1").asInstanceOf[Array[Any]]
       val values2: Array[Any] = eventBean.get("sq2").asInstanceOf[Array[Any]]
       val values = values1.tail ++ values2.tail
@@ -80,6 +80,7 @@ case class JoinNode(transitionConfig: TransitionConfig,
     epStatement.addListener(updateListener)
     esperInitialized = true
     }
+    Await.result(init, FiniteDuration(1, TimeUnit.SECONDS)) // block here to wait until esper is initialized
 
   }
 
@@ -107,7 +108,7 @@ case class JoinNode(transitionConfig: TransitionConfig,
     }
 
     case GetWindowStateEvents => getWindowStateEvents()
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}, esper initialized: $esperInitialized")
+    case unhandledMessage =>
   }
 
   override def maxWindowTime(): Duration = {

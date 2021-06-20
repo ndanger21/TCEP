@@ -10,6 +10,8 @@ import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 import java.util.concurrent.TimeUnit
+import scala.concurrent.{Await, blocking}
+import scala.concurrent.duration.FiniteDuration
 
 /**
   * Handling of [[tcep.data.Queries.SequenceQuery]] is done by SequenceNode.
@@ -34,7 +36,7 @@ case class SequenceNode(transitionConfig: TransitionConfig,
   override def preStart(): Unit = {
     super.preStart()
     assert(publishers.size == 2)
-    for {
+    val init = for {
       type1 <- addEventType("sq1", SequenceNode.createArrayOfNames(query.s1), SequenceNode.createArrayOfClasses(query.s1))(blockingIoDispatcher)
       type2 <- addEventType("sq2", SequenceNode.createArrayOfNames(query.s2), SequenceNode.createArrayOfClasses(query.s2))(blockingIoDispatcher)
       epStatement: EPStatement <- createEpStatement("select * from pattern [every (sq1=sq1 -> sq2=sq2)]")(blockingIoDispatcher)
@@ -74,11 +76,13 @@ case class SequenceNode(transitionConfig: TransitionConfig,
       epStatement.addListener(updateListener)
       esperInitialized = true
     }
-
+    Await.result(init, FiniteDuration(1, TimeUnit.SECONDS)) // block here to wait until esper is initialized
+    log.debug("CREATED SEQUENCE OP")
   }
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event if sender().equals(publishers.head) && esperInitialized =>
+      log.debug("RECEIVED EVENT {}", event)
       event.updateArrivalTimestamp()
       event match {
       case Event1(e1) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
@@ -88,7 +92,10 @@ case class SequenceNode(transitionConfig: TransitionConfig,
       case Event5(e1, e2, e3, e4, e5) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5)))
       case Event6(e1, e2, e3, e4, e5, e6) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5), toAnyRef(e6)))
     }
-    case event: Event if sender().equals(publishers(1)) && esperInitialized => event match {
+    case event: Event if sender().equals(publishers(1)) && esperInitialized =>
+      log.debug("RECEIVED EVENT {}", event)
+      event.updateArrivalTimestamp()
+      event match {
       case Event1(e1) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
       case Event2(e1, e2) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2)))
       case Event3(e1, e2, e3) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3)))
@@ -96,7 +103,7 @@ case class SequenceNode(transitionConfig: TransitionConfig,
       case Event5(e1, e2, e3, e4, e5) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5)))
       case Event6(e1, e2, e3, e4, e5, e6) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5), toAnyRef(e6)))
     }
-    case unhandledMessage => log.info(s"unhandled message $unhandledMessage, esper initialized: $esperInitialized")
+    case unhandledMessage => log.debug("RECEIVED MSG {}", unhandledMessage)
   }
 
   override def getParentActors(): List[ActorRef] = publishers.toList

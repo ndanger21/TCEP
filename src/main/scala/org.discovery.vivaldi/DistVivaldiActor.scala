@@ -198,7 +198,7 @@ object DistVivaldiActor {
 
         remoteRequest.onComplete {
           case scala.util.Success(coords) =>
-            logger.debug(s"explicitly retrieving coordinates from $address  took ${System.currentTimeMillis() - startTime}ms")
+            //logger.debug(s"explicitly retrieving coordinates from $address  took ${System.currentTimeMillis() - startTime}ms")
           case scala.util.Failure(exception) =>
             logger.error(s"failed to explicitly retrieve coordinates from $address after ${System.currentTimeMillis() - startTime}ms", exception)
         }

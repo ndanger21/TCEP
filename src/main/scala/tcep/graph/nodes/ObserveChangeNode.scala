@@ -68,7 +68,7 @@ case class ObserveChangeNode(transitionConfig: TransitionConfig,
           emitEvent(changeEvent)
         }*/
       }
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
   def getToForward(dataList: List[Any]): List[LinearRoadDataNew] = {

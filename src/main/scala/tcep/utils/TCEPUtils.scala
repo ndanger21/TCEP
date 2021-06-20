@@ -72,7 +72,7 @@ object TCEPUtils {
   }
 
   def getBandwidthBetweenNodes(cluster: Cluster, source: Member, target: Member)(implicit ec: ExecutionContext): Future[Double] = {
-    log.debug(this.toString, s"bw request for ${source.address}->${target.address}")
+    //log.debug(this.toString, s"bw request for ${source.address}->${target.address}")
     if(source.equals(target)) Future { 0.0d }
     else {
       for {
@@ -137,7 +137,7 @@ object TCEPUtils {
       taskManager <- if(node == cluster.selfMember) Future { Some(localTaskManager) } else (localTaskManager ? GetTaskManagerActor(node)).mapTo[TaskManagerActorResponse].map(_.maybeRef)
       directTry <- if(taskManager.isEmpty) selectTaskManagerOn(cluster, node.address).resolveOne()(retryTimeout) else Future { taskManager.get } // try to contact it directly as a last resort
     } yield {
-      log.debug(this.toString, s"retrieved actorRef of taskManager $taskManager")
+      //log.debug(this.toString, s"retrieved actorRef of taskManager $taskManager")
       directTry
     }
   }

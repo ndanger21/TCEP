@@ -41,7 +41,7 @@ case class ConverterNode(transitionConfig: TransitionConfig,
         convertedEvent.monitoringData = event.monitoringData
         emitEvent(convertedEvent, eventCallback)
       }
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
   def handle(value: Any): List[Any] = {

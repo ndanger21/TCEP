@@ -44,7 +44,7 @@ case class WindowStatisticNode(transitionConfig: TransitionConfig,
         statEvent.monitoringData = event.monitoringData
         emitEvent(statEvent, eventCallback)
       }
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
   def store(dataList: List[Any]) = {

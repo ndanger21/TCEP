@@ -130,7 +130,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
       }
     })
     val onlyOperators = operators.filter(o => !o.isInstanceOf[ClientDummyQuery] && !o.isInstanceOf[PublisherDummyQuery])
-    log.info(s"initialised virtual operator coordinates: \n ${currentOperatorCoordinates.toList.map(_.swap).mkString("\n")}")
+    //log.info(s"initialised virtual operator coordinates: \n ${currentOperatorCoordinates.toList.map(_.swap).mkString("\n")}")
     for(i <- 0 to iterations) {
       // updates take influence only in next round
       val updateRound = makeMapFuture( // run each operator's current round update in parallel
@@ -157,7 +157,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
                                          currentOperatorCoordinates: Map[Query, Coordinates],
                                          publisherDummyCoordinates: Map[String, Coordinates], clientDummyCoordinates: Coordinates
                                         ): QueryDependenciesWithCoordinates = {
-    log.debug(s"operator: $operator \n dependencymap: \n ${operatorDependencyMap.keys.mkString("\n")} \n coordinatemap: \n${currentOperatorCoordinates.mkString("\n")} \n publisherDummyCoords: ${publisherDummyCoordinates.mkString("\n")} \n clientDummyCoords: $clientDummyCoordinates")
+    //log.debug(s"operator: $operator \n dependencymap: \n ${operatorDependencyMap.keys.mkString("\n")} \n coordinatemap: \n${currentOperatorCoordinates.mkString("\n")} \n publisherDummyCoords: ${publisherDummyCoordinates.mkString("\n")} \n clientDummyCoords: $clientDummyCoordinates")
     // deep queries cause lookup failures, use string representation instead
     val operatorCoordStrMap = currentOperatorCoordinates.map(e => e._1.toString() -> e._2)
     try {

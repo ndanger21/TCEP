@@ -64,7 +64,7 @@ case class AverageNode(
       //log.debug(s"average event with monitoring data: $averageEvent")
       emitEvent(averageEvent, eventCallback)
 
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
 }

@@ -12,6 +12,9 @@ import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 import java.time.Duration
+import java.util.concurrent.TimeUnit
+import scala.concurrent.Await
+import scala.concurrent.duration.FiniteDuration
 
 /**
   * Handling of [[tcep.data.Queries.SelfJoinQuery]] is done by SelfJoinNode.
@@ -44,7 +47,7 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
       case Event6(e1, e2, e3, e4, e5, e6) => sendEvent("sq", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5), toAnyRef(e6)))
     }
 
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}, esper initialized: $esperInitialized")
+    case unhandledMessage =>
   }
 
 
@@ -68,7 +71,7 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
 
   override def preStart(): Unit = {
     super.preStart()
-    for {
+    val init = for {
       type1 <- addEventType("sq", createArrayOfNames(query.sq), createArrayOfClasses(query.sq))(blockingIoDispatcher)
       epStatement: EPStatement <- createEpStatement(s"select * from " +
         s"sq.${createWindowEplString(query.w1)} as lhs, " +
@@ -96,6 +99,7 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
       epStatement.addListener(updateListener)
       esperInitialized = true
     }
+    Await.result(init, FiniteDuration(1, TimeUnit.SECONDS)) // block here to wait until esper is initialized
   }
 
 

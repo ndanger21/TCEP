@@ -1,7 +1,6 @@
 package tcep
 
 import java.util.concurrent.TimeUnit
-
 import akka.actor.{Actor, ActorRef, Props, RootActorPath}
 import akka.testkit.TestProbe
 import akka.util.Timeout
@@ -21,7 +20,7 @@ import tcep.placement.{GlobalOptimalBDPAlgorithm, MobilityTolerantAlgorithm}
 import tcep.publishers.Publisher.AcknowledgeSubscription
 
 import scala.concurrent.Await
-import scala.concurrent.duration._
+import scala.concurrent.duration.{FiniteDuration, _}
 
 class NaiveMovingStateModeMultiJvmClient extends NaiveMovingStateModeSpec
 
@@ -63,7 +62,7 @@ abstract class NaiveMovingStateModeSpec extends MultiJVMTestSetup(3) {
           override def preStart(): Unit = {
             super.preStart()
             graph = new QueryGraph(query, TransitionConfig(TransitionModeNames.NaiveMovingState, TransitionExecutionModes.CONCURRENT_MODE), publishers, Some(MobilityTolerantAlgorithm), None, consumer = clientProbe.ref)
-            rootOperator = graph.createAndStart(None)
+            rootOperator = Await.result(graph.createAndStart(), FiniteDuration(15, TimeUnit.SECONDS))
             endActor = graph.clientNode
           }
 

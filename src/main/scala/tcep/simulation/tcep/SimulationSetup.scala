@@ -24,9 +24,11 @@ import tcep.publishers.RegularPublisher.GetEventsPerSecond
 import tcep.utils.TCEPUtils
 
 import java.io.File
+import java.util.concurrent
 import java.util.concurrent.TimeUnit
 import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.concurrent.Await
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success}
 
@@ -396,7 +398,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
     */
   def runSimulation(i: Int, placementStrategy: PlacementStrategy, transitionConfig: TransitionConfig, finishedCallback: () => Any,
                     initialRequirements: Set[Requirement], requirementChanges: Option[Set[Requirement]] = None,
-                    splcDataCollection: Boolean = false): QueryGraph = {
+                    splcDataCollection: Boolean = false): Unit = {
 
       val query = queryString match {
       case "Stream" => stream[MobilityData](speedPublishers(0)._1, initialRequirements.toSeq: _*)
@@ -432,7 +434,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
 
     val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
       log.info(s"starting $transitionMode ${placementStrategy.name} algorithm simulation number $i (progress: $percentage) with requirementChanges $requirementChanges \n and query $query")
-      val graph = sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback) // (start simulation time, interval, end time (s))
+      val graph = Await.result(sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback), FiniteDuration(15, TimeUnit.SECONDS)) // (start simulation time, interval, end time (s))
       graphs = graphs.+(i -> graph)
       context.system.scheduler.scheduleOnce(totalDuration)(this.shutdown())
       if (requirementChanges.isDefined && requirementChanges.get.nonEmpty) {
@@ -539,7 +541,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
         sims += sim
 
         //start at 20th second, and keep recording data for 5 minutes
-        val graph = sim.startSimulation(query, startDelay, samplingInterval, FiniteDuration.apply(0, TimeUnit.SECONDS))(null)
+        val graph = Await.result(sim.startSimulation(query, startDelay, samplingInterval, FiniteDuration.apply(0, TimeUnit.SECONDS))(null), FiniteDuration(15, TimeUnit.SECONDS))
         graphs += graph
 
         currentTransitionMode = transitionMode

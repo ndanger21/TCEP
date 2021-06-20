@@ -1,6 +1,7 @@
 package tcep.graph.nodes.traits
 
 import akka.actor.{ActorLogging, ActorRef, Address, Cancellable, PoisonPill, Props}
+import akka.event.LoggingReceive
 import akka.pattern.ask
 import com.typesafe.config.ConfigFactory
 import tcep.data.Queries._
@@ -76,7 +77,8 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
 
   def childNodeReceive: Receive
 
-  override def receive: Receive = placementReceive orElse (
+  override def receive: Receive = LoggingReceive {
+    placementReceive orElse (
       if (transitionConfig.transitionStrategy == TransitionModeNames.SMS)
         super[SMSMode].transitionReceive
       else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState)
@@ -86,6 +88,7 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
       else
         super[MFGSMode].transitionReceive
       ) andThen childNodeReceive
+  }
 
   def placementReceive: Receive = {
     case UpdateEventRateOut(rate) => eventRateOut = rate

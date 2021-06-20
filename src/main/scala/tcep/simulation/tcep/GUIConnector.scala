@@ -82,7 +82,7 @@ object GUIConnector {
     * @param parents - Parent actor names (without path)
     */
   def sendOperatorTransitionUpdate(oldOperator: ActorRef, newOperator: ActorRef, algorithmName: String, timestamp: Long, migrationTime: Long, nodeSelectionTime: Long, parents: Seq[ActorRef], newHostInfo: HostInfo, isRootOperator: Boolean)(implicit selfAddress: Address, ec: ExecutionContext) = Future {
-    log.info(s"GUI update data $algorithmName $oldOperator $newOperator")
+    log.debug(s"GUI update data $algorithmName $oldOperator $newOperator")
     val oAddress = if(isMininetSimulation) convertAddress(oldOperator.path.address) else oldOperator.path.address
     val tAddress = if(isMininetSimulation) convertAddress(newOperator.path.address) else newOperator.path.address
     val parentList = convertParentList(parents, timestamp, newHostInfo)
@@ -100,7 +100,7 @@ object GUIConnector {
     )
 
     val json = JSONObject(data).toString()
-    log.info(s"Sending GUI operator update $json to $guiEndpoint/setOperator")
+    log.debug(s"Sending GUI operator update $json to $guiEndpoint/setOperator")
     try {
       val result = Http(s"$guiEndpoint/setOperator")
         .postData(json)
@@ -139,7 +139,7 @@ object GUIConnector {
     )
 
     val json = JSONObject(data).toString()
-    log.info(s"Sending GUI operator update $json to $guiEndpoint/setOperator")
+    log.debug(s"Sending GUI operator update $json to $guiEndpoint/setOperator")
 
 
     val result = Http(s"$guiEndpoint/setOperator")
@@ -148,9 +148,9 @@ object GUIConnector {
       .header("Charset", "UTF-8")
       .option(HttpOptions.readTimeout(10000))
       .asString.code
-    log.info(s"GUI update result code: $result")
+    log.debug(s"GUI update result code: $result")
     } catch {
-      case e: Throwable => log.error(s"error while sending gui operator update to $guiEndpoint/setOperator \n $transitionAddress $operatorName $parents $nodeInfo", e)
+      case e: Throwable => //log.debug(s"error while sending gui operator update to $guiEndpoint/setOperator \n $transitionAddress $operatorName $parents $nodeInfo", e)
     }
   }
 
@@ -215,7 +215,7 @@ object GUIConnector {
     )
 
     val json = JSONObject(data).toString()
-    log.info(s"Sending GUI BDP and latency update to $guiEndpoint/consumer")
+    log.debug(s"Sending GUI BDP and latency update to $guiEndpoint/consumer")
 
     try {
       val result = Http(s"$guiEndpoint/consumer")
@@ -235,14 +235,14 @@ object GUIConnector {
     * @param transitionTime - the accumulated transition time of the operator graph
     */
   def sendTransitionTimeUpdate(transitionTime: Double)(implicit ec: ExecutionContext): Future[Unit] = Future {
-    log.info(s"GUI update data transition time $transitionTime")
+    log.debug(s"GUI update data transition time $transitionTime")
 
     val data = Map(
       "time" -> transitionTime
     )
 
     val json = JSONObject(data).toString()
-    log.info(s"Sending GUI operator update $json to $guiEndpoint/setTransitionTime")
+    log.debug(s"Sending GUI operator update $json to $guiEndpoint/setTransitionTime")
 
     try {
       val result = Http(s"$guiEndpoint/setTransitionTime")
@@ -251,7 +251,7 @@ object GUIConnector {
         .header("Charset", "UTF-8")
         .option(HttpOptions.readTimeout(10000))
         .asString.code
-      log.info(s"GUI update result code: $result")
+      log.debug(s"GUI update result code: $result")
     } catch {
       case e: Throwable => log.debug(s"error while sending gui transition time update: \n $e")
     }

@@ -29,7 +29,7 @@ case class StreamNode(transitionConfig: TransitionConfig,
       if(s.equals(publisher.head)) {
         emitEvent(event, eventCallback)
       }
-    case unhandledMessage => log.info(s"${self.path.name} unhandled message ${unhandledMessage} by ${sender()}, publisher is ${publisher.head}")
+    case unhandledMessage =>
   }
 
   override def getParentActors(): List[ActorRef] = publisher.toList

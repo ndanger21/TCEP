@@ -3,6 +3,7 @@ package tcep.graph.nodes.traits
 import akka.actor.{Actor, ActorLogging, Timers}
 import akka.pattern.pipe
 import com.typesafe.config.ConfigFactory
+import tcep.machinenodes.helper.actors.{MeasurementMessage, Message}
 import tcep.simulation.adaptive.cep.SystemLoad
 
 import java.util.concurrent.TimeUnit
@@ -34,7 +35,7 @@ trait SystemLoadUpdater extends Actor with Timers with ActorLogging {
     case CPULoadUpdate(load) => currentLoad = load
   }
 
-  private case class CPULoadUpdate(load: Double)
+  private case class CPULoadUpdate(load: Double) extends MeasurementMessage
   private case object CPULoadUpdateTick
   private case object CPULoadUpdateTickKey
 }

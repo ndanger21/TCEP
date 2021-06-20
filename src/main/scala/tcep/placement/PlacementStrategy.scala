@@ -73,8 +73,7 @@ trait PlacementStrategy {
     } else synchronized {
       this.placementMetrics.clear()
       for {
-        publisherActors <- TCEPUtils.getPublisherActors()
-        publisherEventRates <- getPublisherEventRates(publisherActors.keySet) // get current event rate of all publisher actors and store it for next operators
+        publisherEventRates <- getPublisherEventRates() // get current event rate of all publisher actors and store it for next operators
       } yield {
         this.publisherEventRates = publisherEventRates
         initialized = true
@@ -91,10 +90,10 @@ trait PlacementStrategy {
     //log.info(s"member coordinates: \n ${memberCoordinates.map(m => s"\n ${m._1.address} | ${m._2} " )} \n")
   }
 
-  def getPublisherEventRates(publishers: Set[String])(implicit cluster: Cluster, ec: ExecutionContext): Future[Map[String, Throughput]] = {
+  def getPublisherEventRates()(implicit cluster: Cluster, ec: ExecutionContext): Future[Map[String, Throughput]] = {
     for {
       publisherActorMap <- TCEPUtils.getPublisherActors()
-      publisherEventRates <- TCEPUtils.makeMapFuture(publishers.map(p => p ->  (publisherActorMap(p) ? GetEventsPerSecond).mapTo[Throughput]).toMap)
+      publisherEventRates <- TCEPUtils.makeMapFuture(publisherActorMap.map(p => p._1 -> (p._2 ? GetEventsPerSecond).mapTo[Throughput]))
     } yield publisherEventRates
   }
 

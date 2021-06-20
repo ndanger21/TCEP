@@ -1,7 +1,9 @@
 package tcep
 
-import java.util.concurrent.TimeUnit
-import akka.actor.{ActorRef, ActorSelection, Address, Props}
+import akka.actor
+
+import java.util.concurrent.{Executors, TimeUnit}
+import akka.actor.{Actor, ActorRef, ActorSelection, Address, PoisonPill, Props, RootActorPath}
 import akka.cluster.{Cluster, Member, MemberStatus}
 import akka.remote.testkit.MultiNodeSpec
 import akka.testkit.{ImplicitSender, TestProbe}
@@ -11,8 +13,12 @@ import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 import org.slf4j.{Logger, LoggerFactory}
 import tcep.data.Events.Event1
-import tcep.data.Queries.{Filter1, Query, Stream1}
-import tcep.machinenodes.helper.actors.{StartVivaldiUpdates, TaskManagerActor}
+import tcep.data.Queries.{ClientDummyQuery, Filter1, Query, Stream1}
+import tcep.graph.QueryGraph
+import tcep.graph.nodes.traits.Node.Subscribe
+import tcep.graph.nodes.traits.TransitionConfig
+import tcep.graph.transition.StartExecution
+import tcep.machinenodes.helper.actors.{SetPublisherActorRefs, SetPublisherActorRefsACK, StartVivaldiUpdates, TaskManagerActor}
 import tcep.placement.PlacementStrategy
 import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.StartStreams
@@ -30,29 +36,32 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
   with WordSpecLike with Matchers with BeforeAndAfterAll with ImplicitSender {
 
   import TCEPMultiNodeConfig._
+
   val logger: Logger = LoggerFactory.getLogger(getClass)
 
   implicit var cluster: Cluster = _
+
   def pNames(idx: Int): String = {
     val p1Addr = node(publisher1).address
     val p2Addr = node(publisher2).address
     val pNames = Vector(s"P:${p1Addr.host.get}:${p1Addr.port.get}", s"P:${p2Addr.host.get}:${p2Addr.port.get}")
     pNames(idx)
   }
+
   var publishers: Map[String, ActorRef] = Map()
   var clientProbe: TestProbe = _
   implicit var creatorAddress: Address = _
-  implicit var ec: ExecutionContext = _
+  implicit lazy val ec: ExecutionContext = ExecutionContext.fromExecutor(Executors.newCachedThreadPool())
   val errorMargin = 0.05
   val eventIntervalMicros: Long = 500e3.toLong // 500ms
   implicit var baseEventRates: Map[String, Throughput] = Map() // 2 per second
+
   override def initialParticipants = numNodes
 
   override def beforeAll() = {
     multiNodeSpecBeforeAll()
     cluster = Cluster(system)
     creatorAddress = cluster.selfAddress
-    ec = system.dispatcher
 
     runOn(client) {
       system.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
@@ -76,7 +85,7 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
       DistVivaldiActor.createVivIfNotExists(system)
       println("created publisher2 " + pub2)
     }
-    if(numNodes > 3) {
+    if (numNodes > 3) {
       runOn(node1) {
         system.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
         DistVivaldiActor.createVivIfNotExists(system)
@@ -93,7 +102,7 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
     var upMembers = 0
     do {
       upMembers = cluster.state.members.count(_.status == MemberStatus.up)
-    } while(upMembers < initialParticipants)
+    } while (upMembers < initialParticipants)
     testConductor.enter("wait for startup")
 
     val p1Addr = node(publisher1).address
@@ -110,7 +119,11 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
       println(s"publisher event rates: \n${baseEventRates.mkString("\n")}")
 
       publishers.values.foreach(_ ! StartStreams())
+      cluster.state.members.foreach(m => TCEPUtils.selectTaskManagerOn(cluster, m.address) ! SetPublisherActorRefs(publishers))
+      for(i <- 0 until initialParticipants)
+        expectMsg(SetPublisherActorRefsACK())
     }
+    testConductor.enter("setup complete")
   }
 
   override def afterAll() = {
@@ -164,6 +177,7 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
         None
     }
   }
+
   def getTestBDP(mapping: Map[Query, (Member, Coordinates)], client: Coordinates, publisher: Coordinates): Double = {
     val stream = mapping.find(e => e._1.isInstanceOf[Stream1[Int]]).get._1
     val filter = mapping.find(e => e._1.isInstanceOf[Filter1[Int]]).get._1
@@ -174,4 +188,39 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
     latency1 * bw + latency2 * bw + latency3 * bw
   }
 
+  def createTestGraph(query: Query, publishers: Map[String, ActorRef], subscriber: TestProbe, placementStrategy: PlacementStrategy, mapek: String = "requirementBased")
+                     (implicit cluster: Cluster): ActorRef = {
+    try {
+      system.actorOf(Props(new Actor {
+        var graphFactory: QueryGraph = _
+        var rootOperator: ActorRef = _
+        override def preStart(): Unit = {
+          graphFactory = new QueryGraph(query, TransitionConfig(), publishers, Some(placementStrategy), None, subscriber.ref, mapek)
+          rootOperator = Await.result(graphFactory.createAndStart(), FiniteDuration(15, TimeUnit.SECONDS))
+          //println(s"instantiated query $query with root operator $rootOperator")
+          subscriber.send(rootOperator, Subscribe(subscriber.ref, ClientDummyQuery()))
+          subscriber.send(rootOperator, StartExecution(placementStrategy.name))
+          //println(s"started TestQueryGraph $graphFactory")
+        }
+
+        override def receive: Receive = {
+          case GetOperatorMap => sender() ! graphFactory.deployedOperators
+          case msg => rootOperator.forward(msg)
+        }
+
+        override def postStop(): Unit = {
+          rootOperator ! PoisonPill
+          super.postStop()
+        }
+      }), "GraphWrapper")
+    } catch {
+      case e: Throwable =>
+        e.printStackTrace()
+        throw e
+    }
+  }
+
+  def getBrokerQosMonitor(broker: Address)(implicit cluster: Cluster): actor.ActorSelection = cluster.system.actorSelection(RootActorPath(broker) / "user" / "TaskManager*" / "BrokerQosMonitor*")
+
+  object GetOperatorMap
 }

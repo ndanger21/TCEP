@@ -46,9 +46,9 @@ object Events {
                                              var eventRateIn: Vector[Double] = Vector(), // updated upon event arrival, unchanged when reaching monitor unlike parentEventRateOut (updated before send);
                                              var parentEventRateOut: Vector[Double] = Vector() // out on previous, in on current operator
                                         )
-  sealed abstract class Event(var monitoringData: MonitoringData = MonitoringData()) extends MySerializable {
-
-    def init()(implicit creatorAddress: Address): Unit =  {
+  sealed abstract class Event(var monitoringData: MonitoringData = MonitoringData())(implicit creatorAddress: Address) extends MySerializable {
+    init()
+    def init(): Unit =  {
       monitoringData.predecessorHost = List(creatorAddress)
       monitoringData.lastUpdate = List((creatorAddress, System.currentTimeMillis()))
       //SpecialStats.log(this.toString, "EvenDataUpdate", s"initialized event monitoring data: $monitoringData;

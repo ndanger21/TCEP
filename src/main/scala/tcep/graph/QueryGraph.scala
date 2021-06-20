@@ -58,26 +58,30 @@ class QueryGraph(query: Query,
     mapek.knowledge ? GetPlacementStrategyName, timeout.duration).asInstanceOf[String])
   var clientNode: ActorRef = _
   val brokerQoSMonitor: ActorRef = Await.result(context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*")).resolveOne(), timeout.duration)
+  var deployedOperators: Map[Query, ActorRef] = Map()
 
-  def createAndStart(eventCallback: Option[EventCallback] = None): ActorRef = {
+  def createAndStart(eventCallback: Option[EventCallback] = None): Future[ActorRef] = {
     log.info(s"Creating and starting new QueryGraph with placement ${
       if (startingPlacementStrategy.isDefined) startingPlacementStrategy.get.name else "default (depends on MAPEK implementation)"} and publishers \n ${publishers.mkString("\n")}")
     val queryDependencies = extractOperators(query)
-    val root = startDeployment(eventCallback, queryDependencies)
-    consumer ! SetQosMonitors
-    clientNode = context.system.actorOf(Props(classOf[ClientNode], root, mapek, consumer, transitionConfig, queryDependencies(query)._4),
-                                        s"ClientNode-${UUID.randomUUID.toString}")
-    mapek.knowledge ! SetClient(clientNode)
-    mapek.knowledge ! SetTransitionMode(transitionConfig)
-    mapek.knowledge ! SetDeploymentStatus(true)
-    Thread.sleep(100) // wait a bit here to avoid glitch where last addOperator msg arrives at knowledge AFTER
-    // StartExecution msg is sent
-    mapek.knowledge ! NotifyOperators(StartExecution(startingPlacementStrategy.getOrElse(PietzuchAlgorithm).name))
-    log.info(s"started query ${ query } \n in mode ${ transitionConfig } with PlacementAlgorithm ${placementStrategy.name}")
-    root
+    for {
+      rootOperator <- startDeployment(eventCallback, queryDependencies)
+    } yield {
+      consumer ! SetQosMonitors
+      clientNode = context.system.actorOf(Props(classOf[ClientNode], rootOperator, mapek, consumer, transitionConfig, queryDependencies(query)._4),
+        s"ClientNode-${UUID.randomUUID.toString}")
+      mapek.knowledge ! SetClient(clientNode)
+      mapek.knowledge ! SetTransitionMode(transitionConfig)
+      mapek.knowledge ! SetDeploymentStatus(true)
+      Thread.sleep(100) // wait a bit here to avoid glitch where last addOperator msg arrives at knowledge AFTER
+      // StartExecution msg is sent
+      mapek.knowledge ! NotifyOperators(StartExecution(startingPlacementStrategy.getOrElse(PietzuchAlgorithm).name))
+      log.info(s"started query ${query} \n in mode ${transitionConfig} with PlacementAlgorithm ${placementStrategy.name} and placement \n${deployedOperators.mkString("\n")}")
+      rootOperator
+    }
   }
 
-  protected def startDeployment(implicit eventCallback: Option[EventCallback], queryDependencies: QueryDependencyMap): ActorRef = {
+  protected def startDeployment(implicit eventCallback: Option[EventCallback], queryDependencies: QueryDependencyMap): Future[ActorRef] = {
 
     val startTime = System.currentTimeMillis()
     val res = for {init <- placementStrategy.initialize( )} yield {
@@ -98,18 +102,19 @@ class QueryGraph(query: Query,
       } else {
         deployOperatorGraphRec(query, true)
       }
+      deploymentComplete.onComplete {
+        case Failure(exception) => log.error("failed to complete initial placement", exception)
+        case Success(value) =>
+          SpecialStats.log(s"$this", "placement", s"initial deployment took ${ System.currentTimeMillis() - startTime }ms")
+      }
       deploymentComplete
     }
-    // block here to wait until deployment is finished
-    val rootOperator = Await.result(res.flatten, new FiniteDuration(120, TimeUnit.SECONDS))
-    SpecialStats.log(s"$this", "placement", s"initial deployment took ${ System.currentTimeMillis() - startTime }ms")
-    rootOperator
+    res.flatten
   }
 
   protected def deployOperatorGraphRec(currentOperator: Query, isRootOperator: Boolean = false)
                                       (implicit eventCallback: Option[EventCallback], queryDependencies: QueryDependencyMap,
                                        initialPlacement: Map[Query, Coordinates] = Map()): Future[ActorRef] = {
-
     implicit val _isRoot: Boolean = isRootOperator
     val rootOperator: Future[ActorRef] = currentOperator match {
       case op: StreamQuery => deployOperator(op, (publishers(op.publisherName), PublisherDummyQuery(op.publisherName)))
@@ -173,7 +178,7 @@ class QueryGraph(query: Query,
       SpecialStats.log(s"$this", "placement", s"deployed ${ opAndHostInfo._1 } on; ${opAndHostInfo._2.member} ; with " +
         s"hostInfo ${opAndHostInfo._2.operatorMetrics}; parents: $parentOperators; path.name: ${parentOperators.map(_._1).head.path.name}")
       mapek.knowledge ! AddOperator(opAndHostInfo._1)
-
+      deployedOperators += operator -> opAndHostInfo._1
       GUIConnector.sendInitialOperator(opAndHostInfo._2.member.address, placementStrategy.name,
                                        opAndHostInfo._1.path.name, s"$transitionConfig", parentOperators.map(_._1),
                                        opAndHostInfo._2, isRootOperator)(selfAddress = cluster.selfAddress, ec)

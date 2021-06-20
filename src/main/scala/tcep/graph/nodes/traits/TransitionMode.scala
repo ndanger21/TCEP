@@ -33,6 +33,7 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
   val backupMode: Boolean
   val mainNode: Option[ActorRef]
   val hostInfo: HostInfo
+  val transitionConfig: TransitionConfig
   var transitionInitiated = false
   val slidingMessageQueue: ListBuffer[(ActorRef, Event)]
   var eventRateOut: Double = 0.0d

@@ -166,38 +166,6 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
     }
     testConductor.enter("test physical placement complete")
   }
-  //TODO move to Queries test
-  "PietzuchAlgorithm - extractOperators()" must {
-    "return a map of all operators and their assorted parent and child operators that exist in a query" in {
-      runOn(client) {
-        val query =
-          stream[Boolean](pNames(0))
-            .and(stream[Boolean](pNames(1)))
-            .and(stream[Boolean](pNames(0)).where(_ == true))
-
-        val result = Queries.extractOperators(query)
-        assert(result.nonEmpty)
-        assert(result.size == 10, "result must contain all 6 operators, 3 publisher dummy operators, and 1 ClientDummyOperator")
-        assert(result.count(o => o._1.isInstanceOf[Stream1[_]]) == 3, "result must contain 3 stream operators")
-        assert(result.count(o => o._1.isInstanceOf[Filter1[_]]) == 1, "result must contain one filter operator")
-        assert(result.count(o => o._1.isInstanceOf[Conjunction21[_, _, _]]) == 1,
-          "result must contain one conjunction21 operator")
-        assert(result.count(o => o._1.isInstanceOf[Conjunction11[_, _]]) == 1,
-          "result must contain one conjunction11 operator")
-        assert(result.filter(o => o._1.isInstanceOf[Stream1[_]]).forall(o =>
-          o._2._1.parents.isDefined && o._2._1.parents.get.nonEmpty && o._2._1.parents.get.head.isInstanceOf[PublisherDummyQuery]),
-          "stream operators must have dummy operator parents")
-        assert(result.exists(o => o._1.isInstanceOf[Conjunction21[_, _, _]] && o._2._1.child.isDefined && o._2._1.child.get.isInstanceOf[ClientDummyQuery]),
-          "conjunction21 operator is the root of the query and has no children")
-        assert(result.exists(o => o._1.isInstanceOf[Conjunction21[_, _, _]] &&
-          o._2._1.parents.get.exists(p => p.isInstanceOf[Filter1[_]]) &&
-          o._2._1.parents.get.exists(p => p.isInstanceOf[Conjunction11[_, _]])),
-          "conjunction21 operator has filter and conjunction11 as parents")
-        assert(result.exists(o => o._1.isInstanceOf[ClientDummyQuery] && o._2._1.parents.isDefined && o._2._1.parents.get.head == query && o._2._1.child.isEmpty))
-      }
-      testConductor.enter("test extractOperators complete")
-    }
-  }
 
   "PietzuchAlgorithm - calculateVirtualPlacementWithCoords() with one operator" must {
     "return the mapping of operator to coordinates for the given query" in {

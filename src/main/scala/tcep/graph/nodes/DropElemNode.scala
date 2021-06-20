@@ -97,6 +97,6 @@ case class DropElemNode(transitionConfig: TransitionConfig,
       newEvent.monitoringData = event.monitoringData
       emitEvent(newEvent, eventCallback)
 
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 }

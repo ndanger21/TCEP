@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory
 import tcep.data.Queries.{Query, Requirement}
 import tcep.graph.QueryGraph
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.qos._
+import tcep.graph.qos.{MonitorFactory, _}
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.TransitionStats
 import tcep.graph.transition.mapek.lightweight.LightweightKnowledge.GetLogData
@@ -50,22 +50,23 @@ class Simulation(name: String, query: Query, transitionConfig: TransitionConfig,
     * @param totalTime Total Time for the simulation (in Seconds)
     * @return
     */
-  def startSimulation(queryStr: String, startTime: FiniteDuration, interval: FiniteDuration, totalTime: FiniteDuration)(callback: () => Any): QueryGraph = {
+  def startSimulation(queryStr: String, startTime: FiniteDuration, interval: FiniteDuration, totalTime: FiniteDuration)(callback: () => Any): Future[QueryGraph] = {
     this.callback = callback
-    val graph = executeQuery()
-    startSimulationLog(queryStr, startTime, interval, totalTime, callback)
-    graph
+    log.info("Executing query. Fetching monitors...")
+    for {
+      monitors <- (this.consumer ? GetMonitorFactories).mapTo[Array[MonitorFactory]]
+      _ = {
+        log.info(s"Monitors are: $monitors")
+        queryGraph = new QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, Some(GraphCreatedCallback()), consumer, mapekType)
+      }
+      graph <- queryGraph.createAndStart()
+    } yield {
+      guiUpdater = context.system.scheduler.schedule(0 seconds, 60 seconds)(GUIConnector.sendMembers(cluster))
+      startSimulationLog(queryStr, startTime, interval, totalTime, callback)
+      queryGraph
+    }
   }
 
-  def executeQuery(): QueryGraph = {
-    log.info("Executing query. Fetching monitors...")
-    val monitors = Await.result(this.consumer ? GetMonitorFactories, atMost = FiniteDuration(10, TimeUnit.SECONDS)).asInstanceOf[Array[MonitorFactory]]
-    log.info(s"Monitors are: $monitors")
-    queryGraph = new QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, Some(GraphCreatedCallback()), consumer, mapekType)
-    queryGraph.createAndStart()
-    guiUpdater = context.system.scheduler.schedule(0 seconds, 60 seconds)(GUIConnector.sendMembers(cluster))
-    queryGraph
-  }
 
 
   def startSimulationLog(queryStr: String, startTime: FiniteDuration, interval: FiniteDuration, totalTime: FiniteDuration, callback: () => Any): Any = {

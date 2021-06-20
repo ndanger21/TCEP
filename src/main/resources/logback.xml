@@ -12,7 +12,6 @@
             <pattern>[%date{ISO8601}] [%level] [%logger] [%thread] - %msg MDC: {%mdc}%n</pattern>
         </encoder>
     </appender>
-
     <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
         <queueSize>8192</queueSize>
         <neverBlock>true</neverBlock>
@@ -33,6 +32,11 @@
     <logger name="tcep.placement.PlacementStrategy" level="DEBUG" additivity="false">
         <appender-ref ref="PLACEMENT-ALGORITHMS-FILE"/>
     </logger>
+    <appender name="ASYNC_PLACEMENT" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>8192</queueSize>
+        <neverBlock>true</neverBlock>
+        <appender-ref ref="PLACEMENT-ALGORITHMS-FILE" />
+    </appender>
 
     <root level="INFO">
         <appender-ref ref="ASYNC"/>

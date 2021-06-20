@@ -9,6 +9,10 @@ import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
+import java.util.concurrent.TimeUnit
+import scala.concurrent.Await
+import scala.concurrent.duration.FiniteDuration
+
 /**
   * Handling of [[tcep.data.Queries.ConjunctionQuery]] is done by ConjunctionNode.
   *
@@ -36,15 +40,13 @@ case class ConjunctionNode(transitionConfig: TransitionConfig,
 
   override def preStart(): Unit = {
     super.preStart()
-    for {
+    val init = for {
       type1 <- addEventType("sq1", createArrayOfNames(query.sq1), createArrayOfClasses(query.sq1))(blockingIoDispatcher)
       type2 <- addEventType("sq2", createArrayOfNames(query.sq2), createArrayOfClasses(query.sq2))(blockingIoDispatcher)
       epStatement: EPStatement <- createEpStatement("select * from pattern [every (sq1=sq1 and sq2=sq2)]")(blockingIoDispatcher)
     } yield {
     val updateListener: UpdateListener = (newEventBeans: Array[EventBean], _) => newEventBeans.foreach(eventBean => {
-      /**
-        * @author Niels
-        */
+      log.debug(s"updateListener received $eventBean")
       val values1: Array[Any] = eventBean.get("sq1").asInstanceOf[Array[Any]]
       val values2: Array[Any] = eventBean.get("sq2").asInstanceOf[Array[Any]]
       try {
@@ -75,11 +77,11 @@ case class ConjunctionNode(transitionConfig: TransitionConfig,
         case e: Throwable => log.error(e, s"failed to merge events from event beans: \n $values1 \n $values2")
       }
     })
-
     epStatement.addListener(updateListener)
     esperInitialized = true
-    log.info(s"created $self with parents \n $parentNode1 and \n $parentNode2")
+    //log.info(s"created $self with parents \n $parentNode1 and \n $parentNode2")
     }
+    Await.result(init, FiniteDuration(1, TimeUnit.SECONDS)) // block here to wait until esper is initialized
   }
 //TODO move send to blocking dispatcher? http://esper.espertech.com/release-5.3.0/esper-reference/html/performance.html
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
@@ -103,7 +105,8 @@ case class ConjunctionNode(transitionConfig: TransitionConfig,
       case Event5(e1, e2, e3, e4, e5) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5)))
       case Event6(e1, e2, e3, e4, e5, e6) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5), toAnyRef(e6)))
     }
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")  }
+    case unhandledMessage =>
+  }
 
 
   override def postStop(): Unit = {

@@ -46,7 +46,7 @@ case class NewAverageNode(transitionConfig: TransitionConfig,
           emitEvent(emptyEvent, eventCallback)
         }
       }
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
   def computeAverage(dataList: List[Any]): List[LinearRoadDataNew] = {

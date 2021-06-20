@@ -77,8 +77,10 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
       val interArrivals = ListBuffer[Double]()
       for (i <- 0 until arrivalTimestampsNS.size - 1) interArrivals += (arrivalTimestampsNS(i+1) - arrivalTimestampsNS(i)) / 1e6
       interArrivalLatency = meanAndVariance(interArrivals)
-      log.info(s"operator SamplingTick took ${(System.nanoTime() - start) / 1e6}ms: ${eventSamples.size} samples\neventRateIO: $eventRateIn $eventRateOut\neventSizeIO $eventSizeIn $eventSizeOut " +
-        s"\nnetworkLatencyParents $networkToParentLatency\nprocessingLatency $processingLatency\ne2eLatency $endToEndLatency \ninterArrivalLatency $interArrivalLatency")
+
+      log.info("operator SamplingTick took {}ms: {} samples\neventRateIO: {} {}\neventSizeIO {} {} \nnetworkLatencyParents {}\nprocessingLatency {}\ne2eLatency {} \ninterArrivalLatency {}",
+        Array((System.nanoTime() - start) / 1e6, eventSamples.size, eventRateIn, eventRateOut, eventRateIn, eventSizeOut, networkToParentLatency, processingLatency, endToEndLatency, interArrivalLatency))
+
       eventSamples.clear()
       operator ! UpdateEventRateOut(eventRateOut)
       operator ! UpdateEventSizeOut(eventSizeOut)

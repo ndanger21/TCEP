@@ -42,7 +42,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
   override def emitEvent(event: Event, eventCallback: Option[EventCallback]): Unit = {
     if (started) super.emitEvent(event, eventCallback)
     // store events that were not sent while waiting to move operator
-    else if (transitionInitiated)
+    else if (transitionInitiated && transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart)
       unsentEvents += Tuple2(self, event)
   }
 

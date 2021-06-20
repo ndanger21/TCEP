@@ -45,7 +45,7 @@ case class FilterNode(transitionConfig: TransitionConfig,
           emitEvent(event, eventCallback)
       } else log.info(s"received event $event from $s, \n parent: \n $parentActor")
 
-    case unhandledMessage => log.info(s"${self.path.name} received msg ${unhandledMessage.getClass} from ${sender()}")
+    case unhandledMessage =>
   }
 
 }

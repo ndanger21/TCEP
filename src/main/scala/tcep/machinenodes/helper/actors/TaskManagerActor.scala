@@ -191,15 +191,12 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
       }
     case SetPublisherActorRefs(publisherMap) =>
       val s = sender()
-      if(s.path.name.contains("SimulationSetup")) {
-        if(!publisherActorRefsInitialized) {
-          this.publisherActorRefs = publisherMap
-          s ! SetPublisherActorRefsACK()
-          log.info("received publisher actorRef map")
-          publisherActorRefsInitialized = true
-        }
+      if(!publisherActorRefsInitialized) {
+        this.publisherActorRefs = publisherMap
+        s ! SetPublisherActorRefsACK()
+        log.info("received publisher actorRef map")
+        publisherActorRefsInitialized = true
       }
-      else log.error(s"received SetPublisherActorRefs msg from actor that is not simulationSetup ($s)")
 
     case t: AllTaskManagerActors => taskManagerActors = t.refs
 

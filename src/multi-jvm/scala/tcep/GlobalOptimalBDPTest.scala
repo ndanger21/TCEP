@@ -60,7 +60,7 @@ abstract class GlobalOptimalBDPMultiNodeTestSpec extends MultiJVMTestSetup with 
         val andPlacement = and -> Await.result(uut.applyGlobalOptimalBDPAlgorithm(and, f, Dependencies(Map(publishers(pNames(0)) -> s1), Map(None -> f))), remaining)
         val fPlacement = f -> Await.result(uut.applyGlobalOptimalBDPAlgorithm(f, f, Dependencies(Map(publishers(pNames(0)) -> and), Map(Some(clientProbe.ref) -> ClientDummyQuery()))), remaining)
         val placement = Map(s1Placement, s2Placement, andPlacement, fPlacement)
-        println(s"\n placement bdp: \n ${placement.map(e => s"${e._1} -> ${e._2._1.member.address} @ ${e._2._2}").mkString("\n")}")
+        //println(s"\n placement bdp: \n ${placement.map(e => s"${e._1} -> ${e._2._1.member.address} @ ${e._2._2}").mkString("\n")}")
 
         assert(placement.forall(_._2._1.member.address == placement.head._2._1.member.address), "all operators should have the same host")
         assert(placement.forall(_._2._2 == placement.head._2._2), "all operators should have the same BDP")
@@ -72,7 +72,7 @@ abstract class GlobalOptimalBDPMultiNodeTestSpec extends MultiJVMTestSetup with 
           p1BDP + p2BDP + cBDP
         })
 
-        println(s"allBDPS: \n ${allBDPs.mkString("\n")}")
+        //println(s"allBDPS: \n ${allBDPs.mkString("\n")}")
         assert(placement.head._2._1.member == allBDPs.minBy(_._2)._1, "BDP of placement must be on the member with minimum possible BDP of all possible placements")
         assert(math.abs(placement.head._2._2 - allBDPs.minBy(_._2)._2) < 1e-3, "BDP of placement must be minimum possible BDP of all possible placements")
 
