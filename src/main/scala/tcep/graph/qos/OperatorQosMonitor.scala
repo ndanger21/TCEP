@@ -6,6 +6,7 @@ import breeze.stats.meanAndVariance.MeanAndVariance
 import com.typesafe.config.ConfigFactory
 import tcep.data.Events.Event
 import tcep.graph.qos.OperatorQosMonitor._
+import tcep.graph.transition.mapek.DynamicCFMNames._
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BytePerSec, KBytePerSec}
 import tcep.machinenodes.qos.BrokerQoSMonitor._
 import tcep.utils.{SizeEstimator, SpecialStats}
@@ -24,7 +25,7 @@ import scala.concurrent.duration.FiniteDuration
   * - mean + var processing latency
   * - mean + var of network latency to parent operator (time between sending from parent until event is taken off mailbox at this operator)
   */
-class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with ActorLogging {
+class OperatorQosMonitor(operator: ActorRef, shiftTarget: Boolean = true) extends Actor with Timers with ActorLogging {
 
   val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
 
@@ -39,6 +40,7 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
   val eventSamples: ListBuffer[Event] = ListBuffer.empty
   val brokerQoSMonitor: ActorSelection = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))
   val logFileString: String = self.toString().split("-").head.split("/").last
+  var lastSamples: Samples = List()
 
   override def preStart(): Unit = {
     super.preStart()
@@ -84,26 +86,29 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
       eventSamples.clear()
       operator ! UpdateEventRateOut(eventRateOut)
       operator ! UpdateEventSizeOut(eventSizeOut)
-      brokerQoSMonitor ! GetBrokerMetrics(Some(Set(operator)))
+      brokerQoSMonitor ! GetBrokerMetrics(Some(Set(operator))) // continue in next case
 
-    case BrokerQosMetrics(cpuLoad, cpuThreadCount, deployedOperators, ioMetrics, timestamp) =>
-      // log feature and metric values
+    case b: BrokerQosMetrics =>
       val currentValues = getCurrentMetrics
-      SpecialStats.log(logFileString, logFileString,
+      lastSamples = List((currentValues, b),  lastSamples.head)
+      // log feature and metric values, use previous sample's target value if shiftTarget == true
+      // TODO move to DecentralizedMonitor
+      if(!shiftTarget || shiftTarget && lastSamples.size > 1)  SpecialStats.log(logFileString, logFileString,
         s"${currentValues.eventSizeIn.sum.toDouble / 1024};${currentValues.eventSizeOut / 1024};${selectivity};" +
-          s"${currentValues.ioMetrics.incomingEventRate};${currentValues.ioMetrics.outgoingEventRate};" +
+          s"${currentValues.ioMetrics.incomingEventRate};${getTargetSample._1.ioMetrics.outgoingEventRate};" +
           s"${currentValues.interArrivalLatency.mean};${currentValues.interArrivalLatency.stdDev};" +
           s"${currentValues.networkToParentLatency.mean};${currentValues.networkToParentLatency.stdDev};" +
           s"${currentValues.processingLatency.mean};${currentValues.processingLatency.stdDev};" +
-          s"${currentValues.endToEndLatency.mean}; ${currentValues.endToEndLatency.stdDev};" +
-          s"$cpuLoad;$cpuThreadCount;$deployedOperators;" +
-          s"${ioMetrics.incomingBandwidth.toUnit(KBytePerSec).amount};${ioMetrics.outgoingBandwidth.toUnit(KBytePerSec).amount}")
+          s"${getTargetSample._1.endToEndLatency.mean};${getTargetSample._1.endToEndLatency.stdDev}" +
+          s"${b.cpuLoad};${b.cpuThreadCount};${b.deployedOperators};" +
+          s"${b.IOMetrics.incomingBandwidth.toUnit(KBytePerSec).amount};${b.IOMetrics.outgoingBandwidth.toUnit(KBytePerSec).amount}")
 
 
     case GetIOMetrics =>
       sender() ! IOMetrics(eventRateIn.sum, eventRateOut, bandwidthIn, bandwidthOut)
 
     case GetOperatorQoSMetrics => sender() ! getCurrentMetrics
+    case GetSamples => sender() ! lastSamples
   }
 
   def bandwidthIn: Bandwidth = Bandwidth(eventRateIn.zip(eventSizeIn).map(p => p._1 * p._2).sum, BytePerSec)
@@ -114,6 +119,7 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
     interArrivalLatency, processingLatency, networkToParentLatency, endToEndLatency,
     IOMetrics(eventRateIn.sum, eventRateOut, bandwidthIn, bandwidthOut)
   )
+  def getTargetSample: Sample = if(shiftTarget) lastSamples.last else lastSamples.head
 
 }
 

@@ -4,7 +4,6 @@ import akka.actor.{ActorLogging, ActorRef, Props, Terminated}
 import akka.cluster.Cluster
 import tcep.ClusterActor
 import tcep.data.Events.{Event, updateMonitoringData}
-import tcep.data.Queries
 import tcep.data.Queries.Query
 import tcep.graph.EventCallback
 import tcep.graph.nodes.traits.Node.{Dependencies, Subscribe, UnSubscribe}
@@ -148,14 +147,14 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
 
   def notifyMAPEK(cluster: Cluster, successor: ActorRef): Future[Unit] = {
     implicit val timeout = TCEPUtils.timeout
-    brokerQoSMonitor ! AddOperator(successor)
-    brokerQoSMonitor ! RemoveOperator(self)
+    brokerQoSMonitor ! AddOperator((query, successor))
+    brokerQoSMonitor ! RemoveOperator((query, self))
     for {
       knowledgeActor <- TCEPUtils.selectKnowledge(cluster).resolveOne().mapTo[ActorRef]
     } yield {
       transitionLog(s"notifying MAPEK knowledge component ${knowledgeActor} and broker QoS monitor $brokerQoSMonitor about changed operator ${successor}")
-      knowledgeActor ! AddOperator(successor)
-      knowledgeActor ! RemoveOperator(self)
+      knowledgeActor ! AddOperator((query, successor))
+      knowledgeActor ! RemoveOperator((query, self))
     }
   }
 

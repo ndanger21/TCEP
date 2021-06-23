@@ -51,7 +51,7 @@ class QueryGraph(query: Query,
   implicit val ec = context.system.dispatcher
   val log = LoggerFactory.getLogger(getClass)
 
-  var mapek: MAPEK = MAPEK.createMAPEK(mapekType, context, query, transitionConfig, startingPlacementStrategy, consumer, fixedSimulationProperties, pimPaths)
+  var mapek: MAPEK = MAPEK.createMAPEK(mapekType, query, transitionConfig, startingPlacementStrategy, consumer, fixedSimulationProperties, pimPaths)
   val placementStrategy: PlacementStrategy = PlacementStrategy.getStrategyByName(Await.result(
     mapek.knowledge ? GetPlacementStrategyName, timeout.duration).asInstanceOf[String])
   var clientNode: ActorRef = _
@@ -175,7 +175,7 @@ class QueryGraph(query: Query,
     deployment map { opAndHostInfo => {
       SpecialStats.log(s"$this", "placement", s"deployed ${ opAndHostInfo._1 } on; ${opAndHostInfo._2.member} ; with " +
         s"hostInfo ${opAndHostInfo._2.operatorMetrics}; parents: $parentOperators; path.name: ${parentOperators.map(_._1).head.path.name}")
-      mapek.knowledge ! AddOperator(opAndHostInfo._1)
+      mapek.knowledge ! AddOperator((opAndHostInfo._2.operator, opAndHostInfo._1))
       deployedOperators += operator -> opAndHostInfo._1
       GUIConnector.sendInitialOperator(opAndHostInfo._2.member.address, placementStrategy.name,
                                        opAndHostInfo._1.path.name, s"$transitionConfig", parentOperators.map(_._1),
@@ -193,7 +193,7 @@ class QueryGraph(query: Query,
     val operatorType = NodeFactory.getOperatorTypeFromQuery(operator)
     val props = Props(operatorType, transitionConfig, hostInfo, backupMode, mainNode, operator, createdCallback,
                       eventCallback, isRootOperator, parentOperators)
-    NodeFactory.createOperator(cluster, context, hostInfo, props, brokerQoSMonitor)
+    NodeFactory.createOperator(hostInfo, props, brokerQoSMonitor)
   }
 
   def stop(): Unit = {

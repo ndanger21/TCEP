@@ -1,6 +1,5 @@
 package tcep
 
-import java.util.concurrent.TimeUnit
 import akka.actor.{Actor, ActorRef, Props, RootActorPath}
 import akka.testkit.TestProbe
 import akka.util.Timeout
@@ -11,7 +10,7 @@ import tcep.data.Queries.{ClientDummyQuery, SlidingTime}
 import tcep.dsl.Dsl._
 import tcep.graph.nodes.traits.Node.Subscribe
 import tcep.graph.nodes.traits.{TransitionConfig, TransitionExecutionModes, TransitionModeNames}
-import tcep.graph.transition.MAPEK.{GetOperators, GetPlacementStrategyName, GetTransitionStatus}
+import tcep.graph.transition.MAPEK.{CurrentOperators, GetOperators, GetPlacementStrategyName, GetTransitionStatus}
 import tcep.graph.transition.{TransitionRequest, TransitionStats}
 import tcep.graph.{EventCallback, QueryGraph}
 import tcep.machinenodes.consumers.Consumer.{SetQosMonitors, SetStatus}
@@ -19,6 +18,7 @@ import tcep.machinenodes.helper.actors.{ACK, GetEventPause, GetMaxEventInterval,
 import tcep.placement.{GlobalOptimalBDPAlgorithm, MobilityTolerantAlgorithm}
 import tcep.publishers.Publisher.AcknowledgeSubscription
 
+import java.util.concurrent.TimeUnit
 import scala.concurrent.Await
 import scala.concurrent.duration.{FiniteDuration, _}
 
@@ -74,7 +74,8 @@ abstract class NaiveMovingStateModeSpec extends MultiJVMTestSetup(3) {
 
         clientWrapperActor ! GetOperators
         expectMsgPF[Set[ActorRef]](remaining, s"stream operators must be deployed to publisher hosts, join to client host within ${remaining.toMillis}ms") {
-          case ops: List[ActorRef] =>
+          case resp: CurrentOperators =>
+            val ops = resp.placement.values
             log.info("\n========= \n OPERATORS \n========== \n" + ops.mkString("\n"))
             assert(ops.size == 3, "there must be 3 operators")
             assert(ops.head.path.address != ops.tail.head.path.address && ops.head.path.address != ops.last.path.address, "all operators must be on different hosts")

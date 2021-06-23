@@ -1,6 +1,5 @@
 package tcep.graph.transition.mapek
 
-import com.typesafe.config.ConfigFactory
 import org.cardygan.config.util.{ConfigFactoryUtil, ConfigUtil}
 import org.cardygan.config.{Config, Instance}
 import org.cardygan.fm.util.{FmFactoryUtil, FmUtil}
@@ -10,16 +9,14 @@ import tcep.data.Queries.Query
 import tcep.graph.qos.OperatorQosMonitor
 import tcep.graph.qos.OperatorQosMonitor.Sample
 import tcep.graph.transition.mapek.DynamicCFMNames.{ALL_FEATURES, QUERY}
-import tcep.graph.transition.mapek.contrast.CFM
 import tcep.graph.transition.mapek.contrast.FmNames._
+import tcep.graph.transition.mapek.contrast.{CFM, FmNames}
 
-import scala.jdk.CollectionConverters.collectionAsScalaIterableConverter
 
 class DynamicCFM(rootOperator: Query) extends CFM {
   lazy val operators: List[Query] = Queries.getOperators(rootOperator)
 
   override def init(): Unit = {
-    val availablePlacementAlgorithms: List[String] = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala.toList
 
     // root
     val root = buildGroupFeature(ROOT, null, exactlyOne, exactlyOne, buildInterval(2, 2))
@@ -28,7 +25,7 @@ class DynamicCFM(rootOperator: Query) extends CFM {
     val systemGroup = buildGroupFeature(SYSTEM, root)
     val mechanismGroup = buildGroupFeature(MECHANISMS, systemGroup)
     val placementGroup = buildGroupFeature(PLACEMENT_ALGORITHM, mechanismGroup)
-    availablePlacementAlgorithms.map(aName => buildBinaryFeature(s"fs$aName", placementGroup))
+    FmNames.allPlacementAlgorithms.map(aName => buildBinaryFeature(aName, placementGroup))
 
     // context
     val contextGroup = buildGroupFeature(CONTEXT, root)
@@ -45,7 +42,11 @@ class DynamicCFM(rootOperator: Query) extends CFM {
     cfm.setRoot(root)
   }
 
-  def getCurrentContextConfig(context: Sample): Config = {
+  /**
+    * @param context most recent feature samples of each operator
+    * @return the current context config with the given sample values for each operator
+    */
+  def getCurrentContextConfig(context: Map[Query, Sample]): Config = {
     try {
       val root: Feature = FmUtil.findFeatureByName(cfm, ROOT).get
       val contextFeatureGroup: Feature = FmUtil.findFeatureByName(cfm, CONTEXT).get
@@ -66,9 +67,10 @@ class DynamicCFM(rootOperator: Query) extends CFM {
         val opName = op.toString()
         val opGroup = FmUtil.findFeatureByName(cfm, opName).get
         val opGroupI = ConfigFactoryUtil.createInstance(op.toString(), queryGroupI, opGroup)
+        val sample = context.getOrElse(op, throw new IllegalArgumentException(s"missing feature sample for operator $op"))
         ALL_FEATURES.foreach(f => {
           val attr = FmUtil.findAttributeByName(cfm, f + "_" + opName)
-          createAttributeInst(attr.get, opGroupI, OperatorQosMonitor.getFeatureValue(context, f))
+          createAttributeInst(attr.get, opGroupI, OperatorQosMonitor.getFeatureValue(sample, f))
         })
       })
       ConfigUtil.checkConfig(contextConfig)

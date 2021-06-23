@@ -2,7 +2,6 @@ package tcep.placement
 
 import akka.actor.{ActorContext, ActorRef, Address}
 import akka.cluster.{Cluster, Member, MemberStatus}
-import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
@@ -15,7 +14,6 @@ import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.mop.RizouAlgorithm
 import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.prediction.PredictionHelper.Throughput
-import tcep.publishers.RegularPublisher.GetEventsPerSecond
 import tcep.utils.TCEPUtils.makeMapFuture
 import tcep.utils.{SizeEstimator, SpecialStats, TCEPUtils}
 
@@ -67,13 +65,17 @@ trait PlacementStrategy {
   def findOptimalNodes(operator: Query, rootOperator: Query, dependencies: Dependencies, askerInfo: HostInfo)
                       (implicit ec: ExecutionContext, context: ActorContext, cluster: Cluster): Future[(HostInfo, HostInfo)]
 
-  def initialize()(implicit ec: ExecutionContext, cluster: Cluster): Future[Boolean] = {
+  def initialize()(implicit ec: ExecutionContext, cluster: Cluster, pubEventRates: Option[Map[String, Throughput]] = None): Future[Boolean] = {
     if(initialized){
       Future { true }
     } else synchronized {
       this.placementMetrics.clear()
-      for {
-        publisherEventRates <- getPublisherEventRates() // get current event rate of all publisher actors and store it for next operators
+      if(pubEventRates.isDefined) Future {
+        this.publisherEventRates = pubEventRates.get
+        false
+      }
+      else for {
+        publisherEventRates <- TCEPUtils.getPublisherEventRates()
       } yield {
         this.publisherEventRates = publisherEventRates
         initialized = true
@@ -90,12 +92,6 @@ trait PlacementStrategy {
     //log.info(s"member coordinates: \n ${memberCoordinates.map(m => s"\n ${m._1.address} | ${m._2} " )} \n")
   }
 
-  def getPublisherEventRates()(implicit cluster: Cluster, ec: ExecutionContext): Future[Map[String, Throughput]] = {
-    for {
-      publisherActorMap <- TCEPUtils.getPublisherActors()
-      publisherEventRates <- TCEPUtils.makeMapFuture(publisherActorMap.map(p => p._1 -> (p._2 ? GetEventsPerSecond).mapTo[Throughput]))
-    } yield publisherEventRates
-  }
 
   protected def updateOperatorToParentBDP(operator: Query, host: Member, parents: Map[ActorRef, Query],
                                           outputDataRateEstimates: Map[Query, Double])

@@ -1,6 +1,5 @@
 package tcep.graph.transition.mapek.contrast
 
-import java.util.concurrent.atomic.AtomicInteger
 import akka.actor.{ActorRef, Address, Cancellable}
 import akka.cluster.ClusterEvent.{MemberJoined, MemberLeft}
 import akka.cluster.{Member, MemberStatus}
@@ -15,10 +14,10 @@ import tcep.graph.transition.mapek.contrast.FmNames._
 import tcep.graph.transition.{ChangeInNetwork, MAPEK, MonitorComponent}
 import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
 import tcep.machinenodes.helper.actors.{GetNetworkHopsMap, NetworkHopsMap}
+import tcep.utils.TCEPUtils
 import tcep.utils.TCEPUtils.{getTaskManagerOfMember, makeMapFuture}
-import tcep.utils.{SpecialStats, TCEPUtils}
 
-import scala.concurrent.Future
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.duration._
 import scala.io.Source
 import scala.util.{Failure, Success}
@@ -280,13 +279,13 @@ class ContrastMonitor(mapek: MAPEK, consumer: ActorRef, fixedSimulationPropertie
     for {
       deploymentComplete <- (mapek.knowledge ? IsDeploymentComplete).mapTo[Boolean]
       if deploymentComplete
-      operators <- (mapek.knowledge ? GetOperators).mapTo[List[ActorRef]]
+      resp <- (mapek.knowledge ? GetOperators).mapTo[CurrentOperators]
     } yield {
 
       // check if an operator of the graph has an unreachable host (and no backup)
       // if yes, notify analyzer to trigger transition and/or placement algorithm execution
       val unreachableNodes: Set[Address] = cluster.state.unreachable.map(m => m.address)
-      operators.foreach { op =>
+      resp.placement.values.foreach { op =>
         val host: Address = op.path.address
         if(unreachableNodes.contains(host)) {
           log.info(s"host $host of operator $op is unreachable, notifying analyzer of Network Change")

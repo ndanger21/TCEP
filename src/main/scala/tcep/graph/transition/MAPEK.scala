@@ -10,6 +10,7 @@ import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK._
+import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK
 import tcep.graph.transition.mapek.learnon.LearnOnMAPEK
 import tcep.graph.transition.mapek.lightweight.LightweightMAPEK
@@ -82,7 +83,7 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
   var lastTransitionStats: TransitionStats = TransitionStats()
   var previousLatencies: Vector[(Long, Long)] = Vector()
   //val freqMonitor = AverageFrequencyMonitorFactory(query, None).createNodeMonitor
-  var operators: Set[ActorRef] = Set()
+  var operators: Map[Query, ActorRef] = Map()
   var backupOperators: Set[ActorRef] = Set()
 
   override def receive: Receive = {
@@ -124,20 +125,20 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
     case GetLastTransitionEnd => sender() ! lastTransitionEnd
     case GetClient => sender() ! this.client
     case SetClient(clientNode: ActorRef) => this.client = clientNode
-    case AddOperator(operator: ActorRef) =>
+    case AddOperator(operator: (Query, ActorRef)) =>
       this.operators = operators.+(operator)
-      log.info(s"added operator ${operator.path.name} on ${operator.path.address.host.getOrElse("self")} to operators (now ${operators.size} total)")
-    case RemoveOperator(operator: ActorRef) =>
-      this.operators = operators.-(operator)
-      log.info(s"removed operator ${operator.path.name}, now ${operators.size} total")
+      log.info(s"added operator ${operator._2} to deployed operators (now ${operators.size} total)")
+    case RemoveOperator(operator: (Query, ActorRef)) =>
+      this.operators = operators.-(operator._1)
+      log.info(s"removed operator ${operator._2}, now ${operators.size} total")
     case AddBackupOperator(operator: ActorRef) => this.backupOperators = backupOperators.+(operator)
     case RemoveBackupOperator(operator: ActorRef) => this.backupOperators = backupOperators.-(operator)
-    case GetOperators => sender() ! this.operators.toList
+    case GetOperators => sender() ! CurrentOperators(operators)
     case GetBackupOperators => sender() ! this.backupOperators.toList
     case GetOperatorCount => sender() ! this.operators.size
     case NotifyOperators(msg: TransitionControlMessage) =>
       log.info(s"broadcasting message $msg to ${operators.size} operators: \n ${operators.mkString("\n")}")
-      operators.foreach { op => op ! msg }
+      operators.foreach { op => op._2 ! msg }
 
     case GetAverageLatency(intervalMs) => sender() ! this.calculateMovingAvg(intervalMs)
 
@@ -193,7 +194,7 @@ abstract class MAPEK(context: ActorContext) {
 
 object MAPEK {
 
-  def createMAPEK(mapekType: String, context: ActorContext, query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: Option[PlacementStrategy], consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int] = Map(), pimPaths: (String, String)): MAPEK = {
+  def createMAPEK(mapekType: String, query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: Option[PlacementStrategy], consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int] = Map(), pimPaths: (String, String))(implicit cluster: Cluster, context: ActorContext): MAPEK = {
 
     val placementAlgorithm = // get correct PlacementAlgorithm case class for both cases (explicit starting algorithm and implicit via requirements)
       if(startingPlacementStrategy.isEmpty) BenchmarkingNode.selectBestPlacementAlgorithm(List(), Queries.pullRequirements(query, List()).toList) // implicit
@@ -207,7 +208,7 @@ object MAPEK {
       case "CONTRAST" => new ContrastMAPEK(context, query, transitionConfig, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), fixedSimulationProperties, consumer)
       case "lightweight" => new LightweightMAPEK(context, query, transitionConfig, placementAlgorithm.placement, consumer)
       case "LearnOn" => new LearnOnMAPEK(context, transitionConfig, query, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), fixedSimulationProperties, consumer, pimPaths)
-
+      case "ExchangeablePerformanceModel" => new ExchangeablePerformanceModelMAPEK(query, transitionConfig, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), consumer)
     }
 
   }
@@ -229,11 +230,12 @@ object MAPEK {
   case object GetClient
   case class SetClient(clientNode: ActorRef)
   case class NotifyOperators(msg: TransitionControlMessage)
-  case class AddOperator(ref: ActorRef)
+  case class AddOperator(opInstance: (Query, ActorRef))
   case class AddBackupOperator(ref: ActorRef)
-  case class RemoveOperator(operator: ActorRef)
+  case class RemoveOperator(opInstance: (Query, ActorRef))
   case class RemoveBackupOperator(operator: ActorRef)
   case object GetOperators
+  case class CurrentOperators(placement: Map[Query, ActorRef])
   case object GetBackupOperators
   case object GetOperatorCount
   case object GetPlacementStrategyName

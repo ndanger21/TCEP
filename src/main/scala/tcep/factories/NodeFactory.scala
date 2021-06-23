@@ -38,18 +38,16 @@ object NodeFactory {
     }
   }
 
-  def createOperator(cluster: Cluster,
-                     context: ActorContext,
-                     targetHost: HostInfo,
+  def createOperator(targetHost: HostInfo,
                      props: Props,
                      brokerNodeQosMonitor: ActorRef
-                    )(implicit ec: ExecutionContext): Future[ActorRef] = {
+                    )(implicit ec: ExecutionContext, cluster: Cluster, context: ActorContext): Future[ActorRef] = {
     if (cluster.selfMember == targetHost.member)
       Future {
         try {
           val name = s"${targetHost.operator.toString.split("\\(", 2).head}${UUID.randomUUID().toString}"
           val ref = cluster.system.actorOf(props.withMailbox("prio-mailbox"), name)
-          brokerNodeQosMonitor ! AddOperator(ref)
+          brokerNodeQosMonitor ! AddOperator((targetHost.operator, ref))
           log.info(s"created operator on self: $ref")
           ref
         } catch {

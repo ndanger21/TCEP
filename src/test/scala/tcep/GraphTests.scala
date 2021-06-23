@@ -92,7 +92,7 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
       for { operatorActor <- createOperator(operator, HostInfo(cluster.selfMember, operator), false, None, parentOperators.map(_._1):_*)}
         yield {
           //println(s"deploy: created $operator with created callback $createdCallback: $operatorActor")
-          mapek.knowledge ! AddOperator(operatorActor)
+          mapek.knowledge ! AddOperator((operator, operatorActor))
           operatorActor
         }
     }

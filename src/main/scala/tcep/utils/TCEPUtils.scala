@@ -10,6 +10,7 @@ import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
 import org.slf4j.LoggerFactory
 import tcep.machinenodes.helper.actors._
 import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
+import tcep.prediction.PredictionHelper.Throughput
 
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -36,6 +37,13 @@ object TCEPUtils {
     val t1 = System.currentTimeMillis()
     SpecialStats.log(this.getClass.getSimpleName, tag, s"${t1 - t0}")
     result
+  }
+
+  def getPublisherEventRates()(implicit cluster: Cluster, ec: ExecutionContext): Future[Map[String, Throughput]] = {
+    for {
+      taskManager <- TCEPUtils.selectTaskManagerOn(cluster, cluster.selfAddress).resolveOne()
+      publisherEventRates <- (taskManager ? GetPublisherEventRates).mapTo[Map[String, Throughput]]
+    } yield publisherEventRates
   }
 
   /**

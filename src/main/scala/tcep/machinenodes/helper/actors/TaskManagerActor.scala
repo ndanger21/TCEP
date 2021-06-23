@@ -2,11 +2,11 @@ package tcep.machinenodes.helper.actors
 
 import akka.actor.{ActorLogging, ActorRef, Address, Props}
 import akka.cluster.Member
-import akka.pattern.pipe
+import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.{Coordinates, VivaldiPosition}
-import tcep.data.Queries.{Query, QueryDependencyMap}
+import tcep.data.Queries.Query
 import tcep.factories.NodeFactory
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.machinenodes.qos.BrokerQoSMonitor
@@ -14,10 +14,13 @@ import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.vivaldi.VivaldiCoordinates
 import tcep.placement.{BandwidthEstimator, HostInfo}
+import tcep.prediction.PredictionHelper.Throughput
+import tcep.publishers.RegularPublisher.GetEventsPerSecond
 import tcep.utils.TCEPUtils
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.Future
+import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success}
 
 /**
@@ -61,6 +64,7 @@ case class VivaldiCoordinatesEstablished() extends PlacementMessage
 case class VivaldiPing(sendTime: Long) extends VivaldiCoordinatesMessage
 case class VivaldiPong(sendTime: Long, receiverPosition: VivaldiPosition) extends VivaldiCoordinatesMessage
 
+case object GetPublisherEventRates  extends PlacementMessage
 case class PublisherActorRefsRequest() extends PlacementMessage
 case class PublisherActorRefsResponse(publisherMap: Map[String, ActorRef]) extends PlacementMessage
 case class SetPublisherActorRefs(publisherMap: Map[String, ActorRef]) extends PlacementMessage
@@ -88,6 +92,7 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
   private var publisherActorRefs: Map[String, ActorRef] = Map()
   private var taskManagerActors: Map[Member, ActorRef] = Map()
   private var publisherActorRefsInitialized = false
+  var publisherEventRates: Map[String, Throughput] = Map()
 
   @volatile private var ongoingPlacementRequests: Map[ActorRef, Future[HostInfo]] = Map()
   @volatile private var ongoingCreationRequests: Map[(ActorRef, Query), Option[ActorRef]] = Map() // requester ActorRef, created operator ActorRef -> keep track of who requested which operators to be created, re-send ActorRef if lost
@@ -108,7 +113,7 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
       if(!ongoingCreationRequests.contains(key)) { // ignore re-sends of requests by GuaranteedMessageDeliverer (due to lost ACKs)
         ongoingCreationRequests += key -> None
         for {
-          ref <- NodeFactory.createOperator(cluster, context, operatorInfo, props, brokerNodeQoSMonitor)(blockingIoDispatcher)
+          ref <- NodeFactory.createOperator(operatorInfo, props, brokerNodeQoSMonitor)(blockingIoDispatcher, cluster, context)
         } yield {
           ongoingCreationRequests += key -> Some(ref)
           log.info(s"operator creation request for $key complete, $ref sent back to $s")
@@ -168,6 +173,19 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
         case Failure(exception) => log.error(exception, s"failed to determine network hops from ${cluster.selfAddress} to other cluster members")
       }
       */
+    case GetPublisherEventRates =>
+      val s = sender()
+      if(publisherEventRates.isEmpty) {
+        implicit val timeout = Timeout(15, TimeUnit.SECONDS)
+        for {
+          publisherActorMap <- TCEPUtils.getPublisherActors() // TODO check if this blocks since the ask goes to self
+          publisherEventRatesResp <- TCEPUtils.makeMapFuture(publisherActorMap.map(p => p._1 -> (p._2 ? GetEventsPerSecond).mapTo[Throughput]))
+        } yield {
+          publisherEventRates = publisherEventRatesResp
+          context.system.scheduler.scheduleOnce(FiniteDuration(15, TimeUnit.SECONDS), () => publisherEventRates = Map()) // clear the cached entry after some time
+          s ! publisherEventRates
+        }
+      } else s ! publisherEventRates
 
     case request: SingleBandwidthRequest => bandwidthEstimator.forward(request)
     case r: AllBandwidthsRequest => bandwidthEstimator.forward(r)

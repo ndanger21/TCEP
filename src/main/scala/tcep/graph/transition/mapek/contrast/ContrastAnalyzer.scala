@@ -9,7 +9,7 @@ import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData, RunPlanner}
 import tcep.graph.transition.{AnalyzerComponent, ChangeInNetwork, MAPEK}
 
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.Future
 import scala.concurrent.duration._
 
 /**
@@ -34,7 +34,6 @@ class ContrastAnalyzer(mapek: MAPEK, delay: FiniteDuration = 1 minute, interval:
     // and not for that period after a transition is completed
     planningScheduler = this.context.system.scheduler.schedule(delay, interval, this.self, GenerateAndSendContextConfig)
   }
-  Future { log.info("TEST: ")}(blockingIoDispatcher)
 
   override def postStop(): Unit = {
     super.postStop()
@@ -65,12 +64,10 @@ class ContrastAnalyzer(mapek: MAPEK, delay: FiniteDuration = 1 minute, interval:
             _ <- Future { log.info(s"deploymentComplete: $deploymentComplete transitionStatus: $transitionStatus transitionCooldownComplete: ${System.currentTimeMillis() - lastTransitionEnd >= transitionCooldown}") }
             if deploymentComplete && transitionStatus == 0 && System.currentTimeMillis() - lastTransitionEnd >= transitionCooldown
             currentLatency <- (mapek.knowledge ? GetAverageLatency(mapek.samplingInterval.toMillis)).mapTo[Double]
-            contextData <- (mapek.knowledge ? GetContextData).mapTo[Map[String, AnyVal]]
-            if contextData.nonEmpty
             cfm <- (mapek.knowledge ? GetCFM).mapTo[CFM]
+            contextConfig <- getCurrentContextConfig(cfm)
             requirements <- (mapek.knowledge ? GetRequirements).mapTo[List[Requirement]]
           } yield {
-            val contextConfig: Config = cfm.getCurrentContextConfig(contextData)
             val qosRequirements: Set[Requirement] = requirements.toSet
             log.info("sending context config to Planner ")
             mapek.planner ! RunPlanner(cfm, contextConfig, currentLatency, qosRequirements)
@@ -80,6 +77,11 @@ class ContrastAnalyzer(mapek: MAPEK, delay: FiniteDuration = 1 minute, interval:
         }
       } else log.info("not generating and sending context config since transitions are disabled in application.conf")
   }
+
+  def getCurrentContextConfig(cfm: CFM): Future[Config] = for {
+    contextData <- (mapek.knowledge ? GetContextData).mapTo[Map[String, AnyVal]]
+    if contextData.nonEmpty
+  } yield cfm.getCurrentContextConfig(contextData)
 
   case object GenerateAndSendContextConfig
 }

@@ -4,7 +4,7 @@ package tcep.graph.transition.mapek.lightweight
 import akka.actor.{ActorRef, Address, Cancellable}
 import akka.pattern.ask
 import tcep.data.Queries.{FrequencyRequirement, LatencyRequirement, LoadRequirement, MessageHopsRequirement}
-import tcep.graph.transition.MAPEK.{AddRequirement, GetOperators, GetTransitionStatus, IsDeploymentComplete, RemoveRequirement}
+import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.MonitorComponent
 import tcep.graph.transition.mapek.lightweight.LightweightAnalyzer.NodeUnreachable
 import tcep.graph.transition.mapek.lightweight.LightweightKnowledge.UpdatePerformance
@@ -77,14 +77,13 @@ class LightweightMonitor(mapek: LightweightMAPEK/*, var allRecords: AllRecords*/
     for {
       //deploymentComplete <- (mapek.knowledge ? IsDeploymentComplete).mapTo[Boolean]
       //if deploymentComplete
-      operators <- (mapek.knowledge ? GetOperators).mapTo[List[ActorRef]]
+      operators <- (mapek.knowledge ? GetOperators).mapTo[CurrentOperators]
     } yield {
-
       //log.info("checking OperatorHost state")
       // check if an operator of the graph has an unreachable host (and no backup)
       // if yes, notify analyzer to trigger transition and/or placement algorithm execution
       val unreachableNodes: Set[Address] = cluster.state.unreachable.map(m => m.address)
-      operators.foreach { op =>
+      operators.placement.values.foreach { op =>
         val host: Address = op.path.address
         if(unreachableNodes.contains(host)) {
           log.info(s"host $host of operator $op is unreachable, notifying analyzer of Network Change")

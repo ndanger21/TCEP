@@ -4,6 +4,7 @@ import akka.actor.{Actor, ActorLogging, ActorRef, Timers}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
+import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.SystemLoadUpdater
 import tcep.graph.transition.MAPEK.{AddOperator, RemoveOperator}
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BandwidthUnit, BytePerSec, KBytePerSec, MBytePerSec}
@@ -32,7 +33,7 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
   implicit val ec: ExecutionContext = context.dispatcher
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
   val cpuThreadCount: Int = Runtime.getRuntime.availableProcessors()
-  var operatorsOnNode: mutable.Set[ActorRef] = mutable.Set.empty
+  var operatorsOnNode: mutable.Map[Query, ActorRef] = mutable.Map.empty
   var currentNodeIOMetrics: Map[ActorRef, IOMetrics] = Map()
 
   override def preStart(): Unit = {
@@ -45,10 +46,10 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
     case GetCPUThreadCount => sender() ! cpuThreadCount
     case GetNodeOperatorCount => sender() ! operatorsOnNode.size
     case GetIOMetrics => sender() ! currentNodeIOMetrics.values.fold(IOMetrics())((a,b) => a + b)
-    case AddOperator(ref) => if(ref.path.address.equals(self.path.address)) operatorsOnNode += ref
-    case RemoveOperator(ref) => operatorsOnNode -= ref
+    case AddOperator(op) => if(op._2.path.address.equals(self.path.address)) operatorsOnNode += op
+    case RemoveOperator(ref) => operatorsOnNode -= ref._1
     case IOMetricUpdateTick =>
-      TCEPUtils.makeMapFuture(operatorsOnNode.map(op => op -> (op ? GetIOMetrics).mapTo[IOMetrics]).toMap)
+      TCEPUtils.makeMapFuture(operatorsOnNode.map(op => op._2 -> (op._2 ? GetIOMetrics).mapTo[IOMetrics]).toMap)
         .map(e => IOMetricUpdate(e))
         .pipeTo(self)
       /*
@@ -66,8 +67,8 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
       val response = if(withoutOperators.isDefined) {
         val ioMetrics = currentNodeIOMetrics.filter(e => !withoutOperators.get.contains(e._1)).values
                                             .fold(IOMetrics())((a, b) => a + b)
-        //TODO how to exclude load of operators that will be removed from currentLoad?<
-        BrokerQosMetrics(currentLoad, cpuThreadCount, operatorsOnNode.diff(withoutOperators.get).size, ioMetrics)
+        //TODO how to exclude load of operators that will be removed from currentLoad?
+        BrokerQosMetrics(currentLoad, cpuThreadCount, operatorsOnNode.values.toSet.diff(withoutOperators.get).size, ioMetrics)
       } else {
         val ioMetrics = currentNodeIOMetrics.values.fold(IOMetrics())((a, b) => a + b)
         BrokerQosMetrics(currentLoad, cpuThreadCount, operatorsOnNode.size, ioMetrics)

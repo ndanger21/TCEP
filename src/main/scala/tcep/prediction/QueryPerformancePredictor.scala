@@ -50,7 +50,6 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
             .flatMap(monitor => (monitor ? GetOperatorQoSMetrics).mapTo[OperatorQoSMetrics])
             .map(Some(_))
 
-        //TODO insert default estimates here
         //initial placement, no measured metrics for operators yet -> use default estimates
         else for {
           newParentCoords <- Future.traverse(parents
@@ -75,7 +74,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
             eventSizeOut = queryDependencyMap(operator._1)._3,
             selectivity = defaultIOMetrics.outgoingEventRate / defaultIOMetrics.incomingEventRate,
             interArrivalLatency = meanAndVariance(List(1 / parentEventRates.values.sum)),
-            processingLatency = meanAndVariance(List(1.0)), //TODO how reasonably to estimate this?
+            processingLatency = meanAndVariance(List(1.0)), //TODO how reasonably to estimate this? create local operator instance, send some events and use avg?
             networkToParentLatency = meanAndVariance(vivDistToParents),
             endToEndLatency = MeanAndVariance(-1, 0, 0),
             ioMetrics = defaultIOMetrics
@@ -89,8 +88,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       println(s"placement map is $placementMap")
       //TODO initial placement prediction: include parent event rate prediction in child's operator samples default values
       //DONE broker metrics: include placement information to update number of operators, cumul eventrate (or bandwidth), cpu load (how?)
-      //TODO get current publisher event rate from publishers; should do same during transition (currently passing initial event rate around among successors)
-      //TODO use throughput predictions to replace input event rate estimates if possible?
+      //DONE get current publisher event rate from publishers; should do same during transition (currently passing initial event rate around among successors)
       val perQueryPrediction: Future[MetricPredictions] = Future.traverse(placementMap)(query => {
         for {
           brokerSamples: BrokerQosMetrics <- getBrokerSamples(query._2._1)
@@ -149,7 +147,10 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
   }
 
   //TODO implement prediction models
-  def predictLatency(samples: (BrokerQosMetrics, Option[OperatorQoSMetrics]), parentEventRates: Throughput*): EndToEndLatency = EndToEndLatency(1 millisecond)
+  def predictLatency(samples: (BrokerQosMetrics, Option[OperatorQoSMetrics]), parentEventRates: Throughput*): EndToEndLatency = {
+
+    EndToEndLatency(1 millisecond)
+  }
   def predictThroughput(samples: (BrokerQosMetrics, Option[OperatorQoSMetrics]), parentEventRates: Throughput*): Throughput = Throughput(1, 1 second)
 
   /**
