@@ -2,8 +2,8 @@ package tcep.graph.transition.mapek.contrast
 
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.transition.{KnowledgeComponent, MAPEK}
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData, GetOperatorTreeDepth, MonitoringDataUpdate}
+import tcep.graph.transition.{KnowledgeComponent, MAPEK}
 import tcep.placement.PlacementStrategy
 
 /**
@@ -18,7 +18,7 @@ class ContrastKnowledge(mapek: MAPEK, query: Query, transitionConfig: Transition
   val operatorTreeDepth: Int = calculateOperatorTreeDepth(query)
   var contextData: Map[String, AnyVal] = Map()
 
-  val cfm: CFM = new CFM(mapek)
+  val cfm: CFM = new CFM()
 
   override def preStart() = {
     super.preStart()

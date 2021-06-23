@@ -1,7 +1,5 @@
 package tcep.placement.sbon
 
-import java.util.concurrent.TimeUnit
-
 import akka.cluster.Member
 import org.discovery.vivaldi.Coordinates
 import tcep.data.Queries
@@ -12,6 +10,7 @@ import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.placement.QueryDependenciesWithCoordinates
 import tcep.{MultiJVMTestSetup, TCEPMultiNodeConfig}
 
+import java.util.concurrent.TimeUnit
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
@@ -179,7 +178,7 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
 
       runOn(client) {
         val query = stream[Int](pNames(0))
-        implicit val dependencyData = Queries.extractOperators(query)
+        implicit val dependencyData = Queries.extractOperatorsAndThroughputEstimates(query)
         val result = uut.calculateVirtualPlacementWithCoords(query, clientC, Map(pNames(0) -> publisher1))
         assert(result(query).distance(new Coordinates(-50, 0, 0)) <= 2.0, "single operator should be placed between client and publisher")
       }
@@ -201,7 +200,7 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
         val s = stream[Int](pNames(0))
         val f1 = Filter1[Int](s, _ => true, Set())
         val f2 = Filter1[Int](f1, _ => true, Set())
-        implicit val dependencyData = Queries.extractOperators(f2)
+        implicit val dependencyData = Queries.extractOperatorsAndThroughputEstimates(f2)
         val result = uut.calculateVirtualPlacementWithCoords(f2, clientC, Map(pNames(0) -> publisher1))
         val eps = 8.0
         assert(result(s).distance(new Coordinates(-75, 0, 0)) <= eps,"stream operator should be near publisher")
@@ -230,7 +229,7 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
         val s = stream[Int](publishers.head._1)
         val f1 = Filter1[Int](s, _ => true, Set())
         val f2 = Filter1[Int](f1, _ => true, Set())
-        implicit val dependencyData = Queries.extractOperators(f2)
+        implicit val dependencyData = Queries.extractOperatorsAndThroughputEstimates(f2)
         val dataRateEstimates = Queries.estimateOutputBandwidths(f2)
         val candidates = Await.result(uut.getCoordinatesOfMembers(uut.findPossibleNodesToDeploy(cluster)), uut.requestTimeout)
         val virtualCoordinates: Map[Query, Coordinates] = Await.result(uut.initialVirtualOperatorPlacement(f2, publishers), uut.requestTimeout)
@@ -286,7 +285,7 @@ abstract class PietzuchMultiNodeTestSpec extends MultiJVMTestSetup {
         //println(s"\nDEBUG minimum BDP: $minBDP")
 
         uut.k = 1 // disable load-based host choice for repeatable tests
-        implicit val dependencyData = Queries.extractOperators(f1)
+        implicit val dependencyData = Queries.extractOperatorsAndThroughputEstimates(f1)
         val dataRateEstimates = Queries.estimateOutputBandwidths(f1)
         val virtualCoords: Map[Query, Coordinates] = uut.calculateVirtualPlacementWithCoords(f1, clientC, Map(pNames(0) -> publisher1))
         // dependencies empty since they're only needed for statistics update

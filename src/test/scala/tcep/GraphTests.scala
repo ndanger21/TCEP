@@ -1,6 +1,5 @@
 package tcep
 
-import java.util.concurrent.TimeUnit
 import akka.actor.{Actor, ActorContext, ActorRef, ActorSystem, Address, PoisonPill, Props}
 import akka.cluster.Cluster
 import akka.serialization.{SerializationExtension, Serializers}
@@ -18,14 +17,13 @@ import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK.{AddOperator, SetClient, SetDeploymentStatus, SetTransitionMode}
 import tcep.graph.transition.{AcknowledgeStart, StartExecution}
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
-import tcep.machinenodes.consumers.Consumer.AllRecords
 import tcep.machinenodes.helper.actors.TaskManagerActor
-import tcep.placement.{HostInfo, MobilityTolerantAlgorithm, PlacementStrategy, QueryDependencies}
+import tcep.placement.{HostInfo, MobilityTolerantAlgorithm, PlacementStrategy}
 import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.publishers.TestPublisher
 
-import scala.collection.mutable
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.reflect.runtime.universe.typeOf
@@ -68,7 +66,7 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
     extends QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, createdCallback, consumer) {
 
     override def createAndStart(eventCallback: Option[EventCallback]): Future[ActorRef] = {
-      val queryDependencies = extractOperators(query)
+      val queryDependencies = extractOperatorsAndThroughputEstimates(query)
       for {
         root <- startDeployment(eventCallback, queryDependencies)
       } yield {
@@ -169,7 +167,7 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
           .and(stream[Boolean]("B"))
           .and(stream[Boolean]("C").where(_ == true))
 
-      val result = Queries.extractOperators(query)
+      val result = Queries.extractOperatorsAndThroughputEstimates(query)
       assert(result.nonEmpty)
       assert(result.size == 10, "result must contain all 6 operators, 3 publisher dummy operators, and 1 ClientDummyOperator")
       assert(result.count(o => o._1.isInstanceOf[Stream1[_]]) == 3, "result must contain 3 stream operators")

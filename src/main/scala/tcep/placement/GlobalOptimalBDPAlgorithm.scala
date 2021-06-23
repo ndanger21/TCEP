@@ -5,10 +5,8 @@ import org.discovery.vivaldi.Coordinates
 import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.Dependencies
-import tcep.prediction.PredictionHelper.Throughput
 import tcep.utils.TCEPUtils
 
-import scala.collection.mutable
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -61,7 +59,7 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
     val res = for {
       _ <- this.initialize()
     } yield {
-      val queryDependencyMap = Queries.extractOperators(rootOperator)
+      val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)
       val outputBandwidthEstimates = queryDependencyMap.map(e => e._1 -> e._2._4).toMap
       if (this.singleNodePlacement.isDefined) {
         log.info(s"already placed one operator on ${singleNodePlacement.get.host}, reusing ost for current op $operator")

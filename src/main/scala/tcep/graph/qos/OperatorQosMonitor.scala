@@ -118,6 +118,30 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
 }
 
 object OperatorQosMonitor {
+  case object GetSamples
+  type Sample = (OperatorQoSMetrics, BrokerQosMetrics)
+  def getFeatureValue(sample: Sample, feature: String): AnyVal = {
+    if(ALL_FEATURES.contains(feature)) {
+      feature match {
+        case EVENTSIZE_IN_KB => sample._1.eventSizeIn.sum
+        case EVENTSIZE_OUT_KB => sample._1.eventSizeOut
+        case OPERATOR_SELECTIVITY => sample._1.selectivity
+        case EVENTRATE_IN => sample._1.ioMetrics.incomingEventRate
+        case INTER_ARRIVAL_MEAN_MS => sample._1.interArrivalLatency.mean
+        case INTER_ARRIVAL_STD_MS => sample._1.interArrivalLatency.stdDev
+        case PARENT_NETWORK_LATENCY_MEAN_MS => sample._1.networkToParentLatency.mean
+        case PARENT_NETWORK_LATENCY_STD_MS => sample._1.networkToParentLatency.stdDev
+        case PROCESSING_LATENCY_MEAN_MS => sample._1.processingLatency.mean
+        case PROCESSING_LATENCY_STD_MS => sample._1.processingLatency.stdDev
+        case BROKER_CPU_LOAD => sample._2.cpuLoad
+        case BROKER_THREAD_COUNT => sample._2.cpuThreadCount
+        case BROKER_OPERATOR_COUNT => sample._2.deployedOperators
+        case BROKER_OTHER_BANDWIDTH_IN_KB => sample._2.IOMetrics.incomingBandwidth.toUnit(KBytePerSec).amount
+        case BROKER_OTHER_BANDWIDTH_OUT_KB => sample._2.IOMetrics.outgoingBandwidth.toUnit(KBytePerSec).amount
+      }
+    } else throw new IllegalArgumentException(s"can't retrieve feature value $feature, must be one of ${ALL_FEATURES}")
+  }
+  type Samples = List[Sample]
   case object GetOperatorQoSMetrics
   case class OperatorQoSMetrics(eventSizeIn: List[Long],
                                 eventSizeOut: Long,

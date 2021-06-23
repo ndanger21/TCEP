@@ -28,7 +28,7 @@ class PlannerComponentTests extends TestKit(ActorSystem()) with FunSuiteLike wit
 
     val messageHopsRequirement: MessageHopsRequirement = hops < 3 otherwise Option.empty
     val qosRequirements: Set[Requirement] = Set(messageHopsRequirement)
-    val cfmClass: CFM = new CFM(null)
+    val cfmClass: CFM = new CFM()
     val cfm: FM = cfmClass.getFM
     val hopsModel = PlannerHelper.extractModelFromFile(cfm, "/performanceModels/simpleModel.log").get
     val contextData = generateMaxedContextData(cfmClass)
@@ -48,7 +48,7 @@ class PlannerComponentTests extends TestKit(ActorSystem()) with FunSuiteLike wit
   test("Planner - Coala objective value test") {
 
     val qosRequirements: Set[Requirement] = Set()
-    val cfmClass: CFM = new CFM(null)
+    val cfmClass: CFM = new CFM()
     val cfm: FM = cfmClass.getFM
     val hopsModel = PlannerHelper.extractModelFromFile(cfm, "/performanceModels/simpleModel.log").get
     val contextData = generateMaxedContextData(cfmClass)
@@ -86,7 +86,7 @@ class PlannerComponentTests extends TestKit(ActorSystem()) with FunSuiteLike wit
 
   test("Planner - Coala minimal test - MobilityTolerant expected") {
 
-    val cfmClass = new CFM(mock[ContrastMAPEK])
+    val cfmClass = new CFM()
     val cfm = cfmClass.getFM
     val contextData = TestUtils.generateMaxedContextData(cfmClass)
     val requirements: Set[Requirement] = Set(latency < timespan(100.milliseconds) otherwise Option.empty)

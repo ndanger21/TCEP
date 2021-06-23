@@ -1,6 +1,5 @@
 package tcep.graph.transition.mapek.contrast
 
-import java.io.File
 import com.google.common.base.Charsets
 import com.google.common.io.Resources
 import org.cardygan.config._
@@ -10,8 +9,8 @@ import org.cardygan.fm.util.FmUtil
 import org.cardygan.fm.{Attribute, FM, Feature, Real}
 import org.cardygan.xtext.util.CardyUtil
 import org.slf4j.{Logger, LoggerFactory}
-import tcep.graph.transition.MAPEK
 
+import java.io.File
 import scala.collection.JavaConverters._
 /**
   * Created by Niels on 04.02.2018.
@@ -19,22 +18,25 @@ import scala.collection.JavaConverters._
 /**
   * loads and maintains the current Context Feature Model (CFM) specified in cfm.cardy
   * provides utilities for handling the CFM and generating its current configuration (Config)
-  * @param mapek reference to the running MAPEK instance
   */
-class CFM(val mapek: MAPEK) {
+class CFM {
 
-  private val log: Logger = LoggerFactory.getLogger(getClass)
+  protected val log: Logger = LoggerFactory.getLogger(getClass)
 
   var cfm: FM = _
-  try {
+  init()
+
+  def init() = {
+    try {
       val cfmAsString: String = Resources.toString(Resources.getResource("cfm.cardy"), Charsets.UTF_8)
       //log.info(s"loading the following cfm: $cfmAsString")
       cfm = CardyUtil.loadFmFromString(cfmAsString)
       //cfm = CardyUtil.loadFmFromFile(Resources.getResource("cfm.cardy"))
-  } catch {
+    } catch {
       //case e: java.net.UnknownHostException => log.error("error loading CFM: unknown host exception " + e.getMessage + " " + e.getCause +" \n " + e.getStackTraceString)
       case e: Throwable => log.error(s"exception thrown while loading cardyfile", e)
         throw new RuntimeException("death by FM loading!")
+    }
   }
 
   /**

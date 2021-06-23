@@ -21,7 +21,7 @@ import scala.collection.JavaConverters._
 class RequirementCheckerTest extends FunSuite {
 
   def initRequirementChecker(modelPath: String = "/performanceModels/simpleModel.log", blacklist: List[String] = List()): RequirementChecker = {
-    val cfmClass: CFM = new CFM(null)
+    val cfmClass: CFM = new CFM()
     val cfm: FM = cfmClass.getFM
     var contextData = TestUtils.generateMaxedContextData(cfmClass)
     contextData += (GINI_CONNECTION_DEGREE_1_HOP -> 0.2d )

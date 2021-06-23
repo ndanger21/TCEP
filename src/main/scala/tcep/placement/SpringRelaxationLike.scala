@@ -10,7 +10,6 @@ import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.utils.TCEPUtils
 import tcep.utils.TCEPUtils.makeMapFuture
 
-import scala.collection.mutable
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
@@ -28,7 +27,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
     val res = for {
       _ <- this.initialize()
     } yield {
-      val operatorDependenciesAndBandwidths = Queries.extractOperators(operator)
+      val operatorDependenciesAndBandwidths = Queries.extractOperatorsAndThroughputEstimates(operator)
       val operatorDependencyMap = operatorDependenciesAndBandwidths.mapValues(_._1).toMap
       val outputBandwidthEstimates = operatorDependenciesAndBandwidths.mapValues(_._4).toMap
       if(operator.isInstanceOf[StreamQuery]) {
@@ -113,7 +112,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
                                           queryDependencies: QueryDependencyMap
                                          ): Map[Query, Coordinates] = {
 
-    val operatorDependenciesAndBandwidths = Queries.extractOperators(query)
+    val operatorDependenciesAndBandwidths = Queries.extractOperatorsAndThroughputEstimates(query)
     val operatorDependencyMap = operatorDependenciesAndBandwidths.mapValues(_._1).toMap
     val outputBandwidthEstimates = operatorDependenciesAndBandwidths.mapValues(_._4).toMap
     //println("client Coordinates: " + clientCoordinates)

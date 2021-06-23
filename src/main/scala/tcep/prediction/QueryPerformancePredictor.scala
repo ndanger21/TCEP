@@ -27,7 +27,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
 
   override def receive: Receive = {
     case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates) =>
-      val queryDependencyMap = Queries.extractOperators(rootOperator)(publisherEventRates)
+      val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
       val publishers = TCEPUtils.getPublisherHosts(cluster)
 
       //println(s"publisherEventRate map:\n${publisherEventRates.mkString("\n")}\n")

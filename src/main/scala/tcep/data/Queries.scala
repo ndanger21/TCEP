@@ -120,6 +120,18 @@ object Queries {
     getPublishersRec(rootOp)
   }
 
+  def getOperators(rootOp: Query): List[Query] = {
+    def getOperatorsRec(curOp: Query): List[Query] = {
+      curOp match {
+        case query: LeafQuery => List(query)
+        case query: UnaryQuery => query :: getOperatorsRec(query.sq)
+        case query: BinaryQuery =>query :: getOperatorsRec(query.sq1) ++ getOperatorsRec(query.sq2)
+        case _ => List()
+      }
+    }
+    getOperatorsRec(rootOp)
+  }
+
   type EventRateEstimate = Throughput // [events / second ]
   type EventSizeEstimate = Long // [ Byte ]
   type EventBandwidthEstimate = Double // [ Byte / second ]
@@ -130,7 +142,7 @@ object Queries {
     * @param baseEventRates average event publication rate of publishers in the query (assumes equal event publishing rates for all publishers)
     * @return returns a map with an entry for each operator in the query specifying its parent and child operators, as well as estimates for outgoing event rate, size and bandwidth
     */
-  def extractOperators(query: Query)(implicit baseEventRates: Map[String, Throughput]): QueryDependencyMap = {
+  def extractOperatorsAndThroughputEstimates(query: Query)(implicit baseEventRates: Map[String, Throughput]): QueryDependencyMap = {
     /**
       * recursively extracts the operators and their dependent child and parent operators
       * as well as their estimated output event rate and size (depending on parent operators), and used bandwidth in [Bytes / s]
@@ -209,7 +221,7 @@ object Queries {
     eventRateToChild
   }
 
-  def estimateOutputBandwidths(operator: Query)(implicit baseEventRates: Map[String, Throughput]): Map[Query, Double] = extractOperators(operator).map(e => e._1 -> e._2._4).toMap
+  def estimateOutputBandwidths(operator: Query)(implicit baseEventRates: Map[String, Throughput]): Map[Query, Double] = extractOperatorsAndThroughputEstimates(operator).map(e => e._1 -> e._2._4).toMap
 
   sealed trait LeafQuery   extends Query
   sealed trait UnaryQuery  extends Query { val sq: Query }

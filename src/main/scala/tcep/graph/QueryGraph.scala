@@ -16,15 +16,13 @@ import tcep.graph.transition.MAPEK._
 import tcep.graph.transition._
 import tcep.machinenodes.consumers.Consumer.SetQosMonitors
 import tcep.placement.sbon.PietzuchAlgorithm
-import tcep.placement.{HostInfo, PlacementStrategy, QueryDependencies, SpringRelaxationLike}
+import tcep.placement.{HostInfo, PlacementStrategy, SpringRelaxationLike}
 import tcep.prediction.PredictionHelper.Throughput
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.SpecialStats
 
 import java.util.UUID
-import java.util.concurrent.TimeUnit
-import scala.collection.mutable
-import scala.concurrent.duration.{FiniteDuration, _}
+import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
@@ -63,7 +61,7 @@ class QueryGraph(query: Query,
   def createAndStart(eventCallback: Option[EventCallback] = None): Future[ActorRef] = {
     log.info(s"Creating and starting new QueryGraph with placement ${
       if (startingPlacementStrategy.isDefined) startingPlacementStrategy.get.name else "default (depends on MAPEK implementation)"} and publishers \n ${publishers.mkString("\n")}")
-    val queryDependencies = extractOperators(query)
+    val queryDependencies = extractOperatorsAndThroughputEstimates(query)
     for {
       rootOperator <- startDeployment(eventCallback, queryDependencies)
     } yield {
