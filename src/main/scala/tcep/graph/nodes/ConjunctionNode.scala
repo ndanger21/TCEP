@@ -81,7 +81,7 @@ case class ConjunctionNode(transitionConfig: TransitionConfig,
     esperInitialized = true
     //log.info(s"created $self with parents \n $parentNode1 and \n $parentNode2")
     }
-    Await.result(init, FiniteDuration(1, TimeUnit.SECONDS)) // block here to wait until esper is initialized
+    Await.result(init, FiniteDuration(5, TimeUnit.SECONDS)) // block here to wait until esper is initialized
   }
 //TODO move send to blocking dispatcher? http://esper.espertech.com/release-5.3.0/esper-reference/html/performance.html
   override def childNodeReceive: Receive = super.childNodeReceive orElse {

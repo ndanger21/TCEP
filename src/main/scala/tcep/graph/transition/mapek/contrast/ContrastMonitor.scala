@@ -31,7 +31,7 @@ import scala.util.{Failure, Success}
   * @param mapek reference to the running MAPEK instance
   * @param consumer container object for all metrics for which a monitor exists; contained records are set and updated by monitors
   */
-class ContrastMonitor(mapek: MAPEK, consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int]) extends MonitorComponent {
+class ContrastMonitor(mapek: MAPEK, consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int]) extends MonitorComponent(mapek) {
 
   var updateNetworkDataScheduler: Cancellable = _
   var updateMonitorDataScheduler: Cancellable = _
@@ -73,7 +73,7 @@ class ContrastMonitor(mapek: MAPEK, consumer: ActorRef, fixedSimulationPropertie
     checkOperatorHostStateScheduler.cancel()
   }
 
-  override def receive: Receive = {
+  override def receive: Receive = super.receive orElse {
 
     case MemberJoined(member) =>
       log.info(s"new member joined $member")
@@ -83,12 +83,6 @@ class ContrastMonitor(mapek: MAPEK, consumer: ActorRef, fixedSimulationPropertie
     case MemberLeft(member) =>
       nodeChanges = System.currentTimeMillis() :: nodeChanges
       updateNetworkData()
-
-    case r: AddRequirement =>
-      mapek.knowledge ! r
-      mapek.analyzer ! r
-
-    case r: RemoveRequirement => mapek.knowledge ! r
 
     case m => log.info(s"ignoring unknown message $m")
   }

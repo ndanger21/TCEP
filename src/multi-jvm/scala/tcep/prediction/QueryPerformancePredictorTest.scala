@@ -6,9 +6,6 @@ import akka.testkit.{TestActorRef, TestProbe}
 import akka.util.Timeout
 import tcep.data.Queries.{Query, Query2}
 import tcep.dsl.Dsl.{query1ToQuery1Helper, query2ToQuery2Helper, stream}
-import tcep.graph.QueryGraph
-import tcep.graph.nodes.traits.TransitionConfig
-import tcep.machinenodes.helper.actors.SetPublisherActorRefsACK
 import tcep.machinenodes.qos.BrokerQoSMonitor.{BrokerQosMetrics, GetBrokerMetrics}
 import tcep.placement.MobilityTolerantAlgorithm
 import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Throughput}
@@ -61,7 +58,7 @@ abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
         )
         val queryPerformancePredictor = system.actorOf(Props(classOf[QueryPerformancePredictor], cluster))
         implicit val timeout: Timeout = Timeout(remaining)
-        val f = (queryPerformancePredictor ? GetPredictionForPlacement(filter, None, initialPlacement, baseEventRates)).mapTo[MetricPredictions]
+        val f = (queryPerformancePredictor ? GetPredictionForPlacement(filter, None, initialPlacement, baseEventRates, None)).mapTo[MetricPredictions]
         ec
         f.onComplete {
           case Failure(exception) => exception.printStackTrace()

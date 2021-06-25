@@ -14,7 +14,7 @@ import tcep.placement.sbon.PietzuchAlgorithm
   * Created by Niels on 16.03.2018.
   */
 class TestMAPEK(context: ActorContext, query: Query, consumer: ActorRef)
-  extends ContrastMAPEK(context, query, TransitionConfig(TransitionModeNames.SMS, TransitionExecutionModes.CONCURRENT_MODE), PietzuchAlgorithm,
+  extends ContrastMAPEK(context, query, TransitionConfig(TransitionModeNames.SMS, TransitionExecutionModes.CONCURRENT_MODE), PietzuchAlgorithm.name,
                 fixedSimulationProperties = Map(), consumer)
  {
 

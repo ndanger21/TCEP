@@ -9,23 +9,22 @@ import org.slf4j.LoggerFactory
 import tcep.data.Queries.{Query, Requirement}
 import tcep.graph.QueryGraph
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.qos.{MonitorFactory, _}
+import tcep.graph.qos.MonitorFactory
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.TransitionStats
 import tcep.graph.transition.mapek.lightweight.LightweightKnowledge.GetLogData
 import tcep.machinenodes.GraphCreatedCallback
 import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords, GetMonitorFactories, SetQosMonitors}
-import tcep.placement.PlacementStrategy
 import tcep.prediction.PredictionHelper.Throughput
 
 import java.io.{File, PrintStream}
 import java.time.{Instant, LocalDateTime, ZoneOffset}
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration._
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext, Future}
 
 class Simulation(name: String, query: Query, transitionConfig: TransitionConfig,
-                 publishers: Map[String, ActorRef], consumer: ActorRef, startingPlacementStrategy: Option[PlacementStrategy],
+                 publishers: Map[String, ActorRef], consumer: ActorRef, startingPlacementStrategy: Option[String],
                  mapekType: String = ConfigFactory.load().getString("constants.mapek.type"))
                 (implicit context: ActorContext, cluster: Cluster, publisherEventRates: Map[String, Throughput], directory: Option[File], pimPaths: (String, String),
                  fixedSimulationProperties: Map[Symbol, Int] = Map()) {

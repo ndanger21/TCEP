@@ -61,7 +61,7 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
       */
     case IOMetricUpdate(update) =>
       currentNodeIOMetrics = update
-      log.info(s"BrokerNode QoS update: load $currentLoad, threads $cpuThreadCount, operators ${operatorsOnNode.size}, IO $currentNodeIOMetrics}")
+      log.debug("BrokerNode QoS update: load {}, threads {}, operators {}, IO {}", currentLoad, cpuThreadCount, operatorsOnNode.size, currentNodeIOMetrics)
 
     case GetBrokerMetrics(withoutOperators) =>
       val response = if(withoutOperators.isDefined) {
@@ -99,7 +99,7 @@ object BrokerQoSMonitor {
                         incomingBandwidth: Bandwidth = Bandwidth(0, KBytePerSec),
                         outgoingBandwidth: Bandwidth = Bandwidth(0, KBytePerSec)
                       ) {
-    def +(that: IOMetrics) = IOMetrics(
+    def +(that: IOMetrics): IOMetrics = IOMetrics(
       this.incomingEventRate + that.incomingEventRate,
       this.outgoingEventRate + that.outgoingEventRate,
       this.incomingBandwidth + that.incomingBandwidth,

@@ -8,7 +8,7 @@ import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, UnSubscribe, UpdateTask}
 import tcep.graph.nodes.traits.TransitionExecutionModes.ExecutionMode
 import tcep.graph.nodes.traits.TransitionModeNames.Mode
-import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, UpdateEventRateOut, UpdateEventSizeOut}
+import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, GetSamples, UpdateEventRateOut, UpdateEventSizeOut}
 import tcep.graph.transition._
 import tcep.graph.{CreatedCallback, EventCallback}
 import tcep.machinenodes.helper.actors.{CreateRemoteOperator, PlacementMessage, RemoteOperatorCreated, TransitionControlMessage}
@@ -45,12 +45,12 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
   val eventCallback: Option[EventCallback]
   var updateTask: Cancellable = _
 
-  override def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
+  override def executeTransition(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
     log.info(s"${self.path.name} executing transition on $transitionConfig")
-    if (transitionConfig.transitionStrategy == TransitionModeNames.SMS) super[SMSMode].executeTransition(requester, algorithm, stats)
-    else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState) super[NaiveMovingStateMode].executeTransition(requester, algorithm, stats)
-    else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart) super[NaiveStopMoveStartMode].executeTransition(requester, algorithm, stats)
-    else super[MFGSMode].executeTransition(requester, algorithm, stats)
+    if (transitionConfig.transitionStrategy == TransitionModeNames.SMS) super[SMSMode].executeTransition(requester, algorithm, stats, placement)
+    else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState) super[NaiveMovingStateMode].executeTransition(requester, algorithm, stats, placement)
+    else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart) super[NaiveStopMoveStartMode].executeTransition(requester, algorithm, stats, placement)
+    else super[MFGSMode].executeTransition(requester, algorithm, stats, placement)
   }
 
   override def preStart(): Unit = {
@@ -91,6 +91,7 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
   }
 
   def placementReceive: Receive = {
+    case GetSamples => operatorQoSMonitor.forward(GetSamples)
     case UpdateEventRateOut(rate) => eventRateOut = rate
     case UpdateEventSizeOut(size) => eventSizeOut = size
     case GetIOMetrics => operatorQoSMonitor.forward(GetIOMetrics)

@@ -9,7 +9,7 @@ import breeze.stats.meanAndVariance.MeanAndVariance
 import com.typesafe.config.ConfigFactory
 import tcep.data.Queries
 import tcep.data.Queries._
-import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics}
+import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics, Sample}
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.BytePerSec
 import tcep.machinenodes.qos.BrokerQoSMonitor.{Bandwidth, BrokerQosMetrics, GetBrokerMetrics, IOMetrics}
 import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Throughput}
@@ -26,7 +26,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
 
 
   override def receive: Receive = {
-    case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates) =>
+    case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates, contextFeatureSample) =>
       val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
       val publishers = TCEPUtils.getPublisherHosts(cluster)
 
@@ -41,14 +41,13 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
           .flatMap(monitor => (monitor ? GetBrokerMetrics(withoutPrevInstances)).mapTo[BrokerQosMetrics])
       }
 
-      def getOperatorSamples(operator: (Query, Option[ActorRef])): Future[Option[OperatorQoSMetrics]] = {
+      def getOperatorSamples(operator: (Query, Option[ActorRef])): Future[OperatorQoSMetrics] = {
         val parents = queryDependencyMap(operator._1)._1.parents.get
       // transition placement, can fetch metrics and predictions from deployed operators
         if (operator._2.isDefined)
           cluster.system.actorSelection(operator._2.get.path.child("operatorQosMonitor"))
             .resolveOne() // operator actorRef
             .flatMap(monitor => (monitor ? GetOperatorQoSMetrics).mapTo[OperatorQoSMetrics])
-            .map(Some(_))
 
         //initial placement, no measured metrics for operators yet -> use default estimates
         else for {
@@ -68,42 +67,45 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
             incomingBandwidth = Bandwidth(parentEventBandwidth.sum, BytePerSec),
             outgoingBandwidth = Bandwidth(outgoingEventRate * queryDependencyMap(operator._1)._3, BytePerSec)
           )
-          Some(
           OperatorQoSMetrics(
             eventSizeIn = parents.map(queryDependencyMap(_)._3),
             eventSizeOut = queryDependencyMap(operator._1)._3,
-            selectivity = defaultIOMetrics.outgoingEventRate / defaultIOMetrics.incomingEventRate,
             interArrivalLatency = meanAndVariance(List(1 / parentEventRates.values.sum)),
             processingLatency = meanAndVariance(List(1.0)), //TODO how reasonably to estimate this? create local operator instance, send some events and use avg?
             networkToParentLatency = meanAndVariance(vivDistToParents),
             endToEndLatency = MeanAndVariance(-1, 0, 0),
             ioMetrics = defaultIOMetrics
-          ))
+          )
         }
       }
       // ==== helper functions end ====
 
       println("received prediction request")
-      val placementMap: Map[Query, (Address, Option[ActorRef])] = newPlacement.map(e => e._1 -> (e._2, if (currentPlacement.isDefined) currentPlacement.get.get(e._1) else None))
-      println(s"placement map is $placementMap")
       //TODO initial placement prediction: include parent event rate prediction in child's operator samples default values
       //DONE broker metrics: include placement information to update number of operators, cumul eventrate (or bandwidth), cpu load (how?)
       //DONE get current publisher event rate from publishers; should do same during transition (currently passing initial event rate around among successors)
-      val perQueryPrediction: Future[MetricPredictions] = Future.traverse(placementMap)(query => {
-        for {
-          brokerSamples: BrokerQosMetrics <- getBrokerSamples(query._2._1)
-          _ = println(s"brokerSamples $brokerSamples")
-          operatorSamples: Option[OperatorQoSMetrics] <- getOperatorSamples(query._1, query._2._2)
-        } yield {
-          println(s"samples for ${query._1} are $brokerSamples and $operatorSamples")
-          query._1 -> (brokerSamples, operatorSamples)
-        }
-      }) map { samples =>
-        getPerOperatorPredictions(rootOperator, samples.toMap, publisherEventRates)
+      val samples: Future[Map[Query, Sample]] = if(contextFeatureSample.isDefined) Future(contextFeatureSample.get)
+      else {
+        val placementMap: Map[Query, (Address, Option[ActorRef])] = newPlacement
+          .map(e => e._1 -> (e._2, if (currentPlacement.isDefined) currentPlacement.get.get(e._1) else None))
+        println(s"placement map is $placementMap")
+        Future.traverse(placementMap)(query => {
+          for {
+            brokerSamples: BrokerQosMetrics <- getBrokerSamples(query._2._1)
+            _ = println(s"brokerSamples $brokerSamples")
+            operatorSamples: OperatorQoSMetrics <- getOperatorSamples(query._1, query._2._2)
+          } yield {
+            println(s"samples for ${query._1} are $brokerSamples and $operatorSamples")
+            query._1 -> (operatorSamples, brokerSamples)
+          }
+      }).map(_.toMap) }
+
+      val perQueryPredictions: Future[MetricPredictions] = samples map { samples =>
+        getPerOperatorPredictions(rootOperator, samples, publisherEventRates)
       } map { perOperatorPredictions =>
         println(s"per-operator predictions are \n ${perOperatorPredictions.mkString("\n")}")
         combinePerOperatorPredictions(rootOperator, perOperatorPredictions) }
-      pipe(perQueryPrediction) to sender()
+      pipe(perQueryPredictions) to sender()
 
     case m => log.error(s"received unknown message $m")
   }
@@ -116,7 +118,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
     * @param publisherEventRates base event rates of all publishers
     * @return metric predictions for each operator (currently throughput and end-to-end latency)
     */
-  def getPerOperatorPredictions(rootOperator: Query, operatorSampleMap: Map[Query, (BrokerQosMetrics, Option[OperatorQoSMetrics])], publisherEventRates: Map[String, Throughput]): Map[Query, MetricPredictions] = {
+  def getPerOperatorPredictions(rootOperator: Query, operatorSampleMap: Map[Query, Sample], publisherEventRates: Map[String, Throughput]): Map[Query, MetricPredictions] = {
       // start predictions at publishers; use parent throughput predictions as input event rate for child operators
     def getPerOperatorPredictionsRec(curOp: Query): Map[Query, MetricPredictions] = {
       curOp match {
@@ -147,11 +149,11 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
   }
 
   //TODO implement prediction models
-  def predictLatency(samples: (BrokerQosMetrics, Option[OperatorQoSMetrics]), parentEventRates: Throughput*): EndToEndLatency = {
+  def predictLatency(samples: Sample, parentEventRates: Throughput*): EndToEndLatency = {
 
     EndToEndLatency(1 millisecond)
   }
-  def predictThroughput(samples: (BrokerQosMetrics, Option[OperatorQoSMetrics]), parentEventRates: Throughput*): Throughput = Throughput(1, 1 second)
+  def predictThroughput(samples: Sample, parentEventRates: Throughput*): Throughput = Throughput(1, 1 second)
 
   /**
     * combine per-operator predictions according to query graph structure into per-query prediction for each metric
@@ -180,7 +182,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
 }
 
 object QueryPerformancePredictor {
-  case class GetPredictionForPlacement(query: Query, currentPlacement: Option[Map[Query, ActorRef]], newPlacement: Map[Query, Address], baseEventRates: Map[String, Throughput])
+  case class GetPredictionForPlacement(query: Query, currentPlacement: Option[Map[Query, ActorRef]], newPlacement: Map[Query, Address], baseEventRates: Map[String, Throughput], sample: Option[Map[Query, Sample]])
   case class QosPredictions()
   private case class PlacementBrokerMonitors(brokerMonitors: List[ActorRef], predictionRequester: ActorRef)
 }

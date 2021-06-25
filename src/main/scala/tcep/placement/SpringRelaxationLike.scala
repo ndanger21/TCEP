@@ -1,6 +1,6 @@
 package tcep.placement
 
-import akka.actor.ActorRef
+import akka.actor.{ActorRef, Address}
 import akka.cluster.{Cluster, Member}
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.Coordinates
@@ -33,7 +33,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
       if(operator.isInstanceOf[StreamQuery]) {
         assert(dependencies.parents.values.exists(_.isInstanceOf[PublisherDummyQuery]), s"dependencies for streamOperator must contain PublisherDummyQuery: $dependencies")
       }
-      log.error(s"dependencies: \n${dependencies.parents.mkString("\n")} \n ${dependencies.subscribers}")
+      log.debug("dependencies: \n{} \n{}", Array(dependencies.parents.mkString("\n"), dependencies.subscribers.toString()))
 
       // start requests in parallel
       val candidateCoordRequest = getCoordinatesOfMembers(findPossibleNodesToDeploy(cluster), Some(operator))
@@ -56,7 +56,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
 
         dependencyOperatorCoordinates = buildDependencyOperatorCoordinates(operator, operatorDependencyMap, operatorCoordinateMap, publisherCoordinates, clientCoordinates)
         optimalVirtualCoordinates <- calculateVCSingleOperator(operator, dependencyOperatorCoordinates, outputBandwidthEstimates)
-        host <- findHost(optimalVirtualCoordinates, candidateCoordinates, operator, dependencies, outputBandwidthEstimates)
+        host <- findHost(optimalVirtualCoordinates, candidateCoordinates, operator, parentAddressTransform(dependencies), outputBandwidthEstimates)
       } yield {
         log.info(s"found node to host operator: ${host.toString}")
         val hostCoords = candidateCoordinates.find(e => e._1.equals(host.member))
@@ -68,6 +68,7 @@ trait SpringRelaxationLike extends PlacementStrategy {
     }
     res.flatten
   }
+
   /**
     * starting point of the initial placement for an entire query
     * retrieves the coordinates of dependencies and calculates an initial placement of all operators in a query
@@ -75,8 +76,8 @@ trait SpringRelaxationLike extends PlacementStrategy {
     * @param query the operator graph to be placed
     * @return a map from operator to host
     */
-  def initialVirtualOperatorPlacement(query: Query, publishers: Map[String, ActorRef])
-                                     (implicit ec: ExecutionContext, cluster: Cluster, queryDependencies: QueryDependencyMap
+  def getVirtualOperatorPlacementCoords(query: Query, publishers: Map[String, ActorRef])
+                                       (implicit ec: ExecutionContext, cluster: Cluster, queryDependencies: QueryDependencyMap
                                      ): Future[Map[Query, Coordinates]] = {
 
     val clientNode = cluster.state.members.filter(m => m.roles.contains("Subscriber"))
@@ -269,13 +270,13 @@ trait SpringRelaxationLike extends PlacementStrategy {
     * @return hostInfo including the hosting Member, its bdp to the parent nodes, and the msgOverhead of the placement
     */
   def findHost(virtualCoordinates: Coordinates, candidates: Map[Member, Coordinates], operator: Query,
-               dependencies: Dependencies, outputBandwidthEstimates: Map[Query, Double])
+               parents: Map[Query, Address], outputBandwidthEstimates: Map[Query, Double])
               (implicit ec: ExecutionContext, cluster: Cluster): Future[HostInfo] = {
     if(!hasInitialPlacementRoutine()) throw new IllegalAccessException("only algorithms with a non-sequential initial placement should call findHost() !")
     for {
       candidatesMap <- if(candidates.isEmpty) getCoordinatesOfMembers(findPossibleNodesToDeploy(cluster), Some(operator)) else Future { candidates }
       host <- selectHostFromCandidates(virtualCoordinates, candidatesMap, Some(operator))
-      bdpUpdate <- this.updateOperatorToParentBDP(operator, host._1, dependencies.parents, outputBandwidthEstimates)
+      bdpUpdate <- this.updateOperatorToParentBDP(operator, host._1, parents, outputBandwidthEstimates)
     } yield {
       val hostInfo = HostInfo(host._1, operator, this.getPlacementMetrics(operator))
       memberLoads.remove(host._1) // get new value with deployed operator on next request
@@ -283,6 +284,51 @@ trait SpringRelaxationLike extends PlacementStrategy {
       log.info(name, s"found host: $host")
       hostInfo
     }
+  }
+
+
+  def initialVirtualOperatorPlacement(rootOperator: Query, publishers: Map[String, ActorRef])
+                                     (implicit ec: ExecutionContext, cluster: Cluster, queryDependencies: QueryDependencyMap): Future[Map[Query, HostInfo]] = {
+
+    val outputBandwidthEstimates = Queries.estimateOutputBandwidths(queryDependencies)
+    def findHostRec(curOp: Query)(implicit candidateCoords: Map[Member, Coordinates], placementCoords: Map[Query, Coordinates]): Future[Map[Query, HostInfo]] = {
+      println(s"curOp: $curOp")
+      println("placementCoords: \n" +placementCoords.mkString("\n"))
+      println(s"publishers: \n ${publishers.mkString("\n")}")
+      curOp match {
+        case s: SequenceQuery =>
+          findHost(placementCoords(s), candidateCoords, s, Map(
+            PublisherDummyQuery(s.s1.publisherName) -> publishers(s.s1.publisherName).path.address,
+            PublisherDummyQuery(s.s2.publisherName) -> publishers(s.s2.publisherName).path.address),
+            outputBandwidthEstimates)
+            .map(hostf => Map(s -> hostf))
+
+        case s: StreamQuery =>
+          findHost(placementCoords(s), candidateCoords, s,
+            Map(PublisherDummyQuery(s.publisherName) -> publishers(s.publisherName).path.address),
+            outputBandwidthEstimates)
+            .map(f => Map(s -> f))
+
+        case u: UnaryQuery =>
+          findHostRec(u.sq)
+            .flatMap(parentPlacements => findHost(placementCoords(u), candidateCoords, u, parentPlacements.map(e => e._1 -> e._2.member.address), outputBandwidthEstimates)
+              .map(opPlacement => parentPlacements.updated(u, opPlacement) ))
+
+        case b: BinaryQuery =>
+          findHostRec(b.sq1).zip(findHostRec(b.sq2))
+            .map(f => f._1 ++ f._2)
+            .flatMap(parentPlacements => findHost(placementCoords(b), candidateCoords, b, parentPlacements.map(e => e._1 -> e._2.member.address), outputBandwidthEstimates)
+              .map(opPlacement => parentPlacements.updated(b, opPlacement) ))
+
+        case _ => throw new IllegalArgumentException(s"unknown operator type $curOp")
+      }
+    }
+
+    for {
+      candidateCoords <- getCoordinatesOfMembers(findPossibleNodesToDeploy(cluster), Some(rootOperator))
+      placementCoords <- getVirtualOperatorPlacementCoords(rootOperator, publishers)
+      placement <- findHostRec(rootOperator)(candidateCoords, placementCoords)
+    } yield placement
   }
 
   /**

@@ -5,7 +5,6 @@ import org.discovery.vivaldi.Coordinates
 import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.dsl.Dsl.{Seconds => _, TimespanHelper => _, _}
-import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.placement.mop.RizouAlgorithm
 import tcep.placement.{QueryDependencies, QueryDependenciesWithCoordinates}
 
@@ -225,8 +224,8 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
         val candidates = uut.findPossibleNodesToDeploy(cluster).map(c => c -> uut.getCoordinatesOfNodeBlocking(c)).toMap
         implicit val dependencyData = Queries.extractOperatorsAndThroughputEstimates(f2)
         val dataRateEstimates = Queries.estimateOutputBandwidths(f2)
-        val virtualCoordinates: Map[Query, Coordinates] = Await.result(uut.initialVirtualOperatorPlacement(f2, publishers), uut.requestTimeout)
-        val physicalPlacements: Map[Query, Member] = virtualCoordinates.map(o => o._1 -> Await.result(uut.findHost(o._2, candidates, o._1, Dependencies(Map(), Map()), dataRateEstimates), uut.requestTimeout).member)
+        val virtualCoordinates: Map[Query, Coordinates] = Await.result(uut.getVirtualOperatorPlacementCoords(f2, publishers), uut.requestTimeout)
+        val physicalPlacements: Map[Query, Member] = virtualCoordinates.map(o => o._1 -> Await.result(uut.findHost(o._2, candidates, o._1, Map(), dataRateEstimates), uut.requestTimeout).member)
         assert(physicalPlacements.values.toSet.map((m: Member) => m.address).subsetOf(
           getMembersWithRole(cluster, "Candidate").map(c => c.address)),
           "all operators must be hosted on candidates")
@@ -281,7 +280,7 @@ abstract class RizouMultiNodeTestSpec extends MultiJVMTestSetup {
         val dataRateEstimates = Queries.estimateOutputBandwidths(f1)
         val virtualCoords: Map[Query, Coordinates] = uut.calculateVirtualPlacementWithCoords(f1, clientC, Map(pNames(0) -> publisher1))
         val physicalPlacement: Map[Query, (Member, Coordinates)] = virtualCoords.map(vc => vc._1 -> Await.result(
-          uut.findHost(vc._2, candidates, vc._1, Dependencies(Map(), Map()), dataRateEstimates), uut.requestTimeout))
+          uut.findHost(vc._2, candidates, vc._1, Map(), dataRateEstimates), uut.requestTimeout))
               .map(e => e._1 -> (e._2.member, uut.getCoordinatesOfNodeBlocking(e._2.member)))
         val placementBDP = getTestBDP(physicalPlacement, clientC, publisher1)
         assert(placementBDP == minBDP, "BDP of placement must be minimum possible BDP of all possible placements")

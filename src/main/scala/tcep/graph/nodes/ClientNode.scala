@@ -41,18 +41,18 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
 
   override def receive: Receive = {
     case UpdateEventRateOut(rate) => eventRateOut = rate
-    case TransitionRequest(strategy, requester, stats) => {
+    case TransitionRequest(strategy, requester, stats, placement) => {
       sender() ! ACK()
       if(transitionStatus == 0) {
-        log.info(s"Transiting system to ${strategy.name}")
-        transitionLog(s"transiting to ${strategy.name}")
+        log.info(s"Transiting system to ${strategy}")
+        transitionLog(s"transiting to ${strategy}")
         mapek.knowledge ! SetTransitionStatus(1)
         transitionStartTime = System.currentTimeMillis()
-        TCEPUtils.guaranteedDelivery(context, rootOperator, TransitionRequest(strategy, self, stats), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))(blockingIoDispatcher)
+        TCEPUtils.guaranteedDelivery(context, rootOperator, TransitionRequest(strategy, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))(blockingIoDispatcher)
       }
     }
 
-    case TransferredState(_, replacement, oldParent, stats, lastOperator) => {
+    case TransferredState(_, replacement, oldParent, stats, _, _) => {
       sender() ! ACK()
       // log transition time of parent
       val transitionStart: Long = stats.transitionTimesPerOperator.getOrElse(oldParent, 0)
@@ -128,7 +128,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
     * @return
     */
   private def replaceOperator(replacement: ActorRef, bdpToOperator: Double) = {
-      hostInfo = HostInfo(this.cluster.selfMember, ClientDummyQuery(), OperatorMetrics(Map(rootOperator -> bdpToOperator)))
+      hostInfo = HostInfo(this.cluster.selfMember, ClientDummyQuery(), OperatorMetrics(Map(rootOperator.path.address -> bdpToOperator)))
       this.rootOperator = replacement
       guiBDPUpdateSent = false // total (accumulated) bdp of the entire operator graph is updated when the first event arrives
     }
@@ -148,7 +148,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
     } yield {
       val dist = rootPos.distance(DistVivaldiActor.localPos.coordinates)
       val bdpToOperator = dist * rootOperatorBandwidthEstimate * 0.001 // dist in [ms], bandwidth in [Bytes / s]
-      hostInfo = HostInfo(this.cluster.selfMember, ClientDummyQuery(), OperatorMetrics(Map(rootOperator -> bdpToOperator)))
+      hostInfo = HostInfo(this.cluster.selfMember, ClientDummyQuery(), OperatorMetrics(Map(rootOperator.path.address -> bdpToOperator)))
       log.info(s"bdp on last hop: ${bdpToOperator} Bytes")
     }
   }

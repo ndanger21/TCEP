@@ -1,7 +1,5 @@
 package tcep.graph.transition.mapek.contrast
 
-import java.time.Duration
-
 import com.typesafe.config.ConfigFactory
 import org.cardygan.config.util.ConfigUtil
 import org.cardygan.config.{Config, Instance}
@@ -12,9 +10,10 @@ import org.slf4j.LoggerFactory
 import tcep.data.Queries._
 import tcep.data.Structures.MachineLoad
 import tcep.graph.transition.MAPEK.ExecuteTransition
-import tcep.graph.transition.PlannerComponent
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{OptimalSystemConfiguration, RunPlanner}
+import tcep.graph.transition.{MAPEK, PlannerComponent}
 
+import java.time.Duration
 import scala.collection.JavaConverters._
 import scala.util.Random
 
@@ -31,7 +30,7 @@ import scala.util.Random
   *  the requirement is relaxed several times
   * @param mapek reference to the running MAPEK instance
   */
-class ContrastPlanner(mapek: ContrastMAPEK) extends PlannerComponent(mapek) {
+class ContrastPlanner(mapek: MAPEK) extends PlannerComponent(mapek) {
 
   private var attempts = 0
   private val improvementThreshold = ConfigFactory.load().getDouble("constants.mapek.improvement-threshold")

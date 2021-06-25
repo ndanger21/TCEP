@@ -1,6 +1,6 @@
 package tcep.graph.transition.mapek
 
-import akka.actor.{Actor, ActorContext, ActorLogging, ActorRef, Address, Props, Timers}
+import akka.actor.{ActorContext, ActorLogging, ActorRef, Address, Props, Timers}
 import akka.cluster.Cluster
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
@@ -21,8 +21,8 @@ import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
 import tcep.utils.TCEPUtils
 
 import java.util.concurrent.TimeUnit
+import scala.concurrent.Future
 import scala.concurrent.duration.FiniteDuration
-import scala.concurrent.{ExecutionContext, Future}
 import scala.jdk.CollectionConverters.collectionAsScalaIterableConverter
 
 class ExchangeablePerformanceModelMAPEK(query: Query, mode: TransitionConfig, startingPlacementStrategy: PlacementStrategy, consumer: ActorRef)(implicit cluster: Cluster, context: ActorContext)
@@ -40,7 +40,7 @@ class ExchangeablePerformanceModelMAPEK(query: Query, mode: TransitionConfig, st
   * M of the MAPE-K cycle
   * responsible for retrieving sample data from the distributed monitor instances on operators and the brokers they are deployed on and sending it to knowledge
   */
-class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Actor with ActorLogging with Timers {
+class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends MonitorComponent(mapek) with ActorLogging with Timers {
 
   val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))

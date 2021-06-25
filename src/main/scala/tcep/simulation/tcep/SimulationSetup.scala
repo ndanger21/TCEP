@@ -17,14 +17,13 @@ import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.mop.RizouAlgorithm
 import tcep.placement.sbon.PietzuchAlgorithm
 import tcep.placement.vivaldi.VivaldiCoordinates
-import tcep.placement.{GlobalOptimalBDPAlgorithm, MobilityTolerantAlgorithm, PlacementStrategy, RandomAlgorithm}
+import tcep.placement.{GlobalOptimalBDPAlgorithm, MobilityTolerantAlgorithm, RandomAlgorithm}
 import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.StartStreams
 import tcep.publishers.RegularPublisher.GetEventsPerSecond
 import tcep.utils.TCEPUtils
 
 import java.io.File
-import java.util.concurrent
 import java.util.concurrent.TimeUnit
 import scala.collection.JavaConverters._
 import scala.collection.mutable
@@ -396,7 +395,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
     * @param splcDataCollection boolean to collect additional data for CONTRAST MAPEK implementation (machine learning data)
     * @return queryGraph of the running simulation
     */
-  def runSimulation(i: Int, placementStrategy: PlacementStrategy, transitionConfig: TransitionConfig, finishedCallback: () => Any,
+  def runSimulation(i: Int, placementStrategy: String, transitionConfig: TransitionConfig, finishedCallback: () => Any,
                     initialRequirements: Set[Requirement], requirementChanges: Option[Set[Requirement]] = None,
                     splcDataCollection: Boolean = false): Unit = {
 
@@ -424,16 +423,16 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
 
       val sim = if (splcDataCollection || this.mapek == "CONSTRAST" || this.mapek == "LearnOn") {
         new SPLCDataCollectionSimulation(
-          name = s"${transitionMode}-${placementStrategy.name}-${queryString}-${mapek}-${requirementStr}-$i",
+          name = s"${transitionMode}-${placementStrategy}-${queryString}-${mapek}-${requirementStr}-$i",
           query, transitionConfig, publishers, consumers.toVector(i),
           Some(placementStrategy), this.mapek)
         } else {
-            new Simulation(name = s"${transitionMode}-${placementStrategy.name}-${queryString}-${mapek}-${requirementStr}-$i",
+            new Simulation(name = s"${transitionMode}-${placementStrategy}-${queryString}-${mapek}-${requirementStr}-$i",
               query, transitionConfig, publishers, consumers.toVector(i), Some(placementStrategy), this.mapek)
         }
 
     val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
-      log.info(s"starting $transitionMode ${placementStrategy.name} algorithm simulation number $i (progress: $percentage) with requirementChanges $requirementChanges \n and query $query")
+      log.info(s"starting $transitionMode ${placementStrategy} algorithm simulation number $i (progress: $percentage) with requirementChanges $requirementChanges \n mapek $mapek and query $query")
       val graph = Await.result(sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback), FiniteDuration(15, TimeUnit.SECONDS)) // (start simulation time, interval, end time (s))
       graphs = graphs.+(i -> graph)
       context.system.scheduler.scheduleOnce(totalDuration)(this.shutdown())
@@ -448,7 +447,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
         if (transitionTesting) {
           val allAlgorithms = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala
           //val allAlgorithms = List(PietzuchAlgorithm.name, GlobalOptimalBDPAlgorithm.name)
-          var mult = 2
+          var mult = 1
           val repetitions: Double =  (totalDuration.-(firstDelay).div(requirementChangeDelay) - 2) / allAlgorithms.size
           for (repeat <- 0 until repetitions.toInt) {
             allAlgorithms.foreach(a => {
@@ -460,7 +459,6 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
           }
         }
       }
-      graph
   }
 
   def changeReqTask(i: Int, oldReq: Seq[Requirement], newReq: Seq[Requirement]): Unit = {
@@ -529,12 +527,12 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
             name = transitionMode,
             currentQuery, TransitionConfig(mode, TransitionExecutionModes.CONCURRENT_MODE),
             publishers, consumers.toVector(i),
-            Some(PlacementStrategy.getStrategyByName(strategyName)), mapekName)
+            Some(strategyName), mapekName)
         } else {
           new Simulation(transitionMode, currentQuery,
             TransitionConfig(mode, TransitionExecutionModes.CONCURRENT_MODE),
             publishers, consumers.toVector(i),
-            Some(PlacementStrategy.getStrategyByName(strategyName)),
+            Some(strategyName),
             mapekName)
         }
 
@@ -643,70 +641,70 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
     mode match {
 
       case Mode.TEST_RELAXATION => for (i <- Range(0, loadTestMax))
-        this.runSimulation(i, PietzuchAlgorithm, transitionMode,
+        this.runSimulation(i, PietzuchAlgorithm.name, transitionMode,
           () => log.info(s"Starks algorithm Simulation Ended for $i"),
           Set(latencyRequirement))
 
       case Mode.TEST_STARKS => for (i <- Range(0, loadTestMax))
-        this.runSimulation(i, StarksAlgorithm, transitionMode,
+        this.runSimulation(i, StarksAlgorithm.name, transitionMode,
           () => log.info(s"Starks algorithm Simulation Ended for $i"),
           Set(messageHopsRequirement))
 
       case Mode.TEST_RIZOU => for (i <- Range(0, loadTestMax))
-        this.runSimulation(i, RizouAlgorithm, transitionMode,
+        this.runSimulation(i, RizouAlgorithm.name, transitionMode,
           () => log.info(s"Starks algorithm Simulation Ended for $i"),
           Set(loadRequirement)) // use load requirement to make it "selectable" for RequirementBasedMAPEK/BenchmarkingNode
 
       case Mode.TEST_PC => for (i <- Range (0, loadTestMax) )
-        this.runSimulation (i,  MobilityTolerantAlgorithm, transitionMode,
+        this.runSimulation (i,  MobilityTolerantAlgorithm.name, transitionMode,
           () => log.info (s"Producer Consumer algorithm Simulation Ended for $i"),
           Set(latencyRequirement), Some(Set()))
 
       case Mode.TEST_OPTIMAL => for (i <- Range (0, loadTestMax) )
-        this.runSimulation (i, GlobalOptimalBDPAlgorithm, transitionMode,
+        this.runSimulation (i, GlobalOptimalBDPAlgorithm.name, transitionMode,
           () => log.info (s"Producer Consumer algorithm Simulation Ended for $i"),
           Set(latencyRequirement), Some(Set()))
 
       case Mode.TEST_RANDOM => for (i <- Range (0, loadTestMax) )
-        this.runSimulation (i, RandomAlgorithm, transitionMode,
+        this.runSimulation (i, RandomAlgorithm.name, transitionMode,
           () => log.info (s"Producer Consumer algorithm Simulation Ended for $i"),
           Set(latencyRequirement), Some(Set()))
 
       case Mode.TEST_SMS =>
-        this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), TransitionConfig(TransitionModeNames.SMS, TransitionExecutionModes.CONCURRENT_MODE),
+        this.runSimulation(0, startingPlacementAlgorithm, TransitionConfig(TransitionModeNames.SMS, TransitionExecutionModes.CONCURRENT_MODE),
           () => log.info(s"SMS transition $startingPlacementAlgorithm algorithm Simulation ended"),
           Set(latencyRequirement), Some(Set(messageHopsRequirement)))
 
       case Mode.TEST_MFGS =>
-        this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), TransitionConfig(TransitionModeNames.MFGS, TransitionExecutionModes.SEQUENTIAL_MODE),
+        this.runSimulation(0, startingPlacementAlgorithm, TransitionConfig(TransitionModeNames.MFGS, TransitionExecutionModes.SEQUENTIAL_MODE),
           () => log.info(s"MFGS transition $startingPlacementAlgorithm algorithm Simulation ended"),
           Set(latencyRequirement), Some(Set(reqChange)))
 
       case Mode.SPLC_DATACOLLECTION =>
         val used_mapek = ConfigFactory.load().getString("constants.mapek.type")
-        this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), transitionMode,
+        this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info(s"$transitionMode $startingPlacementAlgorithm algorithm Simulation with SPLC data collection enabled ended"),
           Set(latencyRequirement), Some(Set(messageHopsRequirement)), true)
 
       case Mode.TEST_GUI => this.testGUI(0, 0, 1)
       case Mode.DO_NOTHING => log.info("simulation ended!")
       case Mode.TEST_LIGHTWEIGHT =>
-        this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), transitionMode,
+        this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info(s"Lightweight transitions simulation ended"),
           Set(latencyRequirement), Some(Set(reqChange)))
 
       case Mode.MADRID_TRACES =>
-        this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), transitionMode,
+        this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("MadridTrace simulation ended"),
           Set(latencyRequirement), Some(Set()))
 
       case Mode.LINEAR_ROAD =>
-        this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), transitionMode,
+        this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("LinearRoad simulation ended"),
           Set(latencyRequirement), Some(Set()))
 
       case Mode.YAHOO_STREAMING =>
-        this.runSimulation(0, PlacementStrategy.getStrategyByName(startingPlacementAlgorithm), transitionMode,
+        this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("YahooStreaming simulation ended"),
           Set(latencyRequirement), Some(Set()))
     }

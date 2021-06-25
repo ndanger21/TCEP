@@ -1,8 +1,6 @@
 package tcep
 
 import akka.actor
-
-import java.util.concurrent.{Executors, TimeUnit}
 import akka.actor.{Actor, ActorRef, ActorSelection, Address, PoisonPill, Props, RootActorPath}
 import akka.cluster.{Cluster, Member, MemberStatus}
 import akka.remote.testkit.MultiNodeSpec
@@ -25,6 +23,7 @@ import tcep.publishers.Publisher.StartStreams
 import tcep.publishers.RegularPublisher
 import tcep.utils.TCEPUtils
 
+import java.util.concurrent.{Executors, TimeUnit}
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{Await, ExecutionContext, Future}
 
@@ -195,7 +194,7 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
         var graphFactory: QueryGraph = _
         var rootOperator: ActorRef = _
         override def preStart(): Unit = {
-          graphFactory = new QueryGraph(query, TransitionConfig(), publishers, Some(placementStrategy), None, subscriber.ref, mapek)
+          graphFactory = new QueryGraph(query, TransitionConfig(), publishers, Some(placementStrategy.name), None, subscriber.ref, mapek)
           rootOperator = Await.result(graphFactory.createAndStart(), FiniteDuration(15, TimeUnit.SECONDS))
           //println(s"instantiated query $query with root operator $rootOperator")
           subscriber.send(rootOperator, Subscribe(subscriber.ref, ClientDummyQuery()))

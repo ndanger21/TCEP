@@ -60,8 +60,8 @@ object SizeEstimator {
       case UnSubscribe() => 255
       case CreateRemoteOperator(_, _) => 2000
       case RemoteOperatorCreated(_) => 426
-      case TransitionRequest(_, _, _) => 542
-      case TransferredState(_, _, _, _, _) => 650
+      case TransitionRequest(_, _, _, _) => 542
+      case TransferredState(_, _, _, _, _, _) => 650
       case StartExecution(_) => 268
       case StartExecutionWithData(_, _, _, data, _) => 512 + data.size * 480
       case StartExecutionAtTime(_, _, _) => 498

@@ -1,19 +1,19 @@
 package tcep.graph.nodes.traits
 
-import java.util.concurrent.TimeUnit
-
-import akka.actor.{ActorRef, Cancellable, PoisonPill}
+import akka.actor.{ActorRef, Address, Cancellable, PoisonPill}
 import tcep.data.Events.Event
+import tcep.data.Queries.Query
 import tcep.graph.EventCallback
 import tcep.graph.nodes.traits.Node.{UnSubscribe, UpdateTask}
 import tcep.graph.transition._
 import tcep.machinenodes.helper.actors.{GetEventPause, GetMaxEventInterval, GetTimeSinceLastEvent, _}
-import tcep.placement.{HostInfo, PlacementStrategy}
+import tcep.placement.HostInfo
 import tcep.simulation.adaptive.cep.SystemLoad
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.TransitionLogActor.{OperatorTransitionBegin, OperatorTransitionEnd}
 import tcep.utils.{SizeEstimator, TCEPUtils}
 
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
@@ -117,7 +117,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
       slidingMessageQueue += Tuple2(sender(), e)
       e // forward to childNodeReceive
 
-    case MoveOperator(requester, algorithm, stats) =>
+    case MoveOperator(requester, algorithm, stats, placement) =>
       if (startOperatorMigrationTask != null) startOperatorMigrationTask.cancel()
       val now = System.nanoTime()
       val remainingEventsProcessed = now - lastEventArrivalNanos.getOrElse(now) >= 2 * maxEventIntervalNanos.getOrElse(Long.MaxValue)
@@ -126,9 +126,9 @@ trait NaiveStopMoveStartMode extends TransitionMode {
         s"time since last event: ${(now - lastEventArrivalNanos.getOrElse(now)) / 1e6}ms ${lastEventArrivalNanos.isDefined}")
       // execute transition only if no more events arrive (i.e. remaining events in mailbox have been processed) and parents have transited
       if (sender() == self && parentTransitionsComplete >= getParentActors().size && remainingEventsProcessed || maxEventIntervalNanos.isEmpty)
-        moveOperatorNSMS(requester, algorithm, stats)
+        moveOperatorNSMS(requester, algorithm, stats, placement)
       else
-        executeTransition(requester, algorithm, stats)
+        executeTransition(requester, algorithm, stats, placement)
 
     case GetTimeSinceLastEvent => sender() ! System.nanoTime() - lastEventArrivalNanos.getOrElse(System.nanoTime())
     case GetMaxEventInterval => sender() ! maxEventIntervalNanos.getOrElse(Long.MaxValue)
@@ -142,16 +142,16 @@ trait NaiveStopMoveStartMode extends TransitionMode {
     * otherwise check again after that interval
     *
     */
-  override def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
+  override def executeTransition(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
     transitionLog(s"scheduling operator transition check in ${maxEventIntervalNanos.getOrElse(-1L) / 1e6} ms")
     startOperatorMigrationTask = context.system.scheduler.scheduleOnce(
-      new FiniteDuration(maxEventIntervalNanos.getOrElse(1e9.toLong), TimeUnit.NANOSECONDS), self, MoveOperator(requester, algorithm, stats)
+      new FiniteDuration(maxEventIntervalNanos.getOrElse(1e9.toLong), TimeUnit.NANOSECONDS), self, MoveOperator(requester, algorithm, stats, placement)
     )
   }
 
-  def moveOperatorNSMS(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
+  def moveOperatorNSMS(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
     try {
-      transitionLog(s"executing NaiveStopMoveStartMode ${this.isInstanceOf[NaiveStopMoveStartMode]} transition to ${algorithm.name} requested by ${requester}")
+      transitionLog(s"executing NaiveStopMoveStartMode ${this.isInstanceOf[NaiveStopMoveStartMode]} transition to ${algorithm} requested by ${requester}")
       transitionLogPublisher ! OperatorTransitionBegin(self)
       val startTime = System.currentTimeMillis()
 
@@ -172,14 +172,14 @@ trait NaiveStopMoveStartMode extends TransitionMode {
         transitionLog(s"sending TransferEvents (${windowEvents.size} window state events and ${unsentEvents.size} unsent events) to $successor with timeout $retryTimeout")
         // do NOT send subscriber set unless the subscriber is the clientNode (we do not want to receive new events on old operators); instead, let successor of child subscribe by itself
         val subs = if (isRootOperator) subscribers.toList else List()
-        val transferEventsMessage = TransferEvents(downTime.getOrElse(System.currentTimeMillis()), startTime, subs, windowEvents, unsentEvents.toList, algorithm.name)
+        val transferEventsMessage = TransferEvents(downTime.getOrElse(System.currentTimeMillis()), startTime, subs, windowEvents, unsentEvents.toList, algorithm)
         val transferACK = TCEPUtils.guaranteedDelivery(context, successor, transferEventsMessage, tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
         transferACK.map(ack => {
           eventsTransferred = true
           val timestamp = System.currentTimeMillis()
           val migrationTime = timestamp - downTime.get
           val nodeSelectionTime = timestamp - startTime
-          GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm.name, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
+          GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
           // notify mapek knowledge about operator change
           notifyMAPEK(cluster, successor)
           val placementOverhead = newHostInfo.operatorMetrics.accPlacementMsgOverhead
@@ -198,7 +198,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
       transitionLog(s"NSMS transition: looking for new host of ${self} dependencies: $dependencies")
       // retry indefinitely on failure of intermediate steps without repeating the previous ones (-> no duplicate operators)
       val transitToSuccessor = for {
-        host: HostInfo <- findSuccessorHost(algorithm, dependencies)
+        host: HostInfo <- findSuccessorHost(algorithm, dependencies, placement)
         successor: ActorRef <- {
           transitionLog(s"creating duplicate operator on ${host.member.address}...")
           createDuplicateNode(host)
@@ -207,7 +207,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
           transitionLog(s"created successor duplicate ${successor} on new host after ${System.currentTimeMillis() - startTime}ms");
           transferEvents(successor, host)
         }
-        _ <- notifyChild(requester, successor, TransferredState(algorithm, successor, self, updatedStats, query), updatedStats)
+        _ <- notifyChild(requester, successor, TransferredState(algorithm, successor, self, updatedStats, query, placement), updatedStats)
       } yield {
         SystemLoad.operatorRemoved()
         transitionLogPublisher ! OperatorTransitionEnd(self)

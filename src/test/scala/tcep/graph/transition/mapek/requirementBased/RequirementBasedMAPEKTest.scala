@@ -1,8 +1,6 @@
 
 package tcep.graph.transition.mapek.requirementBased
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.testkit.TestKit
 import org.scalatest.{BeforeAndAfterAll, WordSpecLike}
@@ -18,6 +16,7 @@ import tcep.placement.benchmarking.BenchmarkingNode
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.sbon.PietzuchAlgorithm
 
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.FiniteDuration
 
@@ -57,7 +56,7 @@ class RequirementBasedMAPEKTest extends TestKit(ActorSystem())  with WordSpecLik
       w ! RemoveRequirement(Seq(latencyRequirement))
       w ! AddRequirement(Seq(messageHopsRequirement, loadRequirement))
       expectMsgPF(remaining) {
-        case t: TransitionRequest => assert(t.placementStrategy === StarksAlgorithm)
+        case t: TransitionRequest => assert(t.placementStrategyName === StarksAlgorithm.name)
       }
     }
   }
@@ -69,7 +68,7 @@ class RequirementBasedMAPEKTest extends TestKit(ActorSystem())  with WordSpecLik
       w ! RemoveRequirement(Seq(latencyRequirement))
       w ! AddRequirement(Seq(latencyRequirement, messageHopsRequirement))
       expectMsgPF(remaining) {
-        case t: TransitionRequest => assert(t.placementStrategy === GlobalOptimalBDPAlgorithm)
+        case t: TransitionRequest => assert(t.placementStrategyName === GlobalOptimalBDPAlgorithm.name)
       }
     }
   }
@@ -82,7 +81,7 @@ class RequirementBasedMAPEKTest extends TestKit(ActorSystem())  with WordSpecLik
       w ! RemoveRequirement(Seq(latencyRequirement, messageHopsRequirement))
       w ! AddRequirement(Seq(latencyRequirement, loadRequirement))
       expectMsgPF(remaining) {
-        case t: TransitionRequest => assert(t.placementStrategy === PietzuchAlgorithm)
+        case t: TransitionRequest => assert(t.placementStrategyName === PietzuchAlgorithm.name)
       }
     }
   }

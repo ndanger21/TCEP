@@ -5,7 +5,7 @@ import akka.cluster.{Cluster, Member}
 import akka.util.Timeout
 import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
 import tcep.data.Queries
-import tcep.data.Queries.{BinaryQuery, Query, QueryDependencyMap}
+import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.machinenodes.helper.actors.{Message, StarksTask, StarksTaskReply}
 import tcep.placement.{HostInfo, PlacementStrategy}
@@ -31,11 +31,12 @@ object StarksAlgorithm extends PlacementStrategy {
     val res: Future[Future[HostInfo]] = for {
       init <- this.initialize()
     } yield {
+      val parentAddresses = parentAddressTransform(dependencies)
       val outputBandwidthEstimates = Queries.estimateOutputBandwidths(operator)
       if (askerInfo.visitedMembers.contains(cluster.selfMember)) { // prevent forwarding in circles, i.e. (rare) case when distances are equal
         val hostInfo = HostInfo(cluster.selfMember, operator, askerInfo.operatorMetrics, askerInfo.visitedMembers) // if this node is asked a second time, stop forwarding and deploy on self
         for {
-          bdpupdate <- this.updateOperatorToParentBDP(operator, hostInfo.member, dependencies.parents, outputBandwidthEstimates)
+          bdpupdate <- this.updateOperatorToParentBDP(operator, hostInfo.member, parentAddresses, outputBandwidthEstimates)
         } yield {
           this.updateOperatorMsgOverhead(Some(operator), SizeEstimator.estimate(hostInfo)) //add overhead from sending back hostInfo to requester
           hostInfo.operatorMetrics = this.getPlacementMetrics(operator)
@@ -57,7 +58,7 @@ object StarksAlgorithm extends PlacementStrategy {
             //SpecialStats.debug(s"$this", s"applying starks on ${cluster.selfAddress} to $operator")
             applyStarksAlgorithm(parentCoordinates, candidateCoordinates, askerInfo, operator, askerInfo.visitedMembers, dependencies)
           }
-          bdp <- this.updateOperatorToParentBDP(operator, hostInfo.member, dependencies.parents, outputBandwidthEstimates)
+          bdp <- this.updateOperatorToParentBDP(operator, hostInfo.member, parentAddresses, outputBandwidthEstimates)
         } yield {
           // add local overhead to accumulated overhead from callers
           hostInfo.operatorMetrics = this.getPlacementMetrics(operator)
@@ -255,4 +256,147 @@ object StarksAlgorithm extends PlacementStrategy {
     deploymentResult
   }
 
+  /**
+    * starting point of the initial placement for an entire query
+    * retrieves the coordinates of dependencies and calculates an initial placement of all operators in a query
+    * (without actually placing them yet)
+    *
+    * @param rootOperator the operator graph to be placed
+    * @return a map from operator to host
+    */
+  override def initialVirtualOperatorPlacement(rootOperator: Query, publishers: Map[String, ActorRef])
+                                              (implicit ec: ExecutionContext, cluster: Cluster, queryDependencies: QueryDependencyMap): Future[Map[Query, HostInfo]] = {
+
+    def traverseNetworkTree(currentNode: Member, subQuery: Query)
+                           (implicit memberCoords: Map[Member, Coordinates]): Map[Query, Member] = {
+      /**
+        * @return the relay node (node closest to current one in the direction of the parent's publishers) for each immediate parent operator of the given query
+        */
+      def getRelayNodes(curSubQuery: Query) : Map[Query, Member] = {
+        // get the publishers for the current subtree
+        def getParentPublishers(q: Query): Map[String, (Member, Coordinates)] = Queries.getPublishers(q)
+          .map(p => p -> memberCoords.find(m => m._1.address == publishers(p).path.address).get).toMap
+
+        val currentCoords = memberCoords(currentNode)
+        val parentPublishers = getParentPublishers(curSubQuery)
+
+        curSubQuery match {
+          case s: StreamQuery =>
+            val distancesToPublisher = memberCoords.map(m => m -> m._2.distance(parentPublishers(s.publisherName)._2))
+            val currentDistance = currentCoords.distance(parentPublishers(s.publisherName)._2)
+            // find the relay node (next hop), i.e. the node closest to the current node that is closer to the parent)
+            val relayNode = distancesToPublisher.filter(_._2 <= currentDistance).map(m => m -> m._1._2.distance(currentCoords)).minBy(_._2)._1._1._1
+            Map(s -> relayNode)
+
+          case u: UnaryQuery => getRelayNodes(u.sq)
+          case b: BinaryQuery =>
+            // if parent is itself a binary operator, choose the relay node with minimum summed distance to both parent's publishers
+            val relayNode1 = getRelayNodes(b.sq1).map(r => r -> getParentPublishers(b.sq1).values.map(p => p._2.distance(memberCoords(r._2))).sum).minBy(_._2)._1
+            val relayNode2 = getRelayNodes(b.sq2).map(r => r -> getParentPublishers(b.sq2).values.map(p => p._2.distance(memberCoords(r._2))).sum).minBy(_._2)._1
+            Map(relayNode1, relayNode2)
+
+          case s: SequenceQuery =>
+            // same as StreamQuery, but use summed distances to the two publishers instead
+            val distancesToPublishers = memberCoords.map(m => m -> (m._2.distance(parentPublishers(s.s1.publisherName)._2) + m._2.distance(parentPublishers(s.s2.publisherName)._2)))
+            val currentDistance = currentCoords.distance(parentPublishers(s.s1.publisherName)._2) + currentCoords.distance(parentPublishers(s.s2.publisherName)._2)
+            val relayNode = distancesToPublishers.filter(_._2 <= currentDistance).map(m => m -> m._1._2.distance(currentCoords)).minBy(_._2)._1._1._1
+            Map(s -> relayNode)
+
+          case _ => throw new IllegalArgumentException(s"unknown operator $subQuery")
+        }
+      }
+
+      // get 1 relay node for each parent
+      val curRelayNodes: Map[Query, Member] = getRelayNodes(subQuery)
+
+      subQuery match {
+        case s: StreamQuery =>
+          if(currentNode == curRelayNodes(s))
+            Map(s -> currentNode)
+          else
+            traverseNetworkTree(curRelayNodes(s), s)
+
+        case u: UnaryQuery => // always place on same node as parent
+          val parentPlacements = traverseNetworkTree(currentNode, u.sq)
+          parentPlacements.updated(u, parentPlacements(u.sq))
+
+        case b: BinaryQuery =>
+          // 1. parents are forwarded to same host -> forward self to that host
+          if(curRelayNodes(b.sq1) == curRelayNodes(b.sq2)) {
+            traverseNetworkTree(curRelayNodes(b.sq1), b)
+          } else {
+            val relayNode1 = curRelayNodes(b.sq1)
+            val relayNode2 = curRelayNodes(b.sq2)
+            val minDistSumToRelayNodes = memberCoords.filter(m => m._1 != relayNode1 && m._1 != relayNode2)
+                        .map(m => m -> (m._2.distance(memberCoords(relayNode1)) + m._2.distance(memberCoords(relayNode2)))).minBy(_._2)
+            // 2. parents not forwarded to same host, self is not neighbour closest to both -> find closest neighbour to both (that is neither of the parent relay nodes)
+            if(minDistSumToRelayNodes._1._1 != currentNode) {
+              traverseNetworkTree(minDistSumToRelayNodes._1._1, b)
+            // 3. parents forwarded to different hosts, currentNode is closest neighbour to both -> deploy on self
+            } else {
+              val parent1Placement = traverseNetworkTree(curRelayNodes(b.sq1), b.sq1)
+              val parent2Placement = traverseNetworkTree(curRelayNodes(b.sq2), b.sq2)
+              (parent1Placement ++ parent2Placement).updated(b, currentNode)
+            }
+          }
+
+        case s: SequenceQuery =>
+          if(currentNode == curRelayNodes(s))
+            Map(s -> currentNode)
+          else
+            traverseNetworkTree(curRelayNodes(s), s)
+
+        case _ => throw new IllegalArgumentException(s"unknown operator $subQuery")
+      }
+    }
+
+    for {
+      memberCoords <- getCoordinatesOfMembers(findPossibleNodesToDeploy(cluster), Some(rootOperator))
+    } yield {
+      val clientNode = cluster.state.members.find(_.hasRole("Subscriber")).get
+      val placement = traverseNetworkTree(clientNode, rootOperator)(memberCoords)
+      placement.map(e => e._1 -> HostInfo(e._2, e._1, getPlacementMetrics(e._1)))
+    }
+    /*
+    // find the node that has minimum vivaldi distance
+    def findNextHopNode(parentPublishers: Map[String, ActorRef])(implicit memberCoords: Map[Member, Coordinates], clientNode: Member): Member = {
+      val parentCoords = memberCoords.filter(m => parentPublishers.exists(p => p._2.path.address == m._1.address))
+      val distanceSumsToParents = memberCoords.map(m => m._1 -> parentCoords.map(p => p._2.distance(m._2)).sum)
+      distanceSumsToParents.minBy(_._2)._1
+    }
+
+    def findHostRec(curOp: Query)(implicit memberCoords: Map[Member, Coordinates], clientNode: Member): Map[Query, HostInfo] = {
+      curOp match {
+        case s: SequenceQuery => // treat this as a binary operator with two StreamQuery parents -> place on the node with minimum vivaldi distance to both publishers
+          val parentPublishers: Map[String, ActorRef] = publishers.filter(p => p._1 == s.s1.publisherName || p._1 == s.s2.publisherName)
+          val nextHopNode = findNextHopNode(parentPublishers)
+          Map(s -> HostInfo(nextHopNode, s, getPlacementMetrics(s)))
+
+        case s: StreamQuery => // place on the publisher
+          Map(s -> HostInfo(memberCoords.find(_._1.address == publishers(s.publisherName).path.address).get._1, s, getPlacementMetrics(s)))
+
+        case u: UnaryQuery =>// place on same node as parent
+          val parentPlacements = findHostRec(u.sq)
+          parentPlacements.updated(u, HostInfo(parentPlacements(u.sq).member, u, getPlacementMetrics(u)))
+
+        case b: BinaryQuery =>// place on same node as parents if both placed on same node, otherwise
+          val parentPlacements = findHostRec(b.sq1) ++ findHostRec(b.sq2)
+          val host = if(parentPlacements(b.sq1).member == parentPlacements(b.sq2).member) { // parents on same host
+            parentPlacements(b.sq1).member
+          } else { // parents on different hosts -> place
+            parentPlacements(b.sq1)
+            val parentPublishers = Queries.getPublishers(b).map(p => p -> publishers(p)).toMap
+            findNextHopNode(parentPublishers)
+          }
+          parentPlacements.updated(b, HostInfo(host, b, getPlacementMetrics(b)))
+      }
+    }
+
+    for {
+      candidates: Set[Member] <- findPossibleNodesToDeploy(cluster)
+      memberCoords: Map[Member, Coordinates] <- getCoordinatesOfMembers(candidates, Some(query))
+      clientNode = cluster.state.members.find(_.hasRole("Subscriber")).get
+    } yield findHostRec(query)(memberCoords, clientNode)
+  */
+  }
 }

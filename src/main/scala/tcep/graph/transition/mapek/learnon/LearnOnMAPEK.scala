@@ -6,9 +6,8 @@ import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK
 import tcep.graph.transition.mapek.contrast.CFM
-import tcep.placement.PlacementStrategy
 
-class LearnOnMAPEK(context: ActorContext, transitionConfig: TransitionConfig, query: Query, currentPlacementStrategy: PlacementStrategy, fixedSimulationProperties: Map[Symbol, Int], consumer: ActorRef, pimPaths: (String, String))
+class LearnOnMAPEK(context: ActorContext, transitionConfig: TransitionConfig, query: Query, currentPlacementStrategy: String, fixedSimulationProperties: Map[Symbol, Int], consumer: ActorRef, pimPaths: (String, String))
   extends MAPEK(context) {
 
   val monitor: ActorRef = context.actorOf(Props(new LearnOnMonitor(this, consumer, fixedSimulationProperties)))

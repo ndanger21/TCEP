@@ -35,7 +35,7 @@ import scala.util.{Failure, Success}
 class QueryGraph(query: Query,
                  transitionConfig: TransitionConfig,
                  publishers: Map[String, ActorRef],
-                 startingPlacementStrategy: Option[PlacementStrategy],
+                 startingPlacementStrategy: Option[String],
                  createdCallback: Option[CreatedCallback],
                  consumer: ActorRef,
                  mapekType: String = "requirementBased")
@@ -60,7 +60,7 @@ class QueryGraph(query: Query,
 
   def createAndStart(eventCallback: Option[EventCallback] = None): Future[ActorRef] = {
     log.info(s"Creating and starting new QueryGraph with placement ${
-      if (startingPlacementStrategy.isDefined) startingPlacementStrategy.get.name else "default (depends on MAPEK implementation)"} and publishers \n ${publishers.mkString("\n")}")
+      if (startingPlacementStrategy.isDefined) startingPlacementStrategy.get else "default (depends on MAPEK implementation)"} and publishers \n ${publishers.mkString("\n")}")
     val queryDependencies = extractOperatorsAndThroughputEstimates(query)
     for {
       rootOperator <- startDeployment(eventCallback, queryDependencies)
@@ -73,7 +73,7 @@ class QueryGraph(query: Query,
       mapek.knowledge ! SetDeploymentStatus(true)
       Thread.sleep(100) // wait a bit here to avoid glitch where last addOperator msg arrives at knowledge AFTER
       // StartExecution msg is sent
-      mapek.knowledge ! NotifyOperators(StartExecution(startingPlacementStrategy.getOrElse(PietzuchAlgorithm).name))
+      mapek.knowledge ! NotifyOperators(StartExecution(startingPlacementStrategy.getOrElse(PietzuchAlgorithm.name)))
       log.info(s"started query ${query} \n in mode ${transitionConfig} with PlacementAlgorithm ${placementStrategy.name} and placement \n${deployedOperators.mkString("\n")}")
       rootOperator
     }
@@ -88,7 +88,7 @@ class QueryGraph(query: Query,
         // some placement algorithms calculate an initial placement with global knowledge for all operators,
         // instead of calculating the optimal node one after another
         val initialOperatorPlacementRequest = placementStrategy.asInstanceOf[SpringRelaxationLike]
-                                                               .initialVirtualOperatorPlacement(query, publishers)
+                                                               .getVirtualOperatorPlacementCoords(query, publishers)
         initialOperatorPlacementRequest.onComplete {
           case Success(value) => SpecialStats.log(s"$this", "placement",s"initial deployment virtual placement took ${System.currentTimeMillis() - startTime}ms")
           case Failure(exception) => SpecialStats.log(s"$this", "placement",s"initial deployment virtual placement failed after" + s" ${System.currentTimeMillis() - startTime}ms, cause: \n $exception")
@@ -150,7 +150,7 @@ class QueryGraph(query: Query,
     val deployment: Future[(ActorRef, HostInfo)] = {
       if (placementStrategy.hasInitialPlacementRoutine() && initialOperatorPlacement.contains(operator)) {
         for {hostInfo <- placementStrategy.asInstanceOf[SpringRelaxationLike]
-                                          .findHost(initialOperatorPlacement(operator), Map(), operator, dependencies, queryDependencies.mapValues(_._4).toMap)
+                                          .findHost(initialOperatorPlacement(operator), Map(), operator, placementStrategy.parentAddressTransform(dependencies), queryDependencies.mapValues(_._4).toMap)
              deployedOperator <- createOperator(operator, hostInfo, false, None, parentOperators.map(_._1): _ *) } yield {
           if (reliabilityReqPresent) { // for now, start duplicate on self (just like relaxation does in this case, see findOptimalNodes())
             val backupDeployment = createOperator(operator, HostInfo(cluster.selfMember, operator, hostInfo.operatorMetrics) , true,

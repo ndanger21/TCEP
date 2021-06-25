@@ -1,30 +1,27 @@
 
 package tcep.simulation.tcep
 
-import java.io.{File, PrintStream}
 import akka.actor.{ActorContext, ActorRef}
 import akka.cluster.Cluster
-import akka.dispatch.MessageDispatcher
 import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK.{GetPlacementStrategyName, GetTransitionStatus, IsDeploymentComplete}
+import tcep.graph.transition.mapek.contrast.CFM
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData}
 import tcep.graph.transition.mapek.contrast.FmNames._
-import tcep.graph.transition.mapek.contrast.{CFM, RequirementChecker}
 import tcep.graph.transition.mapek.learnon.LearnOnMAPEK
 import tcep.graph.transition.mapek.learnon.LearnOnMessages.GetLearnOnLogData
 import tcep.graph.transition.mapek.learnon.LightweightMessages.GetLightweightLogData
 import tcep.graph.transition.mapek.learnon.ModelRLMessages.GetModelRLLogData
 import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
-import tcep.placement.PlacementStrategy
 import tcep.prediction.PredictionHelper.Throughput
 
+import java.io.{File, PrintStream}
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
-import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 
 /**
@@ -42,7 +39,7 @@ import scala.concurrent.duration._
   */
 class SPLCDataCollectionSimulation(
                                   name: String, query: Query, transitionConfig: TransitionConfig, publishers: Map[String, ActorRef],
-                                  consumer: ActorRef, startingPlacementAlgorithm: Option[PlacementStrategy],
+                                  consumer: ActorRef, startingPlacementAlgorithm: Option[String],
                                   mapekType: String = "CONTRAST"
                                   )(implicit cluster: Cluster, context: ActorContext, publisherEventRates: Map[String, Throughput], directory: Option[File],
                                     fixedSimulationProperties: Map[Symbol, Int] = Map(), pimPaths: (String, String) = ("", ""))
@@ -52,9 +49,8 @@ class SPLCDataCollectionSimulation(
   val splcOut: PrintStream = directory map { directory => new PrintStream(new File(directory, s"$name-$ldt" + "_splc.csv"))
   } getOrElse java.lang.System.out
 
-  val learningModel = ConfigFactory.load().getString("constants.mapek.learning-model").toLowerCase
+  val learningModel = if(mapekType == "LearnOn") ConfigFactory.load().getString("constants.mapek.learning-model").toLowerCase else ""
   var cfm: Option[CFM] = None
-  var predictionHelper: Option[RequirementChecker] = None
 
   def splcHeader: String = (cfmFeatures ++ fixedCFMAttributes ++ variableCFMAttributes ++ metricElements).mkString(";")
   /*def logHeader: String = s"Time \t Algorithm" +
@@ -81,13 +77,20 @@ class SPLCDataCollectionSimulation(
         s"\t eventPublishRate \t eventArrivalRate " +
         s"\t TransitionStatus \t latencyPredictions " +
         s"\t loadPredictions"
-    } else {
+    } else if(this.learningModel.equals("rl")) {
       s"Time \t Algorithm" +
         s"\t latency" +
         s"\t cpuUsage" +
         s"\t eventPublishRate \t eventArrivalRate " +
         s"\t TransitionStatus" +
         s"\t CurrentQVals \t QTableUpdateTime "
+    } else {
+      s"Time \t Algorithm" +
+        s"\t latency" +
+        s"\t cpuUsage" +
+        //s"\t eventPublishRate
+        s"\t eventArrivalRate " +
+        s"\t TransitionStatus"
     }
   }
 
@@ -98,7 +101,6 @@ class SPLCDataCollectionSimulation(
     for { res <- (queryGraph.mapek.knowledge ? GetCFM).mapTo[CFM] } yield {
       log.info("received cfm from knowledge")
       cfm = Some(res)
-      predictionHelper = Some(new RequirementChecker(cfm.get.getFM, contextConfig = null))
 
       // SPLC measurement file header; status of all features is needed for SPLC
       splcOut.append(splcHeader)
@@ -122,7 +124,7 @@ class SPLCDataCollectionSimulation(
             //_ <- Future { log.info(s"deployment complete: $deploymentComplete")}
             contextData <- (queryGraph.mapek.knowledge ? GetContextData).mapTo[Map[String, AnyVal]]
             //_ <- Future { log.info(s"contextData: ${contextData.mkString("\n")}")}
-            if deploymentComplete && contextData.nonEmpty
+            if deploymentComplete //&& contextData.nonEmpty
             transitionStatus <- (queryGraph.mapek.knowledge ? GetTransitionStatus).mapTo[Int]
             //_ <- Future { log.info(s"transitionStatus: $transitionStatus")}
             strategyName <- (queryGraph.mapek.knowledge ? GetPlacementStrategyName).mapTo[String]
@@ -155,12 +157,12 @@ class SPLCDataCollectionSimulation(
                 out.append(
                   s"$time" +
                     s"\t$strategyName" +
-                    s"\t${contextData(LATENCY)}" +
+                    s"\t${cAllRecords.recordLatency.lastMeasurement.get.toMillis}" +
                     s"\t$estimatedLatency" +
-                    s"\t${contextData(AVG_LOAD)}" +
+                    s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
                     s"\t$estimatedLoad" +
-                    s"\t${contextData(EVENT_PUBLISHING_RATE)}" +
-                    s"\t${contextData(AVG_EVENT_ARRIVAL_RATE)}" +
+                    s"\t${cAllRecords.recordPublishingRate.lastRateMeasurement.getOrElse(0)}" +
+                    s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
                     s"\t$transitionStatus" +
                     s"\t${learnOnLogData.get("latency").get}" +
                     s"\t${learnOnLogData.get("load").get}\t"
@@ -174,10 +176,10 @@ class SPLCDataCollectionSimulation(
                 out.append(
                   s"$time" +
                     s"\t$strategyName" +
-                    s"\t${contextData(LATENCY)}" +
-                    s"\t${contextData(AVG_LOAD)}" +
-                    s"\t${contextData(EVENT_PUBLISHING_RATE)}" +
-                    s"\t${contextData(AVG_EVENT_ARRIVAL_RATE)}" +
+                    s"\t${cAllRecords.recordLatency.lastMeasurement.get.toMillis}" +
+                    s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
+                    s"\t${cAllRecords.recordPublishingRate.lastRateMeasurement.getOrElse(0)}" +
+                    s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
                     s"\t$transitionStatus" +
                     s"\t${learnOnLogData._1.toString()}" +
                     s"\t${learnOnLogData._2.toString()}\t"
@@ -191,10 +193,10 @@ class SPLCDataCollectionSimulation(
                 out.append(
                   s"$time" +
                     s"\t$strategyName" +
-                    s"\t${contextData(LATENCY)}" +
-                    s"\t${contextData(AVG_LOAD)}" +
-                    s"\t${contextData(EVENT_PUBLISHING_RATE)}" +
-                    s"\t${contextData(AVG_EVENT_ARRIVAL_RATE)}" +
+                    s"\t${cAllRecords.recordLatency.lastMeasurement.get.toMillis}" +
+                    s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
+                    s"\t${cAllRecords.recordPublishingRate.lastRateMeasurement.getOrElse(0)}" +
+                    s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
                     s"\t$transitionStatus" +
                     s"\t${learnOnLogData.slice(0, learnOnLogData.size - 1)}" +
                     s"\t${learnOnLogData.last}"
@@ -206,17 +208,12 @@ class SPLCDataCollectionSimulation(
               out.append(
                 s"$time" +
                   s"\t$strategyName" +
-                  s"\t${contextData(LATENCY)}" +
-                  s"\t-" +
-                  s"\t${contextData(AVG_LOAD)}" +
-                  s"\t-" +
-                  s"\t${contextData(EVENT_PUBLISHING_RATE)}" +
-                  s"\t${contextData(AVG_EVENT_ARRIVAL_RATE)}" +
-                  s"\t$transitionStatus" +
-                  s"\t-1" +
-                  s"\t-1\t"
+                  s"\t${cAllRecords.recordLatency.lastMeasurement.get.toMillis}" +
+                  s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
+                  //s"\t${cAllRecords.recordPublishingRate.lastRateMeasurement.getOrElse(0)}" +
+                  s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
+                  s"\t$transitionStatus"
               )
-              log.info("Failed to get LogData!")
               out.println()
             }
 

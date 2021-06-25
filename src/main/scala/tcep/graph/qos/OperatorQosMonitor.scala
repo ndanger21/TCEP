@@ -9,10 +9,11 @@ import tcep.graph.qos.OperatorQosMonitor._
 import tcep.graph.transition.mapek.DynamicCFMNames._
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BytePerSec, KBytePerSec}
 import tcep.machinenodes.qos.BrokerQoSMonitor._
-import tcep.utils.{SizeEstimator, SpecialStats}
+import tcep.utils.SizeEstimator
 
 import java.util.concurrent.TimeUnit
 import scala.collection.mutable.ListBuffer
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.FiniteDuration
 
 /**
@@ -25,9 +26,10 @@ import scala.concurrent.duration.FiniteDuration
   * - mean + var processing latency
   * - mean + var of network latency to parent operator (time between sending from parent until event is taken off mailbox at this operator)
   */
-class OperatorQosMonitor(operator: ActorRef, shiftTarget: Boolean = true) extends Actor with Timers with ActorLogging {
+class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with ActorLogging {
 
   val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
+  implicit val blockingIoDispatcher: ExecutionContext = context.system.dispatchers.lookup("blocking-io-dispatcher")
 
   var eventSizeIn: ListBuffer[Long] = ListBuffer.empty
   var eventSizeOut: Long = 0
@@ -39,18 +41,13 @@ class OperatorQosMonitor(operator: ActorRef, shiftTarget: Boolean = true) extend
   var endToEndLatency: MeanAndVariance = MeanAndVariance(0.0, 0.0, 0)
   val eventSamples: ListBuffer[Event] = ListBuffer.empty
   val brokerQoSMonitor: ActorSelection = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))
-  val logFileString: String = self.toString().split("-").head.split("/").last
   var lastSamples: Samples = List()
 
   override def preStart(): Unit = {
     super.preStart()
     timers.startTimerWithFixedDelay(SamplingTickKey, SamplingTick, samplingInterval)
     // logfile heading
-    SpecialStats.log(logFileString, logFileString,
-      //s"timestamp;timeSinceStart;Actor;" +
-        s"eventSizeInKB;eventSizeOutKB;operatorSelectivity;eventRateIn;eventRateOut;" +
-        s"interArrivalMean;interArrivalStdDev;networkParentLatencyMean;networkParentLatencyStdDev;processingLatencyMean;processingLatencyStdDev;e2eLatencyMean;e2eLatencyStdDev;" +
-        s"brokerCPULoad;brokerThreadCount;brokerOperatorCount;brokerOtherBandwidthInKB;brokerOtherBandwidthOutKB")
+
   }
 
   override def receive: Receive = {
@@ -59,13 +56,13 @@ class OperatorQosMonitor(operator: ActorRef, shiftTarget: Boolean = true) extend
 
     case SamplingTick =>
       val start = System.nanoTime()
-      eventSizeOut = if(eventSamples.nonEmpty) SizeEstimator.estimate(eventSamples.head) else 0
-      val parentCount = if(eventSamples.nonEmpty) eventSamples.head.monitoringData.processingStats.eventSizeIn.size else 0
+      eventSizeOut = if (eventSamples.nonEmpty) SizeEstimator.estimate(eventSamples.head) else 0
+      val parentCount = if (eventSamples.nonEmpty) eventSamples.head.monitoringData.processingStats.eventSizeIn.size else 0
       eventSizeIn.clear()
       eventRateIn.clear()
       for (i <- 0 until parentCount) {
-        eventSizeIn += (if(eventSamples.nonEmpty) eventSamples.map(_.monitoringData.processingStats.eventSizeIn(i)).sum / eventSamples.size else 0)
-        eventRateIn += (if(eventSamples.nonEmpty) eventSamples.map(_.monitoringData.processingStats.eventRateIn(i)).sum / eventSamples.size else 0)
+        eventSizeIn += (if (eventSamples.nonEmpty) eventSamples.map(_.monitoringData.processingStats.eventSizeIn(i)).sum / eventSamples.size else 0)
+        eventRateIn += (if (eventSamples.nonEmpty) eventSamples.map(_.monitoringData.processingStats.eventRateIn(i)).sum / eventSamples.size else 0)
       }
       eventRateOut = eventSamples.size / samplingInterval.toSeconds
       // ms
@@ -77,10 +74,10 @@ class OperatorQosMonitor(operator: ActorRef, shiftTarget: Boolean = true) extend
       endToEndLatency = meanAndVariance(e2eLatencySamples)
       val arrivalTimestampsNS = eventSamples.map(_.monitoringData.processingStats.processingStartNS).toVector
       val interArrivals = ListBuffer[Double]()
-      for (i <- 0 until arrivalTimestampsNS.size - 1) interArrivals += (arrivalTimestampsNS(i+1) - arrivalTimestampsNS(i)) / 1e6
+      for (i <- 0 until arrivalTimestampsNS.size - 1) interArrivals += (arrivalTimestampsNS(i + 1) - arrivalTimestampsNS(i)) / 1e6
       interArrivalLatency = meanAndVariance(interArrivals)
 
-      log.info("operator SamplingTick took {}ms: {} samples\neventRateIO: {} {}\neventSizeIO {} {} \nnetworkLatencyParents {}\nprocessingLatency {}\ne2eLatency {} \ninterArrivalLatency {}",
+      log.debug("operator SamplingTick took {}ms: {} samples\neventRateIO: {} {}\neventSizeIO {} {} \nnetworkLatencyParents {}\nprocessingLatency {}\ne2eLatency {} \ninterArrivalLatency {}",
         Array((System.nanoTime() - start) / 1e6, eventSamples.size, eventRateIn, eventRateOut, eventRateIn, eventSizeOut, networkToParentLatency, processingLatency, endToEndLatency, interArrivalLatency))
 
       eventSamples.clear()
@@ -90,19 +87,8 @@ class OperatorQosMonitor(operator: ActorRef, shiftTarget: Boolean = true) extend
 
     case b: BrokerQosMetrics =>
       val currentValues = getCurrentMetrics
-      lastSamples = List((currentValues, b),  lastSamples.head)
-      // log feature and metric values, use previous sample's target value if shiftTarget == true
-      // TODO move to DecentralizedMonitor
-      if(!shiftTarget || shiftTarget && lastSamples.size > 1)  SpecialStats.log(logFileString, logFileString,
-        s"${currentValues.eventSizeIn.sum.toDouble / 1024};${currentValues.eventSizeOut / 1024};${selectivity};" +
-          s"${currentValues.ioMetrics.incomingEventRate};${getTargetSample._1.ioMetrics.outgoingEventRate};" +
-          s"${currentValues.interArrivalLatency.mean};${currentValues.interArrivalLatency.stdDev};" +
-          s"${currentValues.networkToParentLatency.mean};${currentValues.networkToParentLatency.stdDev};" +
-          s"${currentValues.processingLatency.mean};${currentValues.processingLatency.stdDev};" +
-          s"${getTargetSample._1.endToEndLatency.mean};${getTargetSample._1.endToEndLatency.stdDev}" +
-          s"${b.cpuLoad};${b.cpuThreadCount};${b.deployedOperators};" +
-          s"${b.IOMetrics.incomingBandwidth.toUnit(KBytePerSec).amount};${b.IOMetrics.outgoingBandwidth.toUnit(KBytePerSec).amount}")
-
+      lastSamples = List(Some((currentValues, b)),  lastSamples.headOption).flatten
+      log.debug("received broker samples, last sample is now {}", lastSamples.head)
 
     case GetIOMetrics =>
       sender() ! IOMetrics(eventRateIn.sum, eventRateOut, bandwidthIn, bandwidthOut)
@@ -113,24 +99,24 @@ class OperatorQosMonitor(operator: ActorRef, shiftTarget: Boolean = true) extend
 
   def bandwidthIn: Bandwidth = Bandwidth(eventRateIn.zip(eventSizeIn).map(p => p._1 * p._2).sum, BytePerSec)
   def bandwidthOut: Bandwidth = Bandwidth(eventRateOut * eventSizeOut, BytePerSec)
-  def selectivity: Double = eventRateOut / eventRateIn.sum
   def getCurrentMetrics: OperatorQoSMetrics = OperatorQoSMetrics(
-    eventSizeIn.toList, eventSizeOut, selectivity,
+    eventSizeIn.toList, eventSizeOut,
     interArrivalLatency, processingLatency, networkToParentLatency, endToEndLatency,
     IOMetrics(eventRateIn.sum, eventRateOut, bandwidthIn, bandwidthOut)
   )
-  def getTargetSample: Sample = if(shiftTarget) lastSamples.last else lastSamples.head
+
 
 }
 
 object OperatorQosMonitor {
   case object GetSamples
   type Sample = (OperatorQoSMetrics, BrokerQosMetrics)
+  type Samples = List[Sample]
   def getFeatureValue(sample: Sample, feature: String): AnyVal = {
     if(ALL_FEATURES.contains(feature)) {
       feature match {
-        case EVENTSIZE_IN_KB => sample._1.eventSizeIn.sum
-        case EVENTSIZE_OUT_KB => sample._1.eventSizeOut
+        case EVENTSIZE_IN_KB => sample._1.eventSizeIn.sum / 1024
+        case EVENTSIZE_OUT_KB => sample._1.eventSizeOut / 1024
         case OPERATOR_SELECTIVITY => sample._1.selectivity
         case EVENTRATE_IN => sample._1.ioMetrics.incomingEventRate
         case INTER_ARRIVAL_MEAN_MS => sample._1.interArrivalLatency.mean
@@ -147,16 +133,26 @@ object OperatorQosMonitor {
       }
     } else throw new IllegalArgumentException(s"can't retrieve feature value $feature, must be one of ${ALL_FEATURES}")
   }
-  type Samples = List[Sample]
+  def getTargetMetricValue(sample: Sample, metric: String): AnyVal = {
+    metric match {
+      case EVENTRATE_OUT => sample._1.ioMetrics.outgoingEventRate
+      case END_TO_END_LATENCY_MEAN_MS => sample._1.endToEndLatency.mean
+      case END_TO_END_LATENCY_STD_MS => sample._1.endToEndLatency.stdDev
+    }
+
+  }
+
   case object GetOperatorQoSMetrics
   case class OperatorQoSMetrics(eventSizeIn: List[Long],
                                 eventSizeOut: Long,
-                                selectivity: Double,
                                 interArrivalLatency: MeanAndVariance,
                                 processingLatency: MeanAndVariance,
                                 networkToParentLatency: MeanAndVariance,
                                 endToEndLatency: MeanAndVariance,
-                                ioMetrics: IOMetrics)
+                                ioMetrics: IOMetrics) {
+    def selectivity: Double = ioMetrics.outgoingEventRate / ioMetrics.incomingEventRate
+
+  }
   case class UpdateEventRateOut(rate: Double)
   case class UpdateEventSizeOut(size: Long)
   private case object SamplingTick

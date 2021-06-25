@@ -1,12 +1,11 @@
 package tcep.graph.nodes.traits
 
-import akka.actor.{ActorRef, PoisonPill}
+import akka.actor.{ActorRef, Address, PoisonPill}
 import tcep.data.Events._
 import tcep.data.Queries._
 import tcep.graph.nodes.ShutDown
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, Subscribe}
 import tcep.graph.transition.{TransferredState, TransitionRequest, TransitionStats}
-import tcep.placement.PlacementStrategy
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.utils.TCEPUtils
 
@@ -30,7 +29,7 @@ abstract class UnaryNode(var parentActor: Seq[ActorRef]) extends Node {
 
     case DependenciesRequest => sender() ! DependenciesResponse(parentActor)
 
-    case TransferredState(placementAlgo, successor, oldParent, stats, lastOperator) =>
+    case TransferredState(placementAlgo, successor, oldParent, stats, lastOperator, placement) =>
       if(!selfTransitionStarted) {
         selfTransitionStarted = true
         if (parentActor.contains(oldParent)) {
@@ -38,8 +37,8 @@ abstract class UnaryNode(var parentActor: Seq[ActorRef]) extends Node {
           updateParentOperatorMap(oldParent, successor)
         } else log.error(new IllegalStateException(s"received TransferState msg from non-parent: ${oldParent}; \n parent: \n $getParentActors()"), "TRANSITION ERROR")
 
-        transitionLog(s"old parent transition to new parent with ${placementAlgo.name} complete, executing own transition")
-        executeTransition(transitionRequestor, placementAlgo, stats) // stats are updated by MFGS/SMS receive of TransferredState
+        transitionLog(s"old parent transition to new parent with ${placementAlgo} complete, executing own transition")
+        executeTransition(transitionRequestor, placementAlgo, stats, placement) // stats are updated by MFGS/SMS receive of TransferredState
       }
 
     case OperatorMigrationNotice(oldOperator, newOperator) =>  // received from migrating parent
@@ -56,12 +55,13 @@ abstract class UnaryNode(var parentActor: Seq[ActorRef]) extends Node {
   }
 
 
-  override def handleTransitionRequest(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
-    log.info(s"Asking ${parentActor.last.path.name} to transit to algorithm ${algorithm.name}")
-    transitionLog(s"asking old parent ${parentActor.last.path} to transit to new parent with ${algorithm.name}")
+  override def handleTransitionRequest(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
+    log.info(s"Asking ${parentActor.last.path.name} to transit to algorithm ${algorithm}")
+    transitionLog(s"asking old parent ${parentActor.last.path} to transit to new parent with ${algorithm}")
     transitionRequestor = requester
     transitionStartTime = System.currentTimeMillis()
-    TCEPUtils.guaranteedDelivery(context, parentActor.last, TransitionRequest(algorithm, self, stats), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))(blockingIoDispatcher)
+    TCEPUtils.guaranteedDelivery(context, parentActor.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))(blockingIoDispatcher)
   }
+
 
 }

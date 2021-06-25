@@ -49,19 +49,19 @@ class RequirementCheckerTest extends FunSuite {
     val reqGEQ: LatencyRequirement = latency >= timespan(1000.milliseconds) otherwise Option.empty
     val reqLT: LatencyRequirement = latency < timespan(1000.milliseconds) otherwise Option.empty
     val reqLEQ: LatencyRequirement = latency <= timespan(1000.milliseconds) otherwise Option.empty
-
-    assert(uut.compareHelper(reqEQ.latency.toMillis, reqEQ.operator, 1000.0d))
-    assert(!uut.compareHelper(reqEQ.latency.toMillis, reqEQ.operator, 2000.0d))
-    assert(uut.compareHelper(reqNEQ.latency.toMillis, reqNEQ.operator, 2000.0d))
-    assert(!uut.compareHelper(reqNEQ.latency.toMillis, reqNEQ.operator, 1000.0d))
-    assert(uut.compareHelper(reqGT.latency.toMillis, reqGT.operator, 2000.0d))
-    assert(!uut.compareHelper(reqGT.latency.toMillis, reqGT.operator, 200.0d))
-    assert(uut.compareHelper(reqGEQ.latency.toMillis, reqGEQ.operator, 1000.0d))
-    assert(!uut.compareHelper(reqGEQ.latency.toMillis, reqGEQ.operator, 999.0d))
-    assert(uut.compareHelper(reqLT.latency.toMillis, reqLT.operator, 999.0d))
-    assert(!uut.compareHelper(reqLT.latency.toMillis, reqLT.operator, 1000.0d))
-    assert(uut.compareHelper(reqLEQ.latency.toMillis, reqLEQ.operator, 1000.0d))
-    assert(!uut.compareHelper(reqLEQ.latency.toMillis, reqLEQ.operator, 1001.0d))
+    import tcep.data.Queries.compareHelper
+    assert(compareHelper(reqEQ.latency.toMillis, reqEQ.operator, 1000.0d))
+    assert(!compareHelper(reqEQ.latency.toMillis, reqEQ.operator, 2000.0d))
+    assert(compareHelper(reqNEQ.latency.toMillis, reqNEQ.operator, 2000.0d))
+    assert(!compareHelper(reqNEQ.latency.toMillis, reqNEQ.operator, 1000.0d))
+    assert(compareHelper(reqGT.latency.toMillis, reqGT.operator, 2000.0d))
+    assert(!compareHelper(reqGT.latency.toMillis, reqGT.operator, 200.0d))
+    assert(compareHelper(reqGEQ.latency.toMillis, reqGEQ.operator, 1000.0d))
+    assert(!compareHelper(reqGEQ.latency.toMillis, reqGEQ.operator, 999.0d))
+    assert(compareHelper(reqLT.latency.toMillis, reqLT.operator, 999.0d))
+    assert(!compareHelper(reqLT.latency.toMillis, reqLT.operator, 1000.0d))
+    assert(compareHelper(reqLEQ.latency.toMillis, reqLEQ.operator, 1000.0d))
+    assert(!compareHelper(reqLEQ.latency.toMillis, reqLEQ.operator, 1001.0d))
   }
 
   test("excludeFeatureFromConfiguration should add a cross-tree constraint excluding the feature") {

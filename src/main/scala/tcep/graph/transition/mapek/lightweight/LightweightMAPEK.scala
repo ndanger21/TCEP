@@ -1,17 +1,11 @@
 package tcep.graph.transition.mapek.lightweight
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorContext, ActorRef, Props}
-import com.typesafe.config.ConfigFactory
 import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK
-import tcep.placement.PlacementStrategy
 
-import scala.concurrent.duration.FiniteDuration
-
-class LightweightMAPEK(context: ActorContext, query: Query,transitionConfig: TransitionConfig, startingPlacementStrategy: PlacementStrategy, consumer: ActorRef) extends MAPEK(context) {
+class LightweightMAPEK(context: ActorContext, query: Query,transitionConfig: TransitionConfig, startingPlacementStrategy: String, consumer: ActorRef) extends MAPEK(context) {
 
   val monitor: ActorRef = context.actorOf(Props(new LightweightMonitor(this)))
   val analyzer: ActorRef = context.actorOf(Props(new LightweightAnalyzer(this)))

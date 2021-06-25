@@ -46,7 +46,7 @@ class DynamicCFM(rootOperator: Query) extends CFM {
     * @param context most recent feature samples of each operator
     * @return the current context config with the given sample values for each operator
     */
-  def getCurrentContextConfig(context: Map[Query, Sample]): Config = {
+  def getCurrentContextConfigFromSamples(context: Map[Query, Sample]): Config = {
     try {
       val root: Feature = FmUtil.findFeatureByName(cfm, ROOT).get
       val contextFeatureGroup: Feature = FmUtil.findFeatureByName(cfm, CONTEXT).get
@@ -170,6 +170,7 @@ object DynamicCFMNames {
 
   val ALL_TARGET_METRICS = List(
     END_TO_END_LATENCY_MEAN_MS,
+    END_TO_END_LATENCY_STD_MS,
     EVENTRATE_OUT
   )
 

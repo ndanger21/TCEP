@@ -1,7 +1,5 @@
 package tcep.graph.transition.mapek.contrast
 
-import java.util.NoSuchElementException
-
 import org.cardygan.config.impl.{IntAttrInstImpl, RealAttrInstImpl}
 import org.cardygan.config.util.{ConfigFactoryUtil, ConfigUtil}
 import org.cardygan.config.{AttrInst, Config, Instance}
@@ -12,6 +10,7 @@ import org.slf4j.LoggerFactory
 import tcep.data.Queries._
 import tcep.graph.transition.mapek.contrast.FmNames._
 
+import java.util.NoSuchElementException
 import scala.collection.JavaConverters._
 
 /**
@@ -187,24 +186,7 @@ class RequirementChecker(val cfm: FM, val contextConfig: Config, blacklistedFeat
     systemConfig
   }
 
-  /**
-    * helper function to compare a requirement value to an actual value
-    *
-    * @param reqVal value of the requirement
-    * @param op comparison operator
-    * @param otherVal value to compare to
-    * @return true if requirement is condition holds, false if violated
-    */
-  def compareHelper(reqVal: Double, op: Operator, otherVal: Double): Boolean = {
-    op match {
-      case Equal => reqVal == otherVal
-      case NotEqual => reqVal != otherVal
-      case Greater => otherVal > reqVal
-      case GreaterEqual => otherVal >= reqVal
-      case Smaller => otherVal < reqVal
-      case SmallerEqual => otherVal <= reqVal
-    }
-  }
+
 
   /**
     * prevent a feature from being selected in configuration by marking it as exclusive with the root feature

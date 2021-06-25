@@ -1,7 +1,5 @@
 package tcep.graph.transition.mapek.contrast
 
-import java.io.{File, FileOutputStream, InputStream}
-
 import org.cardygan.config.Config
 import org.cardygan.fm.FM
 import org.coala.Coala
@@ -9,6 +7,8 @@ import org.coala.model.PerformanceInfluenceModel
 import org.coala.util.SplConquererLogFileReader
 import org.slf4j.LoggerFactory
 import tcep.data.Queries.Requirement
+
+import java.io.{File, FileOutputStream, InputStream}
 /**
   * Created by Niels on 24.05.2018.
   */

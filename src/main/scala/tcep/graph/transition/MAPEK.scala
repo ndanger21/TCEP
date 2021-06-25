@@ -1,6 +1,6 @@
 package tcep.graph.transition
 
-import akka.actor.{Actor, ActorContext, ActorLogging, ActorRef, PoisonPill}
+import akka.actor.{Actor, ActorContext, ActorLogging, ActorRef, Address, PoisonPill}
 import akka.cluster.Cluster
 import akka.pattern.ask
 import akka.util.Timeout
@@ -33,7 +33,15 @@ trait MAPEKComponent extends Actor with ActorLogging {
   lazy val blockingIoDispatcher: ExecutionContext = context.system.dispatchers.lookup("blocking-io-dispatcher")
   implicit val ec: ExecutionContext = blockingIoDispatcher
 }
-trait MonitorComponent extends MAPEKComponent
+abstract class MonitorComponent(mapek: MAPEK) extends MAPEKComponent {
+  override def receive: Receive = {
+    case r: AddRequirement =>
+      mapek.knowledge ! r
+      mapek.analyzer ! r
+
+    case r: RemoveRequirement => mapek.knowledge ! r
+  }
+}
 trait AnalyzerComponent extends MAPEKComponent
 abstract class PlannerComponent(mapek: MAPEK) extends MAPEKComponent {
 
@@ -63,17 +71,16 @@ abstract class ExecutorComponent(mapek: MAPEK) extends MAPEKComponent {
         status <- (mapek.knowledge ? GetTransitionStatus).mapTo[Int]
       } yield {
         if (currentStrategyName != strategyName && status != 1) {
-          val placementStrategy = PlacementStrategy.getStrategyByName(strategyName)
-          mapek.knowledge ! SetPlacementStrategy(placementStrategy)
-          log.info(s"executing $mode transition to ${placementStrategy.name}")
-          client ! TransitionRequest(placementStrategy, self, TransitionStats(0, 0, System.currentTimeMillis()))
+          mapek.knowledge ! SetPlacementStrategy(strategyName)
+          log.info(s"executing $mode transition to ${strategyName}")
+          client ! TransitionRequest(strategyName, self, TransitionStats(0, 0, System.currentTimeMillis()), None)
         } else log.info(s"received ExecuteTransition message: not executing $mode transition to $strategyName " +
           s"since it is already active or another transition is still in progress (status: $status)")
       }
   }
 }
 
-abstract case class KnowledgeComponent(query: Query, var transitionConfig: TransitionConfig, var currentPlacementStrategy: PlacementStrategy) extends MAPEKComponent {
+abstract case class KnowledgeComponent(query: Query, var transitionConfig: TransitionConfig, var currentPlacementStrategy: String) extends MAPEKComponent {
   var client: ActorRef = _
   protected val requirements: scala.collection.mutable.Set[Requirement] = scala.collection.mutable.Set(pullRequirements(query, List()).toSeq: _*)
   var deploymentComplete: Boolean = false
@@ -90,7 +97,7 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
 
     case IsDeploymentComplete => sender() ! this.deploymentComplete
     case SetDeploymentStatus(isComplete) => this.deploymentComplete = isComplete
-    case GetPlacementStrategyName => sender() ! currentPlacementStrategy.name
+    case GetPlacementStrategyName => sender() ! currentPlacementStrategy
     case SetPlacementStrategy(newStrategy) =>
       this.currentPlacementStrategy = newStrategy
       log.info(s"updated current placementStrategy to $currentPlacementStrategy")
@@ -113,7 +120,7 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
       this.lastTransitionStats = stats
       this.lastTransitionDuration = lastTransitionEnd - stats.transitionStartAtKnowledge
       val reqname = if(requirements.nonEmpty) requirements.head.name
-      SpecialStats.log(this.getClass.toString, s"transitionStats-perQuery-${transitionConfig}-${currentPlacementStrategy.name}}",
+      SpecialStats.log(this.getClass.toString, s"transitionStats-perQuery-${transitionConfig}-${currentPlacementStrategy}}",
         s"total;transition time;${lastTransitionDuration};ms;" +
           s"placementOverheadKBytes;${lastTransitionStats.placementOverheadBytes / 1000.0};" +
           s"transitionOverheadKBytes;${lastTransitionStats.transitionOverheadBytes / 1000.0};" +
@@ -151,7 +158,7 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
       }
 
     case TransitionStatsSingle(operator, timetaken, placementOverheadBytes, transitionOverheadBytes) =>
-      SpecialStats.log(this.getClass.toString, s"transitionStats-perOperator-$transitionConfig-${currentPlacementStrategy.name}",
+      SpecialStats.log(this.getClass.toString, s"transitionStats-perOperator-$transitionConfig-${currentPlacementStrategy}",
         s"operator;$operator;$timetaken;ms;${placementOverheadBytes / 1000.0};kByte;${transitionOverheadBytes / 1000.0};kByte;${(transitionOverheadBytes + placementOverheadBytes) / 1000.0};kByte")
 
   }
@@ -194,21 +201,23 @@ abstract class MAPEK(context: ActorContext) {
 
 object MAPEK {
 
-  def createMAPEK(mapekType: String, query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: Option[PlacementStrategy], consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int] = Map(), pimPaths: (String, String))(implicit cluster: Cluster, context: ActorContext): MAPEK = {
+  def createMAPEK(mapekType: String, query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: Option[String], consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int] = Map(), pimPaths: (String, String))(implicit cluster: Cluster, context: ActorContext): MAPEK = {
 
     val placementAlgorithm = // get correct PlacementAlgorithm case class for both cases (explicit starting algorithm and implicit via requirements)
       if(startingPlacementStrategy.isEmpty) BenchmarkingNode.selectBestPlacementAlgorithm(List(), Queries.pullRequirements(query, List()).toList) // implicit
-      else BenchmarkingNode.algorithms.find(_.placement.name == startingPlacementStrategy.getOrElse(PietzuchAlgorithm).name).getOrElse( // explicit
+      else BenchmarkingNode.algorithms.find(_.placement.name == startingPlacementStrategy.getOrElse(PietzuchAlgorithm.name)).getOrElse( // explicit
         throw new IllegalArgumentException(s"missing configuration in application.conf for algorithm $startingPlacementStrategy"))
     val availableMapekTypes = ConfigFactory.load().getStringList("constants.mapek.availableTypes")
     assert(availableMapekTypes.contains(mapekType), s"mapekType must be either of $availableMapekTypes but was: $mapekType")
+    if(startingPlacementStrategy.isDefined) assert(BenchmarkingNode.algorithms.exists(p => p.placement.name == startingPlacementStrategy.get), s"unknown starting placement algorithm name: $startingPlacementStrategy")
+    val stratName = startingPlacementStrategy.getOrElse(PietzuchAlgorithm.name)
     mapekType match {
         // if no algorithm is specified, start with pietzuch, since no context information available yet
       case "requirementBased" => new RequirementBasedMAPEK(context, query, transitionConfig, placementAlgorithm)
-      case "CONTRAST" => new ContrastMAPEK(context, query, transitionConfig, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), fixedSimulationProperties, consumer)
-      case "lightweight" => new LightweightMAPEK(context, query, transitionConfig, placementAlgorithm.placement, consumer)
-      case "LearnOn" => new LearnOnMAPEK(context, transitionConfig, query, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), fixedSimulationProperties, consumer, pimPaths)
-      case "ExchangeablePerformanceModel" => new ExchangeablePerformanceModelMAPEK(query, transitionConfig, startingPlacementStrategy.getOrElse(PietzuchAlgorithm), consumer)
+      case "CONTRAST" => new ContrastMAPEK(context, query, transitionConfig, stratName, fixedSimulationProperties, consumer)
+      case "lightweight" => new LightweightMAPEK(context, query, transitionConfig, placementAlgorithm.placement.name, consumer)
+      case "LearnOn" => new LearnOnMAPEK(context, transitionConfig, query, stratName, fixedSimulationProperties, consumer, pimPaths)
+      case "ExchangeablePerformanceModel" => new ExchangeablePerformanceModelMAPEK(query, transitionConfig, stratName, consumer)
     }
 
   }
@@ -218,6 +227,7 @@ object MAPEK {
   case class RemoveRequirement(requirements: Seq[Requirement])
   case class ManualTransition(algorithmName: String)
   case class ExecuteTransition(algorithmName: String)
+  case class ExecuteTransitionWithPlacement(algorithmName: String, placement: Map[Query, Address]) extends TransitionControlMessage
   case object GetRequirements
   case object GetTransitionMode
   case class SetTransitionMode(mode: TransitionConfig)
@@ -239,7 +249,7 @@ object MAPEK {
   case object GetBackupOperators
   case object GetOperatorCount
   case object GetPlacementStrategyName
-  case class SetPlacementStrategy(strategy: PlacementStrategy)
+  case class SetPlacementStrategy(strategy: String)
   case object IsDeploymentComplete
   case class SetDeploymentStatus(complete: Boolean)
   case class GetAverageLatency(fromLastIntervalMs: Long)
@@ -249,7 +259,7 @@ object MAPEK {
 case class ChangeInNetwork(networkProperty: NetworkChurnRate)
 case class ScheduleTransition(strategy: PlacementStrategy)
 
-case class TransitionRequest(placementStrategy: PlacementStrategy, requester: ActorRef, transitionStats: TransitionStats) extends TransitionControlMessage
+case class TransitionRequest(placementStrategyName: String, requester: ActorRef, transitionStats: TransitionStats, placement: Option[Map[Query, Address]]) extends TransitionControlMessage
 case class StopExecution() extends TransitionControlMessage
 case class StartExecution(algorithmType: String) extends TransitionControlMessage
 case class AcknowledgeStart() extends TransitionControlMessage
@@ -257,8 +267,8 @@ case class SaveStateAndStartExecution(state: List[Any]) extends TransitionContro
 case class StartExecutionWithData(downTime:Long, startTime: Long, subscribers: List[(ActorRef, Query)], data: List[(ActorRef, Event)], algorithmType: String) extends TransitionControlMessage
 case class StartExecutionAtTime(subscribers: List[(ActorRef, Query)], startTime: Instant, algorithmType: String) extends TransitionControlMessage
 case class TransferEvents(downTime: Long, startTime: Long, subscribers: List[(ActorRef, Query)], windowEvents: List[(ActorRef, Event)], unsentEvents: List[(ActorRef, Event)], algorithmName: String) extends TransitionControlMessage
-case class TransferredState(placementAlgo: PlacementStrategy, newParent: ActorRef, oldParent: ActorRef, transitionStats: TransitionStats, lastOperator: Query) extends TransitionControlMessage
-case class MoveOperator(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats) extends TransitionControlMessage
+case class TransferredState(placementAlgo: String, newParent: ActorRef, oldParent: ActorRef, transitionStats: TransitionStats, lastOperator: Query, placement: Option[Map[Query, Address]]) extends TransitionControlMessage
+case class MoveOperator(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]) extends TransitionControlMessage
 case object SuccessorStart extends TransitionControlMessage
 // only used inside TransitionRequest and TransferredState; transitionOverheadBytes must be updated on receive of TransitionRequest and TransferredState, placementOverheadBytes on operator placement completion
 case class TransitionStats(

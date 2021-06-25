@@ -18,7 +18,7 @@ import tcep.graph.transition.MAPEK.{AddOperator, SetClient, SetDeploymentStatus,
 import tcep.graph.transition.{AcknowledgeStart, StartExecution}
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.machinenodes.helper.actors.TaskManagerActor
-import tcep.placement.{HostInfo, MobilityTolerantAlgorithm, PlacementStrategy}
+import tcep.placement.{HostInfo, MobilityTolerantAlgorithm}
 import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.publishers.TestPublisher
@@ -56,7 +56,7 @@ class GraphTests extends TestKit(ActorSystem("testSystem", ConfigFactory.parseSt
                        subscriberActor: ActorRef,
                        transitionConfig: TransitionConfig,
                        publishers: Map[String, ActorRef],
-                       startingPlacementStrategy: Option[PlacementStrategy],
+                       startingPlacementStrategy: Option[String],
                        createdCallback: Option[CreatedCallback],
                        consumer: ActorRef = null)
                       (implicit override val context: ActorContext,

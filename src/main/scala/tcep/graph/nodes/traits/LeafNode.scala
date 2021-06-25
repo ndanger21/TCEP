@@ -1,12 +1,11 @@
 package tcep.graph.nodes.traits
 
-import akka.actor.{ActorRef, PoisonPill}
+import akka.actor.{ActorRef, Address, PoisonPill}
 import tcep.data.Events.{DependenciesRequest, DependenciesResponse}
-import tcep.data.Queries.LeafQuery
+import tcep.data.Queries.{LeafQuery, Query}
 import tcep.graph.nodes.ShutDown
 import tcep.graph.nodes.traits.Node.UnSubscribe
 import tcep.graph.transition.TransitionStats
-import tcep.placement.PlacementStrategy
 
 /**
   * Handling of [[tcep.data.Queries.LeafQuery]] is done by LeafNode
@@ -23,6 +22,6 @@ trait LeafNode extends Node {
     }
   }
 
-  override def handleTransitionRequest(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit =
-    executeTransition(requester, algorithm, stats)
+  override def handleTransitionRequest(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit =
+    executeTransition(requester, algorithm, stats, placement)
 }

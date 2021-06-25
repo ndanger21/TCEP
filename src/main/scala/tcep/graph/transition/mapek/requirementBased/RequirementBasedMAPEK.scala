@@ -1,19 +1,17 @@
 package tcep.graph.transition.mapek.requirementBased
 
-import java.util.concurrent.atomic.AtomicInteger
-
 import akka.actor.{ActorContext, ActorRef, Cancellable, Props}
 import akka.cluster.ClusterEvent.{MemberJoined, MemberLeft}
 import akka.pattern.ask
 import akka.util.Timeout
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition._
 import tcep.graph.transition.mapek.requirementBased.RequirementBasedMAPEK.{IsRequirementSupportedByStrategy, SetPlacementAlgorithm}
 import tcep.placement.benchmarking._
 
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.duration._
 
 /**
@@ -22,7 +20,7 @@ import scala.concurrent.duration._
   */
 
 class RequirementBasedMAPEK(context: ActorContext, val query: Query, mode: TransitionConfig, startingPlacementStrategy: PlacementAlgorithm) extends MAPEK(context) {
-  val monitor: ActorRef = context.actorOf(Props(new Monitor()))
+  val monitor: ActorRef = context.actorOf(Props(new Monitor(this)))
   val analyzer: ActorRef = context.actorOf(Props(new Analyzer()))
   val planner: ActorRef = context.actorOf(Props(new Planner(this)))
   val executor: ActorRef = context.actorOf(Props(new Executor(this)))
@@ -42,7 +40,7 @@ class RequirementBasedMAPEK(context: ActorContext, val query: Query, mode: Trans
 
   implicit val timeout = Timeout(5 seconds)
 
-  class Monitor extends MonitorComponent {
+  class Monitor(mapek: MAPEK) extends MonitorComponent(mapek) {
 
     val churnRateThreshold = 3
     var changeRate: AtomicInteger = new AtomicInteger(0)
@@ -152,7 +150,7 @@ class RequirementBasedMAPEK(context: ActorContext, val query: Query, mode: Trans
   class Executor(mapek: RequirementBasedMAPEK) extends ExecutorComponent(mapek)
 
   class Knowledge(query: Query, mode: TransitionConfig, var currentPlacementAlgorithm: PlacementAlgorithm)
-    extends KnowledgeComponent(query, mode, currentPlacementAlgorithm.placement) {
+    extends KnowledgeComponent(query, mode, currentPlacementAlgorithm.placement.name) {
 
     override def preStart() = {
       super.preStart()
@@ -163,7 +161,7 @@ class RequirementBasedMAPEK(context: ActorContext, val query: Query, mode: Trans
 
       case SetPlacementAlgorithm(placementAlgorithm: PlacementAlgorithm) =>
         this.currentPlacementAlgorithm = placementAlgorithm
-        this.currentPlacementStrategy = placementAlgorithm.placement
+        this.currentPlacementStrategy = placementAlgorithm.placement.name
 
       case r: IsRequirementSupportedByStrategy => sender() ! r.requirements.map(currentPlacementAlgorithm.containsDemand(_)).fold(true)(_ && _)
     }

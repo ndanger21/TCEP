@@ -64,7 +64,7 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
       if (this.singleNodePlacement.isDefined) {
         log.info(s"already placed one operator on ${singleNodePlacement.get.host}, reusing ost for current op $operator")
         for {
-          bdpUpdate <- this.updateOperatorToParentBDP(operator, this.singleNodePlacement.get.host, dependencies.parents, outputBandwidthEstimates)
+          bdpUpdate <- this.updateOperatorToParentBDP(operator, this.singleNodePlacement.get.host, parentAddressTransform(dependencies), outputBandwidthEstimates)
         } yield (HostInfo(this.singleNodePlacement.get.host, operator, this.getPlacementMetrics(operator)), this.singleNodePlacement.get.minBDP)
       } else {
         cluster.system.scheduler.scheduleOnce(5 seconds)(() => this.singleNodePlacement = None) // reset
@@ -86,7 +86,7 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
 
           minBDPCandidate = allCoordinates.filter(_._1.hasRole("Candidate"))
                                           .map(c => calculateSingleHostPlacementBDP(c._1, subscriber.get, allQueryPublisherMembers, allCoordinates, outputBandwidthEstimates)).minBy(_._2)
-          bdpUpdate <- this.updateOperatorToParentBDP(operator, minBDPCandidate._1, dependencies.parents, outputBandwidthEstimates)
+          bdpUpdate <- this.updateOperatorToParentBDP(operator, minBDPCandidate._1, parentAddressTransform(dependencies), outputBandwidthEstimates)
         } yield {
           val hostInfo = HostInfo(minBDPCandidate._1, operator, this.getPlacementMetrics(operator))
           placementMetrics.remove(operator) // placement of operator complete, clear entry
@@ -111,7 +111,7 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
   }
 
   // called during the initial placement in QueryGraph
-  override def initialVirtualOperatorPlacement(query: Query, publishers: Map[String, ActorRef])
+  override def getVirtualOperatorPlacementCoords(query: Query, publishers: Map[String, ActorRef])
                                                 (implicit ec: ExecutionContext, cluster: Cluster, queryDependencies: QueryDependencyMap
                                                 ): Future[Map[Query, Coordinates]] = {
     // calling applyGlobalOptimalBDPAlgorithm calculates the optimal single-host placement while using the root operator's estimated data rate
@@ -120,7 +120,9 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
     for {_ <- applyGlobalOptimalBDPAlgorithm(query, query, Dependencies(Map(), Map())) } yield {
       // coordinates are not used during deployment with findHost(), see selectHostFromCandidates() below
       assert(this.singleNodePlacement.isDefined, "should have an optimal host after calling initialVirtualOperatorPlacement()")
-      Map(query -> Coordinates.origin)
+      // Coordinates are irrelevant here, findHost() just calls selectHostFromCandidates (below) which uses singleNodePlacement
+      val allOps = Queries.getOperators(query)
+      allOps.map(op => op -> Coordinates.origin).toMap
     }
   }
 

@@ -1,18 +1,18 @@
 package tcep.graph.nodes.traits
 
-import java.util.concurrent.TimeUnit
-
-import akka.actor.{ActorRef, PoisonPill}
+import akka.actor.{ActorRef, Address, PoisonPill}
 import tcep.data.Events.Event
+import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.Node.{UnSubscribe, UpdateTask}
 import tcep.graph.transition._
 import tcep.machinenodes.helper.actors.ACK
-import tcep.placement.{HostInfo, PlacementStrategy}
+import tcep.placement.HostInfo
 import tcep.simulation.adaptive.cep.SystemLoad
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.TransitionLogActor.{OperatorTransitionBegin, OperatorTransitionEnd}
 import tcep.utils.{SizeEstimator, TCEPUtils}
 
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
@@ -67,10 +67,10 @@ trait MFGSMode extends TransitionMode {
       message //caching message and forwarding to the childReceive
   }
 
-  override def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
+  override def executeTransition(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
 
     try {
-      transitionLog(s"executing MFGS ${this.isInstanceOf[MFGSMode]} transition to ${algorithm.name} requested by ${requester}")
+      transitionLog(s"executing MFGS ${this.isInstanceOf[MFGSMode]} transition to ${algorithm} requested by ${requester}")
       transitionLogPublisher ! OperatorTransitionBegin(self)
       val startTime = System.currentTimeMillis()
       var downTime: Option[Long] = None
@@ -87,7 +87,7 @@ trait MFGSMode extends TransitionMode {
         // resend incoming messages to self on new operator if windowed so we don't lose any events
         val msgQueue = if (!this.maxWindowTime().isZero) slidingMessageQueue.toList else List[(ActorRef, Event)]()
         log.info(s"sending StartExecutionWithData to $successor with timeout $retryTimeout")
-        val startExecutionMessage = StartExecutionWithData(downTime.get, startTime, subscribers.toList, msgQueue, algorithm.name)
+        val startExecutionMessage = StartExecutionWithData(downTime.get, startTime, subscribers.toList, msgQueue, algorithm)
         val msgACK = TCEPUtils.guaranteedDelivery(context, successor, startExecutionMessage, tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
         msgACK.map(ack => {
           succStarted = true
@@ -95,7 +95,7 @@ trait MFGSMode extends TransitionMode {
           val migrationTime = timestamp - downTime.get
           val nodeSelectionTime = timestamp - startTime
           //log.info(s"\nBDP DEBUG========\nself: $self \n successor: $successor\n parents: \n${getParentActors().mkString("\n")} \n dependencies parents: \n ${dependencies.parents.mkString("\n")} \n newHostInfo: \n${newHostInfo.operatorMetrics.operatorToParentBDP.mkString("\n")} \n============")
-          GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm.name, timestamp, migrationTime, nodeSelectionTime, getParentActors(), newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
+          GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, getParentActors(), newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
           notifyMAPEK(cluster, successor) // notify mapek knowledge about operator change
           transitionLog(s"received ACK for StartExecutionWithData from successor ${System.currentTimeMillis() - downTime.get}ms after stopping events (total time: $migrationTime ms), handing control over to requester and shutting down self")
           val placementOverhead = newHostInfo.operatorMetrics.accPlacementMsgOverhead
@@ -108,10 +108,10 @@ trait MFGSMode extends TransitionMode {
       transitionLog( s"MFGS transition: looking for new host of ${self} dependencies: $dependencies")
       // retry indefinitely on failure of intermediate steps without repeating the previous ones (-> no duplicate operators)
       val transitToSuccessor = for {
-        host: HostInfo <- findSuccessorHost(algorithm, dependencies)
+        host: HostInfo <- findSuccessorHost(algorithm, dependencies, placement)
         successor: ActorRef <- { val s = createDuplicateNode(host); transitionLog(s"created successor duplicate ${s} on new host after ${System.currentTimeMillis() - startTime}ms, stopping events and sending StartExecutionWithData"); s }
         updatedStats <- startSuccessorActor(successor, host)
-        childNotified <- notifyChild(requester, successor,  TransferredState(algorithm, successor, self, updatedStats, query), updatedStats)
+        childNotified <- notifyChild(requester, successor,  TransferredState(algorithm, successor, self, updatedStats, query, placement), updatedStats)
       } yield {
         SystemLoad.operatorRemoved()
         getParentActors().foreach(_ ! UnSubscribe())

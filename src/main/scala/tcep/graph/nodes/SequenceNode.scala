@@ -10,7 +10,7 @@ import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 import java.util.concurrent.TimeUnit
-import scala.concurrent.{Await, blocking}
+import scala.concurrent.Await
 import scala.concurrent.duration.FiniteDuration
 
 /**
@@ -103,7 +103,7 @@ case class SequenceNode(transitionConfig: TransitionConfig,
       case Event5(e1, e2, e3, e4, e5) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5)))
       case Event6(e1, e2, e3, e4, e5, e6) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5), toAnyRef(e6)))
     }
-    case unhandledMessage => log.debug("RECEIVED MSG {}", unhandledMessage)
+    case unhandledMessage =>
   }
 
   override def getParentActors(): List[ActorRef] = publishers.toList

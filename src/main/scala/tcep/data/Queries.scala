@@ -42,12 +42,32 @@ object Queries {
   case object GreaterEqual extends Operator
   case object Smaller      extends Operator
   case object SmallerEqual extends Operator
+  /**
+    * helper function to compare a requirement value to an actual value
+    *
+    * @param reqVal value of the requirement
+    * @param op comparison operator
+    * @param otherVal value to compare to
+    * @return true if requirement is condition holds, false if violated
+    */
+  def compareHelper(reqVal: Double, op: Operator, otherVal: Double): Boolean = {
+    op match {
+      case Equal => reqVal == otherVal
+      case NotEqual => reqVal != otherVal
+      case Greater => otherVal > reqVal
+      case GreaterEqual => otherVal >= reqVal
+      case Smaller => otherVal < reqVal
+      case SmallerEqual => otherVal <= reqVal
+    }
+  }
 
   sealed abstract class Requirement(val name: String)
   case class LatencyRequirement   (operator: Operator, latency: Duration, otherwise: Option[LatencyMeasurement], override val name: String = LatencyRequirement.name)      extends Requirement(name)
   object LatencyRequirement { val name = "latency" }
 
-  case class FrequencyRequirement (operator: Operator, frequency: Frequency, otherwise: Option[FrequencyMeasurement], override val name: String = FrequencyRequirement.name) extends Requirement(name)
+  case class FrequencyRequirement (operator: Operator, frequency: Frequency, otherwise: Option[FrequencyMeasurement], override val name: String = FrequencyRequirement.name) extends Requirement(name) {
+    def getEventsPerSec: Double = frequency.frequency.toDouble / frequency.interval
+  }
   object FrequencyRequirement { val name = "frequency" }
 
   case class LoadRequirement      (operator: Operator, machineLoad: MachineLoad, otherwise: Option[LoadMeasurement], override val name: String = LoadRequirement.name)            extends Requirement(name)
@@ -222,6 +242,8 @@ object Queries {
   }
 
   def estimateOutputBandwidths(operator: Query)(implicit baseEventRates: Map[String, Throughput]): Map[Query, Double] = extractOperatorsAndThroughputEstimates(operator).map(e => e._1 -> e._2._4).toMap
+  def estimateOutputBandwidths(queryDependencyMap: QueryDependencyMap): Map[Query, Double] = queryDependencyMap.map(e => e._1 -> e._2._4).toMap
+
 
   sealed trait LeafQuery   extends Query
   sealed trait UnaryQuery  extends Query { val sq: Query }

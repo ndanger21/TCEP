@@ -83,6 +83,19 @@ trait PlacementStrategy {
       }
     }
   }
+
+  /**
+    * starting point of the initial placement for an entire query
+    * retrieves the coordinates of dependencies and calculates an initial placement of all operators in a query
+    * (without actually placing them yet)
+    * @param rootOperator the operator graph to be placed
+    * @return a map from operator to host
+    */
+  def initialVirtualOperatorPlacement(rootOperator: Query, publishers: Map[String, ActorRef])
+                                     (implicit ec: ExecutionContext, cluster: Cluster, queryDependencies: QueryDependencyMap
+                                     ): Future[Map[Query, HostInfo]]
+
+
   // used for tests only
   def updateCoordinateMap()(implicit ec: ExecutionContext, cluster: Cluster): Future[Map[Member, Coordinates]] = {
     makeMapFuture(cluster.state.members.filter(m=> m.status == MemberStatus.up && !m.hasRole("VivaldiRef"))
@@ -93,20 +106,20 @@ trait PlacementStrategy {
   }
 
 
-  protected def updateOperatorToParentBDP(operator: Query, host: Member, parents: Map[ActorRef, Query],
+  protected def updateOperatorToParentBDP(operator: Query, host: Member, parents: Map[Query, Address],
                                           outputDataRateEstimates: Map[Query, Double])
-                                         (implicit ec: ExecutionContext, cluster: Cluster): Future[Map[ActorRef, Double]] = {
+                                         (implicit ec: ExecutionContext, cluster: Cluster): Future[Map[Address, Double]] = {
     // deep queries cause lookup failures when used as key, use string representation instead
     val outputDataRateEstimatesStr = outputDataRateEstimates.map(e => e._1.toString() -> e._2)
-    val bdpToParents: Future[Map[ActorRef, Double]] = for {
-      opToParentBDP: Map[ActorRef, EventBandwidthEstimate] <- makeMapFuture(parents.map(p => {
+    val bdpToParents: Future[Map[Address, Double]] = for {
+      opToParentBDP: Map[Address, EventBandwidthEstimate] <- makeMapFuture(parents.map(p => {
         val bdp = for {
           hostCoords <- getCoordinatesOfNode(host, None) // omit operator since message overhead from this is not placement-related
-          parentCoords <- getCoordinatesOfNode(p._1, None)
-          bw = outputDataRateEstimatesStr.getOrElse(p._2.toString(),
+          parentCoords <- getCoordinatesFromAddress(p._2, None)
+          bw = outputDataRateEstimatesStr.getOrElse(p._1.toString(),
                                       throw new RuntimeException(s"missing ${p._2} \n among \n ${ outputDataRateEstimates.mkString("\n")}")) * 0.001  // dist in [ms], data rate in [Bytes / s]
         } yield parentCoords.distance(hostCoords) * bw
-        p._1 -> bdp
+        p._2 -> bdp
       }))
     } yield {
       val operatorMetrics = placementMetrics.getOrElse(operator, OperatorMetrics())
@@ -306,6 +319,8 @@ trait PlacementStrategy {
     }
   }
 
+  def parentAddressTransform(dependencies: Dependencies): Map[Query, Address] = dependencies.parents.toSeq.map(e => e._2 -> e._1.path.address).toMap
+
 }
 
 object PlacementStrategy {
@@ -324,7 +339,7 @@ object PlacementStrategy {
 }
 case class HostInfo(member: Member, operator: Query, var operatorMetrics: OperatorMetrics = OperatorMetrics(), var visitedMembers: List[Member] = List())
 // accMsgOverhead is placement messaging overhead for all operators from stream to current operator; root operator has placement overhead of entire query graph
-case class OperatorMetrics(var operatorToParentBDP: Map[ActorRef, Double] = Map(), var accPlacementMsgOverhead: Long = 0)
+case class OperatorMetrics(var operatorToParentBDP: Map[Address, Double] = Map(), var accPlacementMsgOverhead: Long = 0)
 case class QueryDependencies(parents: Option[List[Query]], child: Option[Query])
 // child is a list for convenience, we only have one child
 case class QueryDependenciesWithCoordinates(parents: Map[Query, Coordinates], child: Map[Query, Coordinates]) {

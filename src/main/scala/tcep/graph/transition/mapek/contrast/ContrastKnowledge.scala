@@ -4,7 +4,6 @@ import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData, GetOperatorTreeDepth, MonitoringDataUpdate}
 import tcep.graph.transition.{KnowledgeComponent, MAPEK}
-import tcep.placement.PlacementStrategy
 
 /**
   * Created by Niels on 18.02.2018.
@@ -12,7 +11,7 @@ import tcep.placement.PlacementStrategy
   * central sharing point for information regarding system and current context
   * @param mapek reference to the running MAPEK instance
   */
-class ContrastKnowledge(mapek: MAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: PlacementStrategy)
+class ContrastKnowledge(mapek: MAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: String)
   extends KnowledgeComponent(query, transitionConfig, currentPlacementStrategy) {
 
   val operatorTreeDepth: Int = calculateOperatorTreeDepth(query)
@@ -44,6 +43,7 @@ class ContrastKnowledge(mapek: MAPEK, query: Query, transitionConfig: Transition
       case query: SequenceQuery => 1
       case query: UnaryQuery => 1 + calculateOperatorTreeDepth(query.sq)
       case query: BinaryQuery => 1 + Math.max(calculateOperatorTreeDepth(query.sq1), calculateOperatorTreeDepth(query.sq2))
+      case _ => 0
     }
   }
 

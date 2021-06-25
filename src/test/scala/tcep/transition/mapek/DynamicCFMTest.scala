@@ -10,7 +10,9 @@ import tcep.graph.transition.mapek.DynamicCFM
 import tcep.machinenodes.qos.BrokerQoSMonitor.{BrokerQosMetrics, IOMetrics}
 
 class DynamicCFMTest extends FunSuite {
-  val query: Query2[Int, Float] = stream[Int]("A").and(stream[Float]("B"))
+  val streamA = stream[Int]("A")
+  val streamB = stream[Float]("B")
+  val query: Query2[Int, Float] = streamA.and(streamB)
 
   test("A DynamicCFM should be able to build a FM from a given Query") {
     val cfm = new DynamicCFM(query)
@@ -20,14 +22,13 @@ class DynamicCFMTest extends FunSuite {
     val cfm = new DynamicCFM(query)
     val sample = (OperatorQoSMetrics(
       eventSizeIn = List(1), eventSizeOut = 1,
-      selectivity = 1,
       interArrivalLatency = MeanAndVariance(1, 1, 1),
       processingLatency = MeanAndVariance(1, 1, 1),
       networkToParentLatency = MeanAndVariance(1, 1, 1),
       endToEndLatency = MeanAndVariance(1, 1, 1),
       ioMetrics = IOMetrics()
     ), BrokerQosMetrics(cpuLoad = 1, cpuThreadCount = 1, deployedOperators = 1, IOMetrics = IOMetrics()))
-    val config = cfm.getCurrentContextConfig(sample)
+    val config = cfm.getCurrentContextConfigFromSamples(Map(streamA -> sample, streamB -> sample, query -> sample))
     ConfigUtil.checkConfig(config)
   }
 }

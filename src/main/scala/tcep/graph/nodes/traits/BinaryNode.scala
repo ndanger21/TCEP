@@ -1,12 +1,11 @@
 package tcep.graph.nodes.traits
 
-import akka.actor.{ActorRef, PoisonPill}
+import akka.actor.{ActorRef, Address, PoisonPill}
 import tcep.data.Events._
 import tcep.data.Queries._
 import tcep.graph.nodes.ShutDown
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, Subscribe}
 import tcep.graph.transition.{TransferredState, TransitionRequest, TransitionStats}
-import tcep.placement.PlacementStrategy
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.utils.TCEPUtils
 
@@ -52,7 +51,7 @@ trait BinaryNode extends Node {
   }
 
   // child receives control back from parent that has completed their transition
-  def handleTransferredState(algorithm: PlacementStrategy, newParent: ActorRef, oldParent: ActorRef, stats: TransitionStats): Unit = {
+  def handleTransferredState(algorithm: String, newParent: ActorRef, oldParent: ActorRef, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
     implicit val ec: ExecutionContext = blockingIoDispatcher
     if(!selfTransitionStarted) {
       transitionConfig.transitionExecutionMode match {
@@ -72,7 +71,7 @@ trait BinaryNode extends Node {
           if (p1List.contains(oldParent)) {
             updateParent1(oldParent, newParent)
             parent1TransitInProgress = false
-            TCEPUtils.guaranteedDelivery(context, p2List.last, TransitionRequest(algorithm, self, stats), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
+            TCEPUtils.guaranteedDelivery(context, p2List.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
             parent2TransitInProgress = true
 
           } else if (p2List.contains(oldParent)) {
@@ -89,8 +88,8 @@ trait BinaryNode extends Node {
       if (!parent1TransitInProgress && !parent2TransitInProgress) {
         selfTransitionStarted = true
         log.info(s"parents transition complete, executing own transition -\n new parents: ${parentNode1.toString()} ${parentNode2.toString()}")
-        transitionLog(s"old parents transition to new parents with ${algorithm.name} complete, executing own transition")
-        executeTransition(transitionRequestor, algorithm, transitionStatsAcc)
+        transitionLog(s"old parents transition to new parents with ${algorithm} complete, executing own transition")
+        executeTransition(transitionRequestor, algorithm, transitionStatsAcc, placement)
       }
     }
   }
@@ -99,8 +98,8 @@ trait BinaryNode extends Node {
     case DependenciesRequest => sender ! DependenciesResponse(Seq(p1List.last, p2List.last))
 
     //parent has transited to the new node
-    case TransferredState(algorithm, newParent, oldParent, stats, lastOperator) =>
-      handleTransferredState(algorithm, newParent, oldParent, stats)
+    case TransferredState(algorithm, newParent, oldParent, stats, lastOperator, placement) =>
+      handleTransferredState(algorithm, newParent, oldParent, stats, placement)
 
     case OperatorMigrationNotice(oldOperator, newOperator) => { // received from migrating parent (oldParent)
       if(p1List.contains(oldOperator)) {
@@ -120,21 +119,21 @@ trait BinaryNode extends Node {
     }
   }
 
-  override def handleTransitionRequest(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
+  override def handleTransitionRequest(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
     implicit val ec: ExecutionContext = blockingIoDispatcher
-    transitionLog(s"asking old parents ${p1List.last} and ${p2List.last} to transit to new parents with ${algorithm.name}")
+    transitionLog(s"asking old parents ${p1List.last} and ${p2List.last} to transit to new parents with ${algorithm}")
     transitionStartTime = System.currentTimeMillis()
     transitionRequestor = requester
     transitionStatsAcc = TransitionStats()
     transitionConfig.transitionExecutionMode match {
       case TransitionExecutionModes.CONCURRENT_MODE => {
-        TCEPUtils.guaranteedDelivery(context, p1List.last, TransitionRequest(algorithm, self, stats), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
-        TCEPUtils.guaranteedDelivery(context, p2List.last, TransitionRequest(algorithm, self, stats), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
+        TCEPUtils.guaranteedDelivery(context, p1List.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
+        TCEPUtils.guaranteedDelivery(context, p2List.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
         parent1TransitInProgress = true
         parent2TransitInProgress = true
       }
       case TransitionExecutionModes.SEQUENTIAL_MODE => {
-        TCEPUtils.guaranteedDelivery(context, p1List.last, TransitionRequest(algorithm, self, stats), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
+        TCEPUtils.guaranteedDelivery(context, p1List.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
         parent1TransitInProgress = true
         parent2TransitInProgress = false
       }

@@ -13,7 +13,7 @@ import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
 
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration._
-class LightweightMonitor(mapek: LightweightMAPEK/*, var allRecords: AllRecords*/) extends MonitorComponent{
+class LightweightMonitor(mapek: LightweightMAPEK/*, var allRecords: AllRecords*/) extends MonitorComponent(mapek) {
 
   var updatePerformanceScheduler: Cancellable = _
   var checkOperatorsScheduler: Cancellable = _

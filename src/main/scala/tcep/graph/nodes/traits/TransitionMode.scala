@@ -1,6 +1,6 @@
 package tcep.graph.nodes.traits
 
-import akka.actor.{ActorLogging, ActorRef, Props, Terminated}
+import akka.actor.{ActorLogging, ActorRef, Address, Props, Terminated}
 import akka.cluster.Cluster
 import tcep.ClusterActor
 import tcep.data.Events.{Event, updateMonitoringData}
@@ -105,22 +105,21 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
       transitionLog(s"unsubscribed by ${s.path.name}, now ${subscribers.size} subscribers")
       log.info(s"self ${this.self.path.name} was unsubscribed by ${s.path.name}, \n now has ${subscribers.size} subscribers")
 
-   case TransitionRequest(algorithm, requester, stats) =>
+   case TransitionRequest(algorithm, requester, stats, placement) =>
       val s = sender()
       s ! ACK()
       if(!transitionInitiated){
         transitionInitiated = true
-        handleTransitionRequest(requester, algorithm, updateTransitionStats(stats, s, transitionRequestSize(s)))
+        handleTransitionRequest(requester, algorithm, updateTransitionStats(stats, s, transitionRequestSize(s)), placement)
       }
 
-    case TransferredState(algorithm, successor, oldParent, stats, lastOperator) => {
+    case TransferredState(algorithm, successor, oldParent, stats, lastOperator, placement) =>
       sender() ! ACK() // this is a temporary deliverer actor created by oldParent
       val transitionStart: Long = stats.transitionTimesPerOperator.getOrElse(oldParent, 0)
       val transitionDuration = System.currentTimeMillis() - transitionStart
       val opmap = stats.transitionTimesPerOperator.updated(oldParent, transitionDuration)
-      log.info(s"old parent $oldParent  \n transition start: $transitionStart, transitionDuration: ${transitionDuration} , operator stats: \n ${opmap.mkString("\n")}")
-      TransferredState(algorithm, successor, oldParent, updateTransitionStats(stats, oldParent, transferredStateSize(oldParent), updatedOpMap = Some(opmap) ), lastOperator) //childReceive will handle this message
-    }
+      //log.info(s"old parent $oldParent  \n transition start: $transitionStart, transitionDuration: ${transitionDuration} , operator stats: \n ${opmap.mkString("\n")}")
+      TransferredState(algorithm, successor, oldParent, updateTransitionStats(stats, oldParent, transferredStateSize(oldParent), updatedOpMap = Some(opmap) ), lastOperator, placement) //childReceive will handle this message
 
     case Terminated(killed) =>
       if (killed.equals(mainNode.get)) {
@@ -132,9 +131,9 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
 
   }
 
-  def handleTransitionRequest(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit
+  def handleTransitionRequest(requester: ActorRef, algorithmName: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit
 
-  def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit
+  def executeTransition(requester: ActorRef, algorithmName: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit
 
   def sendTransitionStats(operator: ActorRef, transitionTime: Long, placementBytes: Long, transitionBytes: Long): Future[Unit] = {
     implicit val timeout = TCEPUtils.timeout
@@ -159,20 +158,33 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
   }
 
   // helper functions for retrying intermediate steps upon failure
-  def findSuccessorHost(algorithm: PlacementStrategy, dependencies: Dependencies)(implicit ec: ExecutionContext): Future[HostInfo] = {
-    val req = for {
-      wasInitialized <- algorithm.initialize()
-      successorHost: HostInfo <- {
-        transitionLog(s"initialized algorithm $algorithm (was initialized: $wasInitialized), looking for new host...");
-        algorithm.findOptimalNode(hostInfo.operator, hostInfo.operator, dependencies, HostInfo(cluster.selfMember, hostInfo.operator, OperatorMetrics()))
+  def findSuccessorHost(algorithmName: String, dependencies: Dependencies, placement: Option[Map[Query, Address]])(implicit ec: ExecutionContext): Future[HostInfo] = {
+    if (placement.isDefined) {
+      val givenPlacement = if(placement.get.contains(query)) {
+        val targetMember = cluster.state.members.find(_.address == placement.get(query)).get
+        Future(HostInfo(targetMember, query))
+      } else {
+        transitionLog(s"did not find query among given placement map: \n $query, ${placement.get.mkString("\n")}")
+        findSuccessorHost(algorithmName, dependencies, None)
       }
-    } yield {
-      transitionLog(s"found new host ${successorHost.member.address}")
-      successorHost
+      givenPlacement
+    } else {
+      val algorithm = PlacementStrategy.getStrategyByName(algorithmName)
+      val req = for {
+        wasInitialized <- algorithm.initialize()
+        successorHost: HostInfo <- {
+          transitionLog(s"initialized algorithm $algorithm (was initialized: $wasInitialized), looking for new host...");
+          algorithm.findOptimalNode(hostInfo.operator, hostInfo.operator, dependencies, HostInfo(cluster.selfMember, hostInfo.operator, OperatorMetrics()))
+        }
+      } yield {
+        transitionLog(s"found new host ${successorHost.member.address}")
+        successorHost
+      }
+      req.recoverWith { case e: Throwable =>
+        transitionLog(s"failed to find successor host, retrying... ${e.getMessage}")
+        findSuccessorHost(algorithmName, dependencies, placement)
+      }
     }
-    req.recoverWith { case e: Throwable =>
-      transitionLog(s"failed to find successor host, retrying... ${e.getMessage}")
-      findSuccessorHost(algorithm, dependencies) }
   }
 
   def notifyChild(requester: ActorRef, successor: ActorRef, transferredStateMsg: TransferredState, updatedStats: TransitionStats): Future[ACK] = {

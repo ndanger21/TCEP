@@ -1,24 +1,14 @@
 package tcep.graph.transition.mapek.learnon
 
-import akka.actor.ActorRef
 import akka.pattern.ask
 import com.typesafe.config.ConfigFactory
-import org.cardygan.config.Config
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
-import tcep.graph.transition.KnowledgeComponent
 import tcep.graph.transition.MAPEK.GetPlacementStrategyName
-import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData, GetOperatorTreeDepth, MonitoringDataUpdate}
-import tcep.graph.transition.mapek.contrast.{CFM, ContrastKnowledge}
+import tcep.graph.transition.mapek.contrast.ContrastKnowledge
 import tcep.graph.transition.mapek.learnon.LearningModelMessages.Receive
-import tcep.placement.PlacementStrategy
 
-import java.util.concurrent.TimeUnit
-import scala.concurrent.Await
-import scala.concurrent.duration.FiniteDuration
-
-class LearnOnKnowledge(mapek: LearnOnMAPEK, transitionConfig: TransitionConfig, query: Query, currentPlacementStrategy: PlacementStrategy)
+class LearnOnKnowledge(mapek: LearnOnMAPEK, transitionConfig: TransitionConfig, query: Query, currentPlacementStrategy: String)
   extends ContrastKnowledge(mapek, query, transitionConfig, currentPlacementStrategy) {
 
   val transitionsEnabled = ConfigFactory.load().getBoolean("constants.mapek.transitions-enabled")

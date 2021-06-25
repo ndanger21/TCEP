@@ -6,18 +6,16 @@ import com.typesafe.config.ConfigFactory
 import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.transition.KnowledgeComponent
 import tcep.graph.transition.MAPEK.GetPlacementStrategyName
 import tcep.graph.transition.mapek.lightweight.LightweightKnowledge.{GetLogData, GetTransitionData, UpdatePerformance}
 import tcep.graph.transition.mapek.lightweight.LightweightMAPEK.GetConsumer
-import tcep.placement.PlacementStrategy
 import tcep.placement.benchmarking.{BenchmarkingNode, PlacementAlgorithm}
 import tcep.utils.SpecialStats
 
 import scala.collection.JavaConverters._
 
-class LightweightKnowledge(mapek: LightweightMAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: PlacementStrategy, consumer: ActorRef)
+class LightweightKnowledge(mapek: LightweightMAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: String, consumer: ActorRef)
   extends KnowledgeComponent(query, transitionConfig, currentPlacementStrategy) {
 
   var placementAlgorithms: List[PlacementAlgorithm] = List()

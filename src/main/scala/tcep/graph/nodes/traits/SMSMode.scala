@@ -1,11 +1,12 @@
 package tcep.graph.nodes.traits
 
-import akka.actor.{ActorRef, PoisonPill}
+import akka.actor.{ActorRef, Address, PoisonPill}
 import tcep.data.Events.Event
+import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.Node.{UnSubscribe, UpdateTask}
 import tcep.graph.transition.{StartExecutionAtTime, TransferredState, TransitionStats}
 import tcep.machinenodes.helper.actors.ACK
-import tcep.placement.{HostInfo, PlacementStrategy}
+import tcep.placement.HostInfo
 import tcep.simulation.adaptive.cep.SystemLoad
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.TransitionLogActor.{OperatorTransitionBegin, OperatorTransitionEnd}
@@ -66,9 +67,9 @@ trait SMSMode extends TransitionMode {
       message //forwarding to the childReceive (via smsReceive andThen childReceive)
   }
 
-  override def executeTransition(requester: ActorRef, algorithm: PlacementStrategy, stats: TransitionStats): Unit = {
+  override def executeTransition(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
       try {
-        transitionLog(s"executing SMS transition to ${algorithm.name} requested by ${requester}")
+        transitionLog(s"executing SMS transition to ${algorithm} requested by ${requester}")
         transitionLogPublisher ! OperatorTransitionBegin(self)
         val startTime = System.currentTimeMillis()
         //val updatedStats = updateTransitionStats(stats, self, stats.transitionOverheadBytes, stats.placementOverheadBytes, Some(stats.transitionTimesPerOperator.updated(self, System.currentTimeMillis())))
@@ -103,14 +104,14 @@ trait SMSMode extends TransitionMode {
             val minStateTime: Instant = minStateReference.plus(minStateTimeDelay)
 
             log.info(s"sending StartExecutionAtTime with time $minStateTime (delta: $delta) to $successor")
-            val startExecutionMessage = StartExecutionAtTime(subscribers.toList, minStateTime, algorithm.name)
+            val startExecutionMessage = StartExecutionAtTime(subscribers.toList, minStateTime, algorithm)
             val msgACK = TCEPUtils.guaranteedDelivery(context, successor, startExecutionMessage, tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
             msgACK.map(ack => {
               succStarted = true
               val timestamp = System.currentTimeMillis()
               val migrationTime = 0
               val nodeSelectionTime = timestamp - startTime
-              GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm.name, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
+              GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
               notifyMAPEK(cluster, successor) // notify mapek knowledge about operator change
               val placementOverhead = newHostInfo.operatorMetrics.accPlacementMsgOverhead
               // remote operator creation, state transfer and execution start, subscription management
@@ -140,7 +141,7 @@ trait SMSMode extends TransitionMode {
           transitionLog(s"transition stats map; ${updatedStats.transitionTimesPerOperator.mkString(";")}")
 
           transitionLog(s"stopped sending events at ${Instant.now()}, $successor should start sending at this moment; handing back control to child")
-          val msgACK = TCEPUtils.guaranteedDelivery(context, requester, TransferredState(algorithm, successor, self, updatedStats, query), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
+          val msgACK = TCEPUtils.guaranteedDelivery(context, requester, TransferredState(algorithm, successor, self, updatedStats, query, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
             .map(ack => {
               childNotified = true;
               SystemLoad.operatorRemoved()
@@ -161,7 +162,7 @@ trait SMSMode extends TransitionMode {
         transitionLog( s"$modeName transition: looking for new host of ${self} dependencies: $dependencies")
         // retry indefinitely on failure of intermediate steps without repeating the previous ones (-> no duplicate operators)
         val transitToSuccessor = for {
-          host: HostInfo <- findSuccessorHost(algorithm, dependencies)
+          host: HostInfo <- findSuccessorHost(algorithm, dependencies, placement)
           successor: ActorRef <- {
             val startCreate = System.currentTimeMillis()
             val s = createDuplicateNode(host);

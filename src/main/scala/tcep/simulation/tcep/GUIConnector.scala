@@ -61,7 +61,7 @@ object GUIConnector {
       } else shrinkOperatorName(parent.path.name)
       JSONObject(Map(
         "operatorName" -> pName,
-        "bandwidthDelayProduct" -> newHostInfo.operatorMetrics.operatorToParentBDP.getOrElse(parent, {
+        "bandwidthDelayProduct" -> newHostInfo.operatorMetrics.operatorToParentBDP.getOrElse(parent.path.address, {
           log.warn(s"could not find bdp for parent $parent in \n ${newHostInfo.operatorMetrics.operatorToParentBDP}")
           -1.0
         }),

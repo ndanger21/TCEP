@@ -61,7 +61,7 @@ abstract class NaiveMovingStateModeSpec extends MultiJVMTestSetup(3) {
 
           override def preStart(): Unit = {
             super.preStart()
-            graph = new QueryGraph(query, TransitionConfig(TransitionModeNames.NaiveMovingState, TransitionExecutionModes.CONCURRENT_MODE), publishers, Some(MobilityTolerantAlgorithm), None, consumer = clientProbe.ref)
+            graph = new QueryGraph(query, TransitionConfig(TransitionModeNames.NaiveMovingState, TransitionExecutionModes.CONCURRENT_MODE), publishers, Some(MobilityTolerantAlgorithm.name), None, consumer = clientProbe.ref)
             rootOperator = Await.result(graph.createAndStart(), FiniteDuration(15, TimeUnit.SECONDS))
             endActor = graph.clientNode
           }
@@ -128,7 +128,7 @@ abstract class NaiveMovingStateModeSpec extends MultiJVMTestSetup(3) {
 
     "receive ACK for TransitionRequest on clientNode" in within(t) {
       runOn(client) {
-        endActor ! TransitionRequest(GlobalOptimalBDPAlgorithm, self, TransitionStats())
+        endActor ! TransitionRequest(GlobalOptimalBDPAlgorithm.name, self, TransitionStats(), None)
         expectMsg(ACK())
       }
       testConductor.enter("TransitionRequest ACK'd")

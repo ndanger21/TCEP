@@ -1,7 +1,5 @@
 package tcep
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
 import akka.cluster.ClusterEvent.{CurrentClusterState, MemberEvent, MemberUp}
 import akka.cluster.{Cluster, Member}
@@ -12,6 +10,7 @@ import tcep.graph.transition.{TransferredState, TransitionRequest, TransitionSta
 import tcep.machinenodes.helper.actors.{ACK, CreateRemoteOperator, RemoteOperatorCreated}
 import tcep.utils.{SizeEstimator, TransitionLogPublisher}
 
+import java.util.concurrent.TimeUnit
 import scala.concurrent.ExecutionContext
 
 /**
@@ -35,10 +34,10 @@ trait ClusterActor extends Actor with ActorLogging {
   // compute placeholder value just once since SizeEstimator call is expensive during execution
   val ackSize: Long = SizeEstimator.estimate(ACK())
   def transitionRequestSize(child: ActorRef): Long =
-    if(child.path.address != cluster.selfAddress) SizeEstimator.estimate(TransitionRequest(_, _, _)) + ackSize
+    if(child.path.address != cluster.selfAddress) SizeEstimator.estimate(TransitionRequest(_, _, _, _)) + ackSize
     else 0
   def transferredStateSize(parent: ActorRef): Long =
-    if(parent.path.address != cluster.selfAddress) (SizeEstimator.estimate(TransferredState(_, _, _, _, _)) + ackSize)
+    if(parent.path.address != cluster.selfAddress) (SizeEstimator.estimate(TransferredState(_, _, _, _, _, _)) + ackSize)
     else 0
   def subUnsubOverhead(successor: ActorRef, parents: List[ActorRef]): Long =
     parents.count(_.path.address != successor.path.address) * (SizeEstimator.estimate(Subscribe(_, _)) + ackSize) +

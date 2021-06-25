@@ -1,7 +1,5 @@
 package tcep
 
-import java.util.concurrent.TimeUnit
-
 import akka.cluster.Member
 import org.discovery.vivaldi.Coordinates
 import org.scalatest.mockito.MockitoSugar
@@ -10,6 +8,7 @@ import tcep.data.Queries._
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.placement.GlobalOptimalBDPAlgorithm
 
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -28,28 +27,25 @@ abstract class GlobalOptimalBDPMultiNodeTestSpec extends MultiJVMTestSetup with 
   private def initUUT(): GlobalOptimalBDPAlgorithm.type = {
     val uut = GlobalOptimalBDPAlgorithm
     Await.result(uut.initialize(), FiniteDuration(20, TimeUnit.SECONDS))
-    testConductor.enter("initialization complete")
     uut
   }
 
   "GlobalOptimalBDPAlgorithm" must {
     "select the node with minimum BDP sum to publishers and subscriber" in within(5 seconds){
-
-      val uut = initUUT()
-      val clientC = new Coordinates(0, -10, 0)
-      val pub1 = new Coordinates(-40, 30, 0) // pnames(0)
-      val pub2 = new Coordinates(40, 30, 0) // pnames(1)
-      val host1 = new Coordinates(0, 0, 0)
-      val host2 = new Coordinates(40, -10, 0)
-      setCoordinatesForPlacement(uut, clientC, pub1, pub2, host1, host2)
-
+      testConductor.enter("initialization complete")
       runOn(client) {
-
+        val uut = initUUT()
+        val clientC = new Coordinates(0, -10, 0)
+        val pub1 = new Coordinates(-40, 30, 0) // pnames(0)
+        val pub2 = new Coordinates(40, 30, 0) // pnames(1)
+        val host1 = new Coordinates(0, 0, 0)
+        val host2 = new Coordinates(40, -10, 0)
+        setCoordinatesForPlacement(uut, clientC, pub1, pub2, host1, host2)
         val s1 = Stream1[Int](pNames(0), Set())
         val s2 = Stream1[Int](pNames(1), Set())
         val and = Conjunction11[Int, Int](s1, s2, Set())
         val f = Filter2[Int, Int](and, _ => true, Set())
-        val operators: List[Query] = List(s1, s2, and, f).reverse
+
         val candidates: Map[Member, Coordinates] = Await.result(uut.getCoordinatesOfMembers(cluster.state.members), uut.requestTimeout)
         val p1Member = cluster.state.members.find(_.address == node(publisher1).address).get
         val p2Member = cluster.state.members.find(_.address == node(publisher2).address).get
@@ -79,11 +75,34 @@ abstract class GlobalOptimalBDPMultiNodeTestSpec extends MultiJVMTestSetup with 
 
         // manually reset placement
         uut.singleNodePlacement = None
-        Await.result((uut.initialVirtualOperatorPlacement(f, publishers)(ec, cluster, mutable.LinkedHashMap())), remaining)
+        Await.result((uut.getVirtualOperatorPlacementCoords(f, publishers)(ec, cluster, mutable.LinkedHashMap())), remaining)
         assert(uut.singleNodePlacement.isDefined, "singleNodePlacement must be defined after calling initialVirtualOperatorPlacement")
         assert(uut.singleNodePlacement.get.host == placement.head._2._1.member, "initialVirtualOperatorPlacement should return the same host as recursive deployment")
       }
       testConductor.enter("test minimal BDP complete")
+    }
+
+    "return a valid placement upon calling initialVirtualPlacement" in within(5 seconds) {
+      runOn(client) {
+        val uut = initUUT()
+        val clientC = new Coordinates(0, -10, 0)
+        val pub1 = new Coordinates(-40, 30, 0) // pnames(0)
+        val pub2 = new Coordinates(40, 30, 0) // pnames(1)
+        val host1 = new Coordinates(0, 0, 0)
+        val host2 = new Coordinates(40, -10, 0)
+        setCoordinatesForPlacement(uut, clientC, pub1, pub2, host1, host2)
+        val s1 = Stream1[Int](pNames(0), Set())
+        val s2 = Stream1[Int](pNames(1), Set())
+        val and = Conjunction11[Int, Int](s1, s2, Set())
+        val f = Filter2[Int, Int](and, _ => true, Set())
+        implicit val dependencyMap = Queries.extractOperatorsAndThroughputEstimates(f)
+        val placement = Await.result(GlobalOptimalBDPAlgorithm.initialVirtualOperatorPlacement(f, publishers), remaining)
+        assert(placement.nonEmpty)
+        assert(uut.singleNodePlacement.isDefined)
+        assert(placement.size == 4)
+        assert(placement.forall(_._2.member == placement.head._2.member), "all operators must be placed on same node")
+      }
+      testConductor.enter("test end")
     }
   }
 

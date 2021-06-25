@@ -78,10 +78,13 @@ class ContrastAnalyzer(mapek: MAPEK, delay: FiniteDuration = 1 minute, interval:
       } else log.info("not generating and sending context config since transitions are disabled in application.conf")
   }
 
-  def getCurrentContextConfig(cfm: CFM): Future[Config] = for {
-    contextData <- (mapek.knowledge ? GetContextData).mapTo[Map[String, AnyVal]]
-    if contextData.nonEmpty
-  } yield cfm.getCurrentContextConfig(contextData)
+  def getCurrentContextConfig(cfm: CFM): Future[Config] = {
+    log.info("calling UN-overridden getCurrentContextConfig")
+    for {
+      contextData <- (mapek.knowledge ? GetContextData).mapTo[Map[String, AnyVal]]
+      if contextData.nonEmpty
+    } yield cfm.getCurrentContextConfig(contextData)
+  }
 
   case object GenerateAndSendContextConfig
 }
