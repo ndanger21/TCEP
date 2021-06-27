@@ -27,6 +27,7 @@ import java.io.StringWriter
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success}
 
 class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLogging {
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
@@ -91,7 +92,6 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       }
       // ==== helper functions end ====
 
-      log.debug("received prediction request")
       //TODO initial placement prediction: include parent event rate prediction in child's operator samples default values
       //DONE broker metrics: include placement information to update number of operators, cumul eventrate (or bandwidth), cpu load (how?)
       //DONE get current publisher event rate from publishers; should do same during transition (currently passing initial event rate around among successors)
@@ -111,9 +111,19 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       }).map(_.toMap) }
 
       val perQueryPredictions: Future[MetricPredictions] = samples flatMap  { samples =>
-        getPerOperatorPredictions(rootOperator, samples, publisherEventRates)
+        log.debug("retrieving predictions from endpoint {}", predictionEndPointAddress)
+        val pred = getPerOperatorPredictions(rootOperator, samples, publisherEventRates)
+        pred.onComplete {
+          case Success(value) => log.debug("per-operator predictions are \n{}", value.mkString("\n"))
+          case Failure(exception) => log.error(exception, "failed to retrieve predictions from endpoint {}", predictionEndPointAddress)
+        }
+        pred
       } flatMap  { perOperatorPredictions =>
-        Future(combinePerOperatorPredictions(rootOperator, perOperatorPredictions))
+        Future {
+          val combinedPrediction = combinePerOperatorPredictions(rootOperator, perOperatorPredictions)
+          log.info("per-query prediction is {}", combinedPrediction)
+          combinedPrediction
+        }
       }
       pipe(perQueryPredictions) to sender()
 

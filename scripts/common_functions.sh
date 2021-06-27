@@ -83,7 +83,7 @@ adjust_config() {
 
     if [[ $mininet == "true" ]]; then # mininet simulation
       sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://${gui_host}:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
-   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://${gui_host}:${prediction_port}\"#" ${work_dir}/src/main/resources/application.conf
+   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://${gui_host}:${prediction_port}/predict\"#" ${work_dir}/src/main/resources/application.conf
 
       if [[ $wifi == "true" ]]; then
         sed -i -r 's| #\"akka\.tcp://tcep@20\.0\.0\.15:\"\$\{\?constants\.base-port\}\"\"| \"akka.tcp://tcep@20.0.0.15:\"${?constants.base-port}\"\"|' ${work_dir}/src/main/resources/application.conf
@@ -102,7 +102,7 @@ adjust_config() {
       sed -i -r "s#const INTERACTIVE_SIMULATION_ENABLED = (.*?)#const INTERACTIVE_SIMULATION_ENABLED = true#" ${work_dir}/gui/src/graph.js
       sed -i -r "s#const INTERACTIVE_SIMULATION_ENABLED = (.*?)#const INTERACTIVE_SIMULATION_ENABLED = true#" ${work_dir}/gui/constants.js
    	  sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://gui:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
-   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://predictionEndpoint:${prediction_port}\"#" ${work_dir}/src/main/resources/application.conf
+   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://predictionEndpoint:${prediction_port}/predict\"#" ${work_dir}/src/main/resources/application.conf
    	  if [[ $manager == "localhost" ]]; then
    	    sed -i -r "s#isLocalSwarm = .*#isLocalSwarm = true#" ${work_dir}/src/main/resources/application.conf
    	  fi

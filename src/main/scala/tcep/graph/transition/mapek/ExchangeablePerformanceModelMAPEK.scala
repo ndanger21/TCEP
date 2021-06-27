@@ -66,7 +66,7 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
         // log samples to file per operator
         mostRecentSamples.foreach(f => f.sampleMap.foreach(op => {
           log.debug("received {} samples from {}", op._2.size, op._1._1.getClass.toString)
-          if(op._2.nonEmpty) {
+          if(op._2.nonEmpty && op._2.head._1.ioMetrics.incomingEventRate > 0) {
             val logFileString: String = op._1._2.toString().split("-").head.split("/").last
             if (!headersInit.contains(op._1._2)) {
               SpecialStats.log(logFileString, logFileString, sampleFileHeader)
