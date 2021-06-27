@@ -109,3 +109,4 @@ project/project/
 /foo.sc
 /logs_backup/
 /cplex/
+/prediction/.ipynb_checkpoints/
