@@ -135,8 +135,7 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
     case AddOperator(operator: (Query, ActorRef)) =>
       this.operators = operators.+(operator)
       log.info(s"added operator ${operator._2} to deployed operators (now ${operators.size} total)")
-    case RemoveOperator(operator: (Query, ActorRef)) =>
-      this.operators = operators.-(operator._1)
+
       log.info(s"removed operator ${operator._2}, now ${operators.size} total")
     case AddBackupOperator(operator: ActorRef) => this.backupOperators = backupOperators.+(operator)
     case RemoveBackupOperator(operator: ActorRef) => this.backupOperators = backupOperators.-(operator)

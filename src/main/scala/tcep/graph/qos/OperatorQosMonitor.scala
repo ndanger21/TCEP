@@ -115,8 +115,8 @@ object OperatorQosMonitor {
   def getFeatureValue(sample: Sample, feature: String): AnyVal = {
     if(ALL_FEATURES.contains(feature)) {
       feature match {
-        case EVENTSIZE_IN_KB => sample._1.eventSizeIn.sum / 1024
-        case EVENTSIZE_OUT_KB => sample._1.eventSizeOut / 1024
+        case EVENTSIZE_IN_KB => sample._1.eventSizeIn.sum.toDouble / 1024
+        case EVENTSIZE_OUT_KB => sample._1.eventSizeOut.toDouble / 1024
         case OPERATOR_SELECTIVITY => sample._1.selectivity
         case EVENTRATE_IN => sample._1.ioMetrics.incomingEventRate
         case INTER_ARRIVAL_MEAN_MS => sample._1.interArrivalLatency.mean

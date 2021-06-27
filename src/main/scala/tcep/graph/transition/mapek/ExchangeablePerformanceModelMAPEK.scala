@@ -50,7 +50,7 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
   val shiftTarget: Boolean = false
   var headersInit: Map[ActorRef, Boolean] = Map()
-  val sampleFileHeader: String = DynamicCFMNames.ALL_FEATURES.mkString(";") + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
+  val sampleFileHeader: String = DynamicCFMNames.ALL_FEATURES.mkString(";") + ";" + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
 
   override def preStart(): Unit = {
     timers.startTimerWithFixedDelay(GetSamplingDataKey, GetSamplingDataTick, samplingInterval)
@@ -65,6 +65,7 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
           .map(MonitorSamples(_))
         // log samples to file per operator
         mostRecentSamples.foreach(f => f.sampleMap.foreach(op => {
+          log.debug("received {} samples from {}", op._2.size, op._1._1.getClass.toString)
           if(op._2.nonEmpty) {
             val logFileString: String = op._1._2.toString().split("-").head.split("/").last
             if (!headersInit.contains(op._1._2)) {
@@ -74,20 +75,11 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
 
             def getShiftedSample: Sample = if (shiftTarget) op._2.last else op._2.head
 
-            if (!shiftTarget || shiftTarget && op._2.size > 1)
+            if (!shiftTarget || shiftTarget && op._2.size > 1) {
               SpecialStats.log(logFileString, logFileString,
                 DynamicCFMNames.ALL_FEATURES.map(f => getFeatureValue(op._2.head, f)).mkString(";") + ";" +
                   DynamicCFMNames.ALL_TARGET_METRICS.map(m => getTargetMetricValue(getShiftedSample, m)).mkString(";"))
-            /*
-            s"${opFeatures.eventSizeIn.sum.toDouble / 1024};${opFeatures.eventSizeOut / 1024};${opFeatures.selectivity};" +
-              s"${opFeatures.ioMetrics.incomingEventRate};${getShiftedSample._1.ioMetrics.outgoingEventRate};" +
-              s"${opFeatures.interArrivalLatency.mean};${opFeatures.interArrivalLatency.stdDev};" +
-              s"${opFeatures.networkToParentLatency.mean};${opFeatures.networkToParentLatency.stdDev};" +
-              s"${opFeatures.processingLatency.mean};${opFeatures.processingLatency.stdDev};" +
-              s"${getShiftedSample._1.endToEndLatency.mean};${getShiftedSample._1.endToEndLatency.stdDev}" +
-              s"${brokerFeatures.cpuLoad};${brokerFeatures.cpuThreadCount};${brokerFeatures.deployedOperators};" +
-              s"${brokerFeatures.IOMetrics.incomingBandwidth.toUnit(KBytePerSec).amount};${brokerFeatures.IOMetrics.outgoingBandwidth.toUnit(KBytePerSec).amount}")
-            */
+            }
           }
         }))
         mostRecentSamples.pipeTo(mapek.knowledge)
@@ -101,7 +93,6 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
 
 class ExchangeablePerformanceModelAnalyzer(mapek: ExchangeablePerformanceModelMAPEK) extends ContrastAnalyzer(mapek) {
   override def getCurrentContextConfig(cfm: CFM): Future[Config] = {
-    log.info("calling overridden getCurrentContextConfig")
     for {
       contextData <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, Sample]]
     } yield cfm.asInstanceOf[DynamicCFM].getCurrentContextConfigFromSamples(contextData)
@@ -132,6 +123,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
             pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample))).mapTo[MetricPredictions]
           } yield p.name -> (pred, placement)
         }).map(p => {
+          log.info("received predictions \n{}", p.map(e => e._1 -> e._2._1).mkString("\n"))
           // check each requirement
           val qosFulfillingPlacements = p.filter(placement => {
             qosRequirements.forall {
@@ -192,7 +184,7 @@ class ExchangeablePerformanceModelKnowledge(query: Query, transitionConfig: Tran
         // received from DecentralizedMonitor
     case m: MonitorSamples =>
       mostRecentSamples = m.sampleMap.map(e => e._1._1 -> e._2)
-      log.debug("received context sample update, {} operators,  {} samples each", mostRecentSamples.size, mostRecentSamples.head._2.size)
+      log.info("received context sample update, {} operators,  {} samples each", mostRecentSamples.size, mostRecentSamples.head._2.size)
 
     case GetCFM => sender() ! this.cfm
     case GetContextSample => sender() ! mostRecentSamples.map(e => e._1 -> e._2.head)

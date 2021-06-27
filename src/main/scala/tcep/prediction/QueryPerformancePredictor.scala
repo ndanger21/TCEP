@@ -33,10 +33,8 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
   implicit val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
   val jsonMapper = new ObjectMapper()
   jsonMapper.registerModule(DefaultScalaModule)
-  val predictionEndPointAddress: Uri = ConfigFactory.load().getString("constants.predictionEndpoint")
+  val predictionEndPointAddress: Uri = ConfigFactory.load().getString("constants.prediction-endpoint")
   val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
-
-
 
   override def receive: Receive = {
     case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates, contextFeatureSample) =>
@@ -48,7 +46,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       // ===== helper functions =====
       def getBrokerSamples(broker: Address): Future[BrokerQosMetrics] = {
         val withoutPrevInstances: Option[Set[ActorRef]] = currentPlacement.map(_.values.filter(_.path.address == broker).toSet)
-        println(s"retrieving brokerSamples from $broker without $withoutPrevInstances")
+        log.debug("retrieving brokerSamples from {} without {}", broker, withoutPrevInstances)
         cluster.system.actorSelection(RootActorPath(broker) / "user" / "TaskManager*" / "BrokerQosMonitor*")
           .resolveOne() // broker actorRef
           .flatMap(monitor => (monitor ? GetBrokerMetrics(withoutPrevInstances)).mapTo[BrokerQosMetrics])
@@ -93,7 +91,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       }
       // ==== helper functions end ====
 
-      println("received prediction request")
+      log.debug("received prediction request")
       //TODO initial placement prediction: include parent event rate prediction in child's operator samples default values
       //DONE broker metrics: include placement information to update number of operators, cumul eventrate (or bandwidth), cpu load (how?)
       //DONE get current publisher event rate from publishers; should do same during transition (currently passing initial event rate around among successors)
@@ -101,14 +99,13 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       else {
         val placementMap: Map[Query, (Address, Option[ActorRef])] = newPlacement
           .map(e => e._1 -> (e._2, if (currentPlacement.isDefined) currentPlacement.get.get(e._1) else None))
-        println(s"placement map is $placementMap")
+        log.debug("placement map is {}", placementMap)
         Future.traverse(placementMap)(query => {
           for {
             brokerSamples: BrokerQosMetrics <- getBrokerSamples(query._2._1)
-            _ = println(s"brokerSamples $brokerSamples")
             operatorSamples: OperatorQoSMetrics <- getOperatorSamples(query._1, query._2._2)
           } yield {
-            println(s"samples for ${query._1} are $brokerSamples and $operatorSamples")
+            log.debug("samples for {} are {} and {}", query._1, brokerSamples, operatorSamples)
             query._1 -> (operatorSamples, brokerSamples)
           }
       }).map(_.toMap) }
@@ -116,7 +113,6 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
       val perQueryPredictions: Future[MetricPredictions] = samples flatMap  { samples =>
         getPerOperatorPredictions(rootOperator, samples, publisherEventRates)
       } flatMap  { perOperatorPredictions =>
-        println(s"per-operator predictions are \n ${perOperatorPredictions.mkString("\n")}")
         Future(combinePerOperatorPredictions(rootOperator, perOperatorPredictions))
       }
       pipe(perQueryPredictions) to sender()

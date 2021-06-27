@@ -153,7 +153,6 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
     } yield {
       transitionLog(s"notifying MAPEK knowledge component ${knowledgeActor} and broker QoS monitor $brokerQoSMonitor about changed operator ${successor}")
       knowledgeActor ! AddOperator((query, successor))
-      knowledgeActor ! RemoveOperator((query, self))
     }
   }
 
