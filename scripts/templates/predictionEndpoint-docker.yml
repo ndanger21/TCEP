@@ -1,0 +1,14 @@
+predictionEndpoint:
+  image: {{image_user}}/tcep-prediction-endpoint
+  ports:
+    - {{inport}}:{{outport}}
+  depends_on:
+    - simulator
+  networks:
+    - main
+  deploy:
+    replicas: 1
+    restart_policy:
+      condition: on-failure
+    placement:
+      constraints: [node.labels.subscriber == true]

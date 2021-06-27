@@ -37,9 +37,15 @@ build_local() {
   printf "\nBuilding GUI image\n" && \
   cd $work_dir/gui && \
   docker build -t $registry_user/$gui_image . && \
+  cd $work_dir/prediction && \
+  docker build -t ${registry_user}/tcep-prediction-endpoint . && \
   printf "\nPushing images to registry\n" && \
   docker push $registry_user/$tcep_image && \
-  docker push $registry_user/$gui_image
+  docker push $registry_user/$gui_image && \
+  docker push ${registry_user}/tcep-prediction-endpoint && \
+  rm -rf $work_dir/dockerbuild/
+
+
 }
 
 

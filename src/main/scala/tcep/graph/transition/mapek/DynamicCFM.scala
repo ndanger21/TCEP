@@ -170,7 +170,7 @@ object DynamicCFMNames {
 
   val ALL_TARGET_METRICS = List(
     END_TO_END_LATENCY_MEAN_MS,
-    END_TO_END_LATENCY_STD_MS,
+    //END_TO_END_LATENCY_STD_MS,
     EVENTRATE_OUT
   )
 

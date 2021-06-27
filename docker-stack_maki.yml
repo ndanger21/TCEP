@@ -180,7 +180,18 @@ services:
               - spread: node.hostname
     privileged: true
 
-
+  predictionEndpoint:
+    image: nieda2018/tcep-prediction-endpoint
+    depends_on:
+      - simulator
+    networks:
+      - main
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints: [node.labels.subscriber == true]
 
 
 networks:

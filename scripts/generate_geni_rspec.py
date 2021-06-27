@@ -146,6 +146,14 @@ gui_server = file.read() \
     .replace("{{hostname}}", master_hostname)
 file.close()
 
+# prediction endpoint node
+file = open(os.path.join(project_root, "scripts/templates/predictionEndpoint-docker.yml"), "r")
+prediction_endpoint = file.read() \
+    .replace("{{inport}}", "9091") \
+    .replace("{{outport}}", "9091") \
+    .replace("{{image_user}}", image_user)
+file.close()
+
 # Emptyapp node
 file = open(os.path.join(project_root, "scripts/templates/emptyapp-docker.yml"))
 emptyapp_node = file.read()

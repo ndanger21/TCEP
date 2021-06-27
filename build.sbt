@@ -3,13 +3,16 @@ name := "tcep"
 version := "0.0.1-SNAPSHOT"
 
 scalaVersion := "2.12.1"
-val akkaVersion = "2.6.0"
+val akkaVersion = "2.6.8"
+val akkaHttpVersion = "10.2.4"
 libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-cluster" % akkaVersion,
   "com.typesafe.akka" %% "akka-cluster-tools" % akkaVersion,
   "com.typesafe.akka" % "akka-cluster-metrics_2.12" % akkaVersion,
   "com.typesafe.akka" %% "akka-serialization-jackson" % akkaVersion,
-  "com.typesafe.akka" %% "akka-http"   % "10.1.5",
+  "com.typesafe.akka" %% "akka-http"   % akkaHttpVersion,
+  "com.typesafe.akka" %% "akka-http-spray-json" % akkaHttpVersion,
+  "com.typesafe.akka" %% "akka-stream" % akkaVersion, // needed by akka-http
   "com.typesafe.akka" %% "akka-slf4j" % akkaVersion,
   "io.netty" % "netty" % "3.10.6.Final", // for using classic akka remoting instead of artery
   "ch.megard" %% "akka-http-cors" % "0.3.1",
@@ -40,7 +43,7 @@ libraryDependencies += "org.coala" % "coala-core" % "0.0.5-SNAPSHOT"
 // force older version because org.eclipse.xtext v2.12.0 tries to use the field EOF_TOKEN from org.antlr.runtime, which is not present in newest version
 dependencyOverrides += "org.antlr" % "antlr-runtime" % "3.2"
 // explicitly add most recent version to avoid assembly merge conflicts due to strange transitive dependency structure of emf ecore and common
-libraryDependencies += "org.eclipse.emf" % "org.eclipse.emf.ecore" % "2.23.0"
+libraryDependencies += "org.eclipse.emf" % "org.eclipse.emf.ecore" % "2.24.0"
 libraryDependencies += "org.eclipse.emf" % "org.eclipse.emf.common" % "2.20.0"
 
 import com.typesafe.sbt.SbtMultiJvm.multiJvmSettings

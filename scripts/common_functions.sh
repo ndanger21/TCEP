@@ -61,8 +61,12 @@ adjust_config() {
     local mininet=$5
     local wifi=$6
     local gui_port=$7
+    local prediction_port=$8
     if [ -z $7 ]; then
       gui_port=3000
+    fi
+    if [ -z $8 ]; then
+      prediction_port=9091
     fi
     echo "configuring application.conf for $nSpeedPublishers speed publishers and $nNodesTotal containers total"
     sed -i -r "s#mininet-simulation = .*#mininet-simulation = ${mininet}#" ${work_dir}/src/main/resources/application.conf
@@ -79,6 +83,8 @@ adjust_config() {
 
     if [[ $mininet == "true" ]]; then # mininet simulation
       sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://${gui_host}:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
+   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://${gui_host}:${prediction_port}\"#" ${work_dir}/src/main/resources/application.conf
+
       if [[ $wifi == "true" ]]; then
         sed -i -r 's| #\"akka\.tcp://tcep@20\.0\.0\.15:\"\$\{\?constants\.base-port\}\"\"| \"akka.tcp://tcep@20.0.0.15:\"${?constants.base-port}\"\"|' ${work_dir}/src/main/resources/application.conf
         sed -i -r "s#const TCEP_SERVER = \"(.*?)\"#const TCEP_SERVER = \"20.0.0.15\"#" ${work_dir}/gui/constants.js
@@ -96,7 +102,7 @@ adjust_config() {
       sed -i -r "s#const INTERACTIVE_SIMULATION_ENABLED = (.*?)#const INTERACTIVE_SIMULATION_ENABLED = true#" ${work_dir}/gui/src/graph.js
       sed -i -r "s#const INTERACTIVE_SIMULATION_ENABLED = (.*?)#const INTERACTIVE_SIMULATION_ENABLED = true#" ${work_dir}/gui/constants.js
    	  sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://gui:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
-   	  sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://gui:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
+   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://predictionEndpoint:${prediction_port}\"#" ${work_dir}/src/main/resources/application.conf
    	  if [[ $manager == "localhost" ]]; then
    	    sed -i -r "s#isLocalSwarm = .*#isLocalSwarm = true#" ${work_dir}/src/main/resources/application.conf
    	  fi
