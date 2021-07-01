@@ -152,7 +152,7 @@ object Queries {
     getOperatorsRec(rootOp)
   }
 
-  type EventRateEstimate = Throughput // [events / second ]
+  type EventRateEstimate = Throughput // [events / samplingInterval ]
   type EventSizeEstimate = Long // [ Byte ]
   type EventBandwidthEstimate = Double // [ Byte / second ]
   type QueryDependencyMap = mutable.LinkedHashMap[Query, (QueryDependencies, EventRateEstimate, EventSizeEstimate, EventBandwidthEstimate)]

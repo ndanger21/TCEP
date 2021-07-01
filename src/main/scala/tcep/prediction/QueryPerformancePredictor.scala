@@ -1,26 +1,20 @@
 package tcep.prediction
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Address, RootActorPath}
+import akka.actor.{ActorRef, Address, RootActorPath}
 import akka.cluster.Cluster
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.model._
 import akka.pattern.{ask, pipe}
-import akka.stream.Materializer
-import akka.util.{ByteString, Timeout}
+import akka.util.Timeout
 import breeze.stats.meanAndVariance
 import breeze.stats.meanAndVariance.MeanAndVariance
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.scala.DefaultScalaModule
 import com.typesafe.config.ConfigFactory
-import scalaj.http.HttpStatusException
 import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics, Sample, getFeatureValue}
 import tcep.graph.transition.mapek.DynamicCFMNames
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.BytePerSec
 import tcep.machinenodes.qos.BrokerQoSMonitor.{Bandwidth, BrokerQosMetrics, GetBrokerMetrics, IOMetrics}
-import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Throughput}
-import tcep.prediction.QueryPerformancePredictor.{GetPredictionForPlacement, PredictionResponse}
+import tcep.prediction.PredictionHelper.{MetricPredictions, Throughput}
+import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
 import tcep.utils.TCEPUtils
 
 import java.io.StringWriter
@@ -70,19 +64,19 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
           newOpCoord <- TCEPUtils.getCoordinatesOfNode(cluster, newPlacement(operator._1))
         } yield {
           val vivDistToParents = newParentCoords.map(_._2.distance(newOpCoord))
-          val parentEventRates = parents.map(p => p -> queryDependencyMap(p)._2.getEventsPerSec).toMap
-          val parentEventBandwidth = parentEventRates.map(p => p._2 * queryDependencyMap(p._1)._3)
-          val outgoingEventRate = queryDependencyMap(operator._1)._2.getEventsPerSec
+          val parentEventRates = parents.map(p => p -> queryDependencyMap(p)._2).toMap // per sampling interval
+          val parentEventBandwidth = parentEventRates.map(p => p._2.getEventsPerSec * queryDependencyMap(p._1)._3)
+          val outgoingEventRate = queryDependencyMap(operator._1)._2
           val defaultIOMetrics = IOMetrics(
-            incomingEventRate = parentEventRates.values.sum,
+            incomingEventRate = Throughput(parentEventRates.values.map(_.amount).sum, samplingInterval),
             outgoingEventRate = outgoingEventRate,
             incomingBandwidth = Bandwidth(parentEventBandwidth.sum, BytePerSec),
-            outgoingBandwidth = Bandwidth(outgoingEventRate * queryDependencyMap(operator._1)._3, BytePerSec)
+            outgoingBandwidth = Bandwidth(outgoingEventRate.getEventsPerSec * queryDependencyMap(operator._1)._3, BytePerSec)
           )
           OperatorQoSMetrics(
             eventSizeIn = parents.map(queryDependencyMap(_)._3),
             eventSizeOut = queryDependencyMap(operator._1)._3,
-            interArrivalLatency = meanAndVariance(List(1 / parentEventRates.values.sum)),
+            interArrivalLatency = meanAndVariance(List(1 / parentEventRates.values.map(_.getEventsPerSec).sum)),
             processingLatency = meanAndVariance(List(1.0)), //TODO how reasonably to estimate this? create local operator instance, send some events and use avg?
             networkToParentLatency = meanAndVariance(vivDistToParents),
             endToEndLatency = MeanAndVariance(-1, 0, 0),

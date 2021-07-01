@@ -17,10 +17,12 @@ import tcep.graph.transition.{MAPEK, SuccessorStart, TransferredState, Transitio
 import tcep.machinenodes.consumers.Consumer.SetStatus
 import tcep.machinenodes.helper.actors.{ACK, PlacementMessage}
 import tcep.placement.{HostInfo, OperatorMetrics}
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.{SizeEstimator, TCEPUtils}
 
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration._
 
 /**
@@ -34,7 +36,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
   var transitionStatus: Int = 0
   var guiBDPUpdateSent = false
   implicit val timeout = Timeout(5 seconds)
-  var eventRateOut: Double = 0.0d
+  var eventRateOut: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS))
   var eventSizeOut: Long = 0
   val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor")
 

@@ -9,6 +9,7 @@ import tcep.graph.qos.OperatorQosMonitor._
 import tcep.graph.transition.mapek.DynamicCFMNames._
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BytePerSec, KBytePerSec}
 import tcep.machinenodes.qos.BrokerQoSMonitor._
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.utils.SizeEstimator
 
 import java.util.concurrent.TimeUnit
@@ -34,7 +35,7 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
   var eventSizeIn: ListBuffer[Long] = ListBuffer.empty
   var eventSizeOut: Long = 0
   var eventRateIn: ListBuffer[Double] = ListBuffer.empty
-  var eventRateOut: Double = 0.0
+  var eventRateOut: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS))
   var interArrivalLatency: MeanAndVariance = MeanAndVariance(0.0, 0.0, 0)
   var processingLatency: MeanAndVariance = MeanAndVariance(0.0, 0.0, 0)
   var networkToParentLatency: MeanAndVariance = MeanAndVariance(0.0, 0.0, 0) // binary operators: longest path to a parent
@@ -42,12 +43,13 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
   val eventSamples: ListBuffer[Event] = ListBuffer.empty
   val brokerQoSMonitor: ActorSelection = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))
   var lastSamples: Samples = List()
+  //var sched = Executors.newSingleThreadScheduledExecutor()
+  //var samplingTask: ScheduledFuture[_] = _
 
   override def preStart(): Unit = {
     super.preStart()
-    timers.startTimerWithFixedDelay(SamplingTickKey, SamplingTick, samplingInterval)
-    // logfile heading
-
+    timers.startTimerAtFixedRate(SamplingTickKey, SamplingTick, samplingInterval)
+    //samplingTask = sched.scheduleAtFixedRate(() => self ! SamplingTick, 1, samplingInterval.toSeconds, TimeUnit.SECONDS)
   }
 
   override def receive: Receive = {
@@ -62,9 +64,9 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
       eventRateIn.clear()
       for (i <- 0 until parentCount) {
         eventSizeIn += (if (eventSamples.nonEmpty) eventSamples.map(_.monitoringData.processingStats.eventSizeIn(i)).sum / eventSamples.size else 0)
-        eventRateIn += (if (eventSamples.nonEmpty) eventSamples.map(_.monitoringData.processingStats.eventRateIn(i)).sum / eventSamples.size else 0)
+        eventRateIn += (if (eventSamples.nonEmpty) eventSamples.map(_.monitoringData.processingStats.eventRateIn(i).amount).sum / eventSamples.size else 0) // total events arrived per sampling interval
       }
-      eventRateOut = eventSamples.size / samplingInterval.toSeconds
+      eventRateOut = Throughput(eventSamples.size, samplingInterval)
       // ms
       val processingLatencySamples = eventSamples.map(_.monitoringData.processingStats.processingLatencyNS.toDouble / 1e6)
       val networkLatencySamples = eventSamples.map(_.monitoringData.processingStats.lastHopLatency.toDouble)
@@ -91,18 +93,18 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
       log.debug("received broker samples, last sample is now {}", lastSamples.head)
 
     case GetIOMetrics =>
-      sender() ! IOMetrics(eventRateIn.sum, eventRateOut, bandwidthIn, bandwidthOut)
+      sender() ! IOMetrics(Throughput(eventRateIn.sum, samplingInterval), eventRateOut, bandwidthIn, bandwidthOut)
 
     case GetOperatorQoSMetrics => sender() ! getCurrentMetrics
     case GetSamples => sender() ! lastSamples
   }
 
-  def bandwidthIn: Bandwidth = Bandwidth(eventRateIn.zip(eventSizeIn).map(p => p._1 * p._2).sum, BytePerSec)
-  def bandwidthOut: Bandwidth = Bandwidth(eventRateOut * eventSizeOut, BytePerSec)
+  def bandwidthIn: Bandwidth = Bandwidth(eventRateIn.zip(eventSizeIn).map(p => (p._1 / samplingInterval.toSeconds) * p._2).sum, BytePerSec)
+  def bandwidthOut: Bandwidth = Bandwidth(eventRateOut.getEventsPerSec * eventSizeOut, BytePerSec)
   def getCurrentMetrics: OperatorQoSMetrics = OperatorQoSMetrics(
     eventSizeIn.toList, eventSizeOut,
     interArrivalLatency, processingLatency, networkToParentLatency, endToEndLatency,
-    IOMetrics(eventRateIn.sum, eventRateOut, bandwidthIn, bandwidthOut)
+    IOMetrics(Throughput(eventRateIn.sum, samplingInterval), eventRateOut, bandwidthIn, bandwidthOut)
   )
 
 
@@ -118,7 +120,7 @@ object OperatorQosMonitor {
         case EVENTSIZE_IN_KB => sample._1.eventSizeIn.sum.toDouble / 1024
         case EVENTSIZE_OUT_KB => sample._1.eventSizeOut.toDouble / 1024
         case OPERATOR_SELECTIVITY => sample._1.selectivity
-        case EVENTRATE_IN => sample._1.ioMetrics.incomingEventRate
+        case EVENTRATE_IN => sample._1.ioMetrics.incomingEventRate.amount
         case INTER_ARRIVAL_MEAN_MS => sample._1.interArrivalLatency.mean
         case INTER_ARRIVAL_STD_MS => sample._1.interArrivalLatency.stdDev
         case PARENT_NETWORK_LATENCY_MEAN_MS => sample._1.networkToParentLatency.mean
@@ -135,7 +137,7 @@ object OperatorQosMonitor {
   }
   def getTargetMetricValue(sample: Sample, metric: String): AnyVal = {
     metric match {
-      case EVENTRATE_OUT => sample._1.ioMetrics.outgoingEventRate
+      case EVENTRATE_OUT => sample._1.ioMetrics.outgoingEventRate.amount
       case END_TO_END_LATENCY_MEAN_MS => sample._1.endToEndLatency.mean
       case END_TO_END_LATENCY_STD_MS => sample._1.endToEndLatency.stdDev
     }
@@ -150,10 +152,10 @@ object OperatorQosMonitor {
                                 networkToParentLatency: MeanAndVariance,
                                 endToEndLatency: MeanAndVariance,
                                 ioMetrics: IOMetrics) {
-    def selectivity: Double = ioMetrics.outgoingEventRate / ioMetrics.incomingEventRate
+    def selectivity: Double = ioMetrics.outgoingEventRate.getEventsPerSec / ioMetrics.incomingEventRate.getEventsPerSec
 
   }
-  case class UpdateEventRateOut(rate: Double)
+  case class UpdateEventRateOut(rate: Throughput)
   case class UpdateEventSizeOut(size: Long)
   private case object SamplingTick
   private case object SamplingTickKey

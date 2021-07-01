@@ -12,12 +12,15 @@ import tcep.graph.transition.MAPEK.{AddOperator, RemoveOperator}
 import tcep.graph.transition._
 import tcep.machinenodes.helper.actors.ACK
 import tcep.placement.{HostInfo, OperatorMetrics, PlacementStrategy}
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.AcknowledgeSubscription
 import tcep.utils.TCEPUtils
 
 import java.time.Duration
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
+import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
 /**
   * Common methods for different transition modes
@@ -35,7 +38,7 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
   val transitionConfig: TransitionConfig
   var transitionInitiated = false
   val slidingMessageQueue: ListBuffer[(ActorRef, Event)]
-  var eventRateOut: Double = 0.0d
+  var eventRateOut: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS))
   var eventSizeOut: Long = 0
   val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor") //TODO use custom dispatcher?
   val brokerQoSMonitor = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))

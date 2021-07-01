@@ -5,6 +5,7 @@ import akka.event.LoggingAdapter
 import com.typesafe.config.ConfigFactory
 import tcep.machinenodes.helper.actors.{MySerializable, PlacementMessage}
 import tcep.placement.HostInfo
+import tcep.prediction.PredictionHelper.Throughput
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.ExecutionContext
@@ -43,8 +44,8 @@ object Events {
                                              var departureMS: Long = -1,
                                              var lastHopLatency: Long = -1,
                                              var eventSizeIn: Vector[Long] = Vector(),
-                                             var eventRateIn: Vector[Double] = Vector(), // updated upon event arrival, unchanged when reaching monitor unlike parentEventRateOut (updated before send);
-                                             var parentEventRateOut: Vector[Double] = Vector() // out on previous, in on current operator
+                                             var eventRateIn: Vector[Throughput] = Vector(), // updated upon event arrival, unchanged when reaching monitor unlike parentEventRateOut (updated before send);
+                                             var parentEventRateOut: Vector[Throughput] = Vector() // out on previous, in on current operator
                                         )
   sealed abstract class Event(var monitoringData: MonitoringData = MonitoringData())(implicit creatorAddress: Address) extends MySerializable {
     init()
@@ -63,7 +64,7 @@ object Events {
       this.monitoringData.processingStats.eventRateIn = this.monitoringData.processingStats.parentEventRateOut
     }
     // called before event is sent to subscribers
-    def updateDepartureTimestamp(eventSizeOut: Long, eventRateOut: Double): Unit = {
+    def updateDepartureTimestamp(eventSizeOut: Long, eventRateOut: Throughput): Unit = {
       this.monitoringData.processingStats.departureMS = System.currentTimeMillis()
       this.monitoringData.processingStats.processingLatencyNS = System.nanoTime() - this.monitoringData.processingStats.processingStartNS
       this.monitoringData.processingStats.eventSizeIn = Vector(eventSizeOut)
@@ -78,7 +79,7 @@ object Events {
     *         depends on whether the previous operator is hosted on this host as well or not
     * @param event the event to update
     */
-  def updateMonitoringData(log: LoggingAdapter, event: Event, hostInfo: HostInfo, currentLoad: Double, eventRateOut: Double, eventSizeOut: Long)(implicit ec: ExecutionContext): Unit = {
+  def updateMonitoringData(log: LoggingAdapter, event: Event, hostInfo: HostInfo, currentLoad: Double, eventRateOut: Throughput, eventSizeOut: Long)(implicit ec: ExecutionContext): Unit = {
     try {
       //val start = System.nanoTime()
       //log.debug(s"updating MonitoringData start ")

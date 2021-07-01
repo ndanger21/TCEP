@@ -9,6 +9,7 @@ import tcep.graph.nodes.traits.SystemLoadUpdater
 import tcep.graph.transition.MAPEK.{AddOperator, RemoveOperator}
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BandwidthUnit, BytePerSec, KBytePerSec, MBytePerSec}
 import tcep.machinenodes.qos.BrokerQoSMonitor._
+import tcep.prediction.PredictionHelper.Throughput
 import tcep.utils.TCEPUtils
 
 import java.util.concurrent.TimeUnit
@@ -94,8 +95,8 @@ object BrokerQoSMonitor {
   private case object IOMetricUpdateTick
   private case object IOMetricUpdateKey
   case class IOMetrics(
-                        incomingEventRate: Double = 0.0d,
-                        outgoingEventRate: Double = 0.0d,
+                        incomingEventRate: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS)),
+                        outgoingEventRate: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS)),
                         incomingBandwidth: Bandwidth = Bandwidth(0, KBytePerSec),
                         outgoingBandwidth: Bandwidth = Bandwidth(0, KBytePerSec)
                       ) {
