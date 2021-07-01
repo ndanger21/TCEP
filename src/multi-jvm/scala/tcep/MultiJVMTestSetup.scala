@@ -122,6 +122,7 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
       for(i <- 0 until initialParticipants)
         expectMsg(SetPublisherActorRefsACK())
     }
+    println("\n==== SETUP COMPLETE ==== \n")
     testConductor.enter("setup complete")
   }
 
