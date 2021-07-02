@@ -9,10 +9,6 @@ import tcep.graph.nodes.traits._
 import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
-import java.util.concurrent.TimeUnit
-import scala.concurrent.Await
-import scala.concurrent.duration.FiniteDuration
-
 /**
   * Handling of [[tcep.data.Queries.ConjunctionQuery]] is done by ConjunctionNode.
   *
@@ -81,11 +77,11 @@ case class ConjunctionNode(transitionConfig: TransitionConfig,
     esperInitialized = true
     //log.info(s"created $self with parents \n $parentNode1 and \n $parentNode2")
     }
-    Await.result(init, FiniteDuration(5, TimeUnit.SECONDS)) // block here to wait until esper is initialized
+    //Await.result(init, FiniteDuration(5, TimeUnit.SECONDS)) // block here to wait until esper is initialized
   }
 //TODO move send to blocking dispatcher? http://esper.espertech.com/release-5.3.0/esper-reference/html/performance.html
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
-    case event: Event if p1List.contains(sender()) =>
+    case event: Event if p1List.contains(sender()) && esperInitialized =>
       event.updateArrivalTimestamp()
       event match {
       case Event1(e1) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
@@ -95,7 +91,7 @@ case class ConjunctionNode(transitionConfig: TransitionConfig,
       case Event5(e1, e2, e3, e4, e5) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5)))
       case Event6(e1, e2, e3, e4, e5, e6) => sendEvent("sq1", Array(toAnyRef(event.monitoringData), toAnyRef(e1), toAnyRef(e2), toAnyRef(e3), toAnyRef(e4), toAnyRef(e5), toAnyRef(e6)))
     }
-    case event: Event if p2List.contains(sender()) =>
+    case event: Event if p2List.contains(sender()) && esperInitialized =>
       event.updateArrivalTimestamp()
       event match {
       case Event1(e1) => sendEvent("sq2", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))

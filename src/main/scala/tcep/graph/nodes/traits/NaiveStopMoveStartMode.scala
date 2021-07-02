@@ -157,7 +157,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
 
       @volatile var eventsTransferred = false
       implicit val timeout = retryTimeout
-      implicit val ec: ExecutionContext = blockingIoDispatcher
+      implicit val ec: ExecutionContext = context.system.dispatchers.lookup("transition-dispatcher") // dedicated dispatcher for transition, avoid transition getting stuck
       val parents = getParentActors()
       val child = getChildOperators()
       val dependencies = getDependencies()

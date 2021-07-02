@@ -13,9 +13,6 @@ import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 import java.time.Duration
-import java.util.concurrent.TimeUnit
-import scala.concurrent.Await
-import scala.concurrent.duration.FiniteDuration
 
 /**
   * Handling of [[tcep.data.Queries.JoinQuery]] is done by JoinNode.
@@ -80,7 +77,7 @@ case class JoinNode(transitionConfig: TransitionConfig,
     epStatement.addListener(updateListener)
     esperInitialized = true
     }
-    Await.result(init, FiniteDuration(1, TimeUnit.SECONDS)) // block here to wait until esper is initialized
+    //Await.result(init, FiniteDuration(5, TimeUnit.SECONDS)) // block here to wait until esper is initialized
 
   }
 

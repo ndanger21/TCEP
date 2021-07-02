@@ -146,8 +146,7 @@ trait NaiveMovingStateMode extends TransitionMode {
      val downTime: Option[Long] = Some(System.currentTimeMillis())
      @volatile var succStarted = false
      implicit val timeout = retryTimeout
-     implicit val ec: ExecutionContext = blockingIoDispatcher
-
+     implicit val ec: ExecutionContext = context.system.dispatchers.lookup("transition-dispatcher") // dedicated dispatcher for transition, avoid transition getting stuck
      val parents = getParentActors()
      val dependencies = getDependencies()
 

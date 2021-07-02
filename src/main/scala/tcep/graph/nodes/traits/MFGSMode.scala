@@ -76,7 +76,8 @@ trait MFGSMode extends TransitionMode {
       var downTime: Option[Long] = None
       @volatile var succStarted = false
       implicit val timeout = retryTimeout
-      implicit val ec: ExecutionContext = blockingIoDispatcher
+      //implicit val ec: ExecutionContext = blockingIoDispatcher
+      implicit val ec: ExecutionContext = context.system.dispatchers.lookup("transition-dispatcher") // dedicated dispatcher for transition, avoid transition getting stuck
       val dependencies = getDependencies()
 
       // helper functions for retrying intermediate steps upon failure

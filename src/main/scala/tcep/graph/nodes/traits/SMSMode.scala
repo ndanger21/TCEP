@@ -77,7 +77,7 @@ trait SMSMode extends TransitionMode {
         @volatile var succStarted = false
         @volatile var childNotified = false
         implicit val timeout = retryTimeout
-        implicit val ec: ExecutionContext = blockingIoDispatcher
+        implicit val ec: ExecutionContext = context.system.dispatchers.lookup("transition-dispatcher") // dedicated dispatcher for transition, avoid transition getting stuck
         val parents: List[ActorRef] = getParentActors
         val dependencies = getDependencies()
         var delayToSuccessor: Long = 0

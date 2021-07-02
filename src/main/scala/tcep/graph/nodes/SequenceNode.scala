@@ -10,8 +10,6 @@ import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 import java.util.concurrent.TimeUnit
-import scala.concurrent.Await
-import scala.concurrent.duration.FiniteDuration
 
 /**
   * Handling of [[tcep.data.Queries.SequenceQuery]] is done by SequenceNode.
@@ -76,7 +74,7 @@ case class SequenceNode(transitionConfig: TransitionConfig,
       epStatement.addListener(updateListener)
       esperInitialized = true
     }
-    Await.result(init, FiniteDuration(1, TimeUnit.SECONDS)) // block here to wait until esper is initialized
+    //Await.result(init, FiniteDuration(5, TimeUnit.SECONDS)) // block here to wait until esper is initialized
     log.debug("CREATED SEQUENCE OP")
   }
 
