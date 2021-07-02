@@ -1,6 +1,6 @@
 package tcep.graph.nodes.traits
 
-import akka.actor.{ActorLogging, ActorRef, Address, Props, Terminated}
+import akka.actor.{ActorLogging, ActorRef, ActorSelection, Address, Props, Terminated}
 import akka.cluster.Cluster
 import tcep.ClusterActor
 import tcep.data.Events.{Event, updateMonitoringData}
@@ -25,7 +25,7 @@ import scala.concurrent.{ExecutionContext, Future}
 /**
   * Common methods for different transition modes
   */
-trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLogging {
+trait TransitionMode extends ClusterActor with ActorLogging {
   val query: Query
   val modeName: String = "transition-mode name not specified"
   val parentOperators: mutable.Map[ActorRef, Query] = mutable.Map()
@@ -40,8 +40,9 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
   val slidingMessageQueue: ListBuffer[(ActorRef, Event)]
   var eventRateOut: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS))
   var eventSizeOut: Long = 0
+  var currentCPULoad: Double = 0.0d
   val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor") //TODO use custom dispatcher?
-  val brokerQoSMonitor = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))
+  val brokerQoSMonitor: ActorSelection = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))
 
   def createDuplicateNode(hostInfo: HostInfo): Future[ActorRef]
   // subscribe to events from parent actors (and acquire their operator type)
@@ -74,7 +75,7 @@ trait TransitionMode extends ClusterActor with SystemLoadUpdater with ActorLoggi
 
   def emitEvent(event: Event, eventCallback: Option[EventCallback]): Unit = {
     if (started) {
-      updateMonitoringData(log, event, hostInfo, currentLoad, eventRateOut, eventSizeOut)
+      updateMonitoringData(log, event, hostInfo, currentCPULoad, eventRateOut, eventSizeOut)
       subscribers.keys.foreach(sub => {
         //SpecialStats.log(s"$this", s"sendEvent_${currAlgorithm}_${self.path.name}", s"STREAMING EVENT $event FROM ${s} TO ${sub}")
         //log.debug(s"STREAMING EVENT $event TO ${sub}")

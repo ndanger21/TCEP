@@ -89,6 +89,7 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
 
     case b: BrokerQosMetrics =>
       val currentValues = getCurrentMetrics
+      operator ! CPULoadUpdate(b.cpuLoad)
       lastSamples = List(Some((currentValues, b)),  lastSamples.headOption).flatten
       log.debug("received broker samples, last sample is now {}", lastSamples.head)
 

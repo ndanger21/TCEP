@@ -1,11 +1,11 @@
 package tcep.simulation.adaptive.cep
 
-import java.lang.management.ManagementFactory
-import java.util.concurrent.atomic.AtomicInteger
-
-import javax.management.{Attribute, ObjectName}
 import org.slf4j.LoggerFactory
 
+import java.lang.management.ManagementFactory
+import java.util.concurrent.atomic.AtomicInteger
+import javax.management.{Attribute, ObjectName}
+import scala.concurrent.duration.FiniteDuration
 import scala.language.postfixOps
 import scala.sys.process._
 /**
@@ -30,19 +30,31 @@ object SystemLoad {
     currentLoad > maxLoad
   }
 
-  def getSystemLoad: Double = {
-    getCpuUsageByJavaManagementFactory
+  def getSystemLoad(samplingInterval: FiniteDuration = FiniteDuration(1, "second")): Double = {
+    getCpuUsageByJavaManagementFactory // sometimes unstable results
+    //getCPUUsageByMpstat(samplingInterval) // provides more fine-grained results, but higher overhead -> can lead to thread starvation on machines with few (<=8 threads)
+  }
+
+  private def getCPUUsageByMpstat(samplingInterval: FiniteDuration): Double = {
+    /**
+    Linux 5.4.0-77-generic (niels-VBox) 	02.07.2021 	_x86_64_	(16 CPU)
+    02:14:44     CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
+    02:14:45     all   16,88    0,00    4,88    0,00    0,00    0,26    0,00    0,00    0,00   77,98
+    Average:     all   16,88    0,00    4,88    0,00    0,00    0,26    0,00    0,00    0,00   77,98
+      -> get average of %usr
+    */
+    val loadAvg = s"mpstat ${samplingInterval.toSeconds} 1".!!
+    //log.debug("avg load is {}", loadAvg)
+    loadAvg.split("\n")(4).split("\\s+")(2).replace(",", ".").toDouble / 100
   }
 
   // this takes about ~7-10ms!
   private def getCpuUsageByUnixCommand: Double = {
-    //TODO: make this generic, currently this only works for alpine linux
     val loadavg = "cat /proc/loadavg".!!;
     loadavg.split(" ")(0).toDouble
   }
 
   private def getCpuUsageByJavaManagementFactory: Double = {
-    val bean = ManagementFactory.getOperatingSystemMXBean
     val mbs = ManagementFactory.getPlatformMBeanServer
     val name = ObjectName.getInstance("java.lang:type=OperatingSystem")
     val list = mbs.getAttributes(name, Array("SystemCpuLoad"))
