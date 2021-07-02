@@ -22,11 +22,7 @@ RUN apk update && \
     apk add tcptraceroute && \
     apk add iperf3 && \
     apk add bash && \
-    apk add iw && \
-    apk add wpa_supplicant && \
-    apk add wireless-tools && \
-    apk add ethtool && \
-    apk add openvswitch
+    apk add sysstat
 
 # two entries: 1. nserver for docker network (used in cluster setup) 2. ip for mininet setup
 # make sure the ntpd container is started before all others so it gets this ip

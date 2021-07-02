@@ -1,21 +1,23 @@
 package tcep.graph.nodes
 
-import akka.actor.{ActorLogging, ActorRef, PoisonPill, Props}
+import akka.actor.{ActorLogging, ActorRef, PoisonPill, Props, Timers}
 import akka.pattern.ask
 import akka.util.Timeout
+import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.DistVivaldiActor
 import tcep.ClusterActor
 import tcep.data.Events
 import tcep.data.Events._
 import tcep.data.Queries.ClientDummyQuery
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, Subscribe}
-import tcep.graph.nodes.traits.{SystemLoadUpdater, TransitionConfig, TransitionModeNames}
+import tcep.graph.nodes.traits.{TransitionConfig, TransitionModeNames}
 import tcep.graph.qos.OperatorQosMonitor
 import tcep.graph.qos.OperatorQosMonitor.UpdateEventRateOut
 import tcep.graph.transition.MAPEK.{SetLastTransitionStats, SetTransitionStatus, UpdateLatency}
 import tcep.graph.transition.{MAPEK, SuccessorStart, TransferredState, TransitionRequest}
 import tcep.machinenodes.consumers.Consumer.SetStatus
 import tcep.machinenodes.helper.actors.{ACK, PlacementMessage}
+import tcep.machinenodes.qos.BrokerQoSMonitor.{CPULoad, CPULoadUpdateTick, CPULoadUpdateTickKey, GetCPULoad}
 import tcep.placement.{HostInfo, OperatorMetrics}
 import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.Publisher.AcknowledgeSubscription
@@ -30,7 +32,8 @@ import scala.concurrent.duration._
   *
   **/
 
-class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRef = null, transitionConfig: TransitionConfig, rootOperatorBandwidthEstimate: Double) extends ClusterActor with SystemLoadUpdater with ActorLogging {
+class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRef = null, transitionConfig: TransitionConfig, rootOperatorBandwidthEstimate: Double) extends ClusterActor with ActorLogging with Timers {
+  val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
   var hostInfo: HostInfo = _
   var transitionStartTime: Long = _   //Not in transition
   var transitionStatus: Int = 0
@@ -39,9 +42,13 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
   var eventRateOut: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS))
   var eventSizeOut: Long = 0
   val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor")
-
+  var currentCPULoad = 0.0d
 
   override def receive: Receive = {
+    case CPULoadUpdateTick => TCEPUtils.selectTaskManagerOn(cluster, cluster.selfAddress) ! GetCPULoad
+    case CPULoad(load) =>
+      currentCPULoad = load
+      log.info("CLIENT UPDATED CPU LOAD")
     case UpdateEventRateOut(rate) => eventRateOut = rate
     case TransitionRequest(strategy, requester, stats, placement) => {
       sender() ! ACK()
@@ -96,7 +103,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
         eventSizeOut = SizeEstimator.estimate(event)
         log.info(s"$this", s"hostInfo after update: ${hostInfo.operatorMetrics}")
       }
-      Events.updateMonitoringData(log, event, hostInfo, currentLoad, eventRateOut, eventSizeOut)
+      Events.updateMonitoringData(log, event, hostInfo, currentCPULoad, eventRateOut, eventSizeOut)
 
       consumer ! event
       operatorQoSMonitor ! event
@@ -138,6 +145,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
 
   override def preStart(): Unit = {
     super.preStart()
+    timers.startTimerWithFixedDelay(CPULoadUpdateTickKey, CPULoadUpdateTick, samplingInterval)
     implicit val ec = blockingIoDispatcher
       log.info(s"Subscribing for events from ${rootOperator.path.name}")
     // subscribe to root operator and update HostInfo with BDP to it

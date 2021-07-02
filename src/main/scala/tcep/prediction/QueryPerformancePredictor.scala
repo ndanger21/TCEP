@@ -63,7 +63,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
           )(e => e._2.map(e._1 -> _))
           newOpCoord <- TCEPUtils.getCoordinatesOfNode(cluster, newPlacement(operator._1))
         } yield {
-          val vivDistToParents = newParentCoords.map(_._2.distance(newOpCoord))
+          val maxVivDistToParents = newParentCoords.map(_._2.distance(newOpCoord)).max
           val parentEventRates = parents.map(p => p -> queryDependencyMap(p)._2).toMap // per sampling interval
           val parentEventBandwidth = parentEventRates.map(p => p._2.getEventsPerSec * queryDependencyMap(p._1)._3)
           val outgoingEventRate = queryDependencyMap(operator._1)._2
@@ -78,7 +78,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
             eventSizeOut = queryDependencyMap(operator._1)._3,
             interArrivalLatency = meanAndVariance(List(1 / parentEventRates.values.map(_.getEventsPerSec).sum)),
             processingLatency = meanAndVariance(List(1.0)), //TODO how reasonably to estimate this? create local operator instance, send some events and use avg?
-            networkToParentLatency = meanAndVariance(vivDistToParents),
+            networkToParentLatency = meanAndVariance(List(maxVivDistToParents)),
             endToEndLatency = MeanAndVariance(-1, 0, 0),
             ioMetrics = defaultIOMetrics
           )

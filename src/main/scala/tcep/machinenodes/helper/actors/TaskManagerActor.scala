@@ -11,9 +11,9 @@ import tcep.factories.NodeFactory
 import tcep.graph.nodes.traits.Node.Dependencies
 import tcep.machinenodes.qos.BrokerQoSMonitor
 import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
+import tcep.placement.HostInfo
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.vivaldi.VivaldiCoordinates
-import tcep.placement.{BandwidthEstimator, HostInfo}
 import tcep.prediction.PredictionHelper.Throughput
 import tcep.publishers.RegularPublisher.GetEventsPerSecond
 import tcep.utils.TCEPUtils
@@ -85,7 +85,7 @@ case object GetEventPause extends TransitionControlMessage
 class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
 
   override implicit val ec = blockingIoDispatcher // almost all tasks are i/o bound
-  private val bandwidthEstimator: ActorRef = context.actorOf(Props(new BandwidthEstimator()), "BandwidthEstimator")
+  //private val bandwidthEstimator: ActorRef = context.actorOf(Props(new BandwidthEstimator()), "BandwidthEstimator")
   private val brokerNodeQoSMonitor: ActorRef = context.actorOf(Props(classOf[BrokerQoSMonitor]), "BrokerQosMonitor")
 
   private val timeout = Timeout(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS)
@@ -186,12 +186,13 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
           s ! publisherEventRates
         }
       } else s ! publisherEventRates
-
+    /*
     case request: SingleBandwidthRequest => bandwidthEstimator.forward(request)
     case r: AllBandwidthsRequest => bandwidthEstimator.forward(r)
     case i: InitialBandwidthMeasurementStart => bandwidthEstimator.forward(i)
     case r: BandwidthMeasurementSlotRequest => bandwidthEstimator.forward(r)
     case c: BandwidthMeasurementComplete => bandwidthEstimator.forward(c)
+     */
     case PublisherActorRefsRequest() =>
       if(this.publisherActorRefs.nonEmpty)
         sender() ! PublisherActorRefsResponse(this.publisherActorRefs)

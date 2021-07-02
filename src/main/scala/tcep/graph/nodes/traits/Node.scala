@@ -12,7 +12,7 @@ import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, GetSamples, Upd
 import tcep.graph.transition._
 import tcep.graph.{CreatedCallback, EventCallback}
 import tcep.machinenodes.helper.actors.{CreateRemoteOperator, PlacementMessage, RemoteOperatorCreated, TransitionControlMessage}
-import tcep.machinenodes.qos.BrokerQoSMonitor.GetIOMetrics
+import tcep.machinenodes.qos.BrokerQoSMonitor.{CPULoadUpdate, GetIOMetrics}
 import tcep.placement._
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.mop.RizouAlgorithm
@@ -94,6 +94,7 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
     case GetSamples => operatorQoSMonitor.forward(GetSamples)
     case UpdateEventRateOut(rate) => eventRateOut = rate
     case UpdateEventSizeOut(size) => eventSizeOut = size
+    case CPULoadUpdate(load) => currentCPULoad = load // received from operatorQosMonitor after each sampling tick
     case GetIOMetrics => operatorQoSMonitor.forward(GetIOMetrics)
     case GetOperatorQoSMetrics => operatorQoSMonitor.forward(GetOperatorQoSMetrics)
     case AcknowledgeSubscription(_) if getParentActors.contains(sender()) => log.debug(s"received subscription ACK from ${sender()}")

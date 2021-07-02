@@ -51,7 +51,7 @@ class MasterNode extends VivaldiCoordinates with ActorLogging {
     }
   }*/
     case GetCPULoad => {
-      sender() ! SystemLoad.getSystemLoad
+      sender() ! SystemLoad.getSystemLoad()
     }
     case _ => log.info("ignoring unknown task")
   }

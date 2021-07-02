@@ -1,12 +1,13 @@
 package tcep.machinenodes.qos
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Timers}
+import akka.actor.{Actor, ActorLogging, ActorRef, Props, Timers}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.SystemLoadUpdater
 import tcep.graph.transition.MAPEK.{AddOperator, RemoveOperator}
+import tcep.machinenodes.helper.actors.MeasurementMessage
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BandwidthUnit, BytePerSec, KBytePerSec, MBytePerSec}
 import tcep.machinenodes.qos.BrokerQoSMonitor._
 import tcep.prediction.PredictionHelper.Throughput
@@ -30,20 +31,24 @@ import scala.concurrent.duration.FiniteDuration
   * - outgoing events from all operators
   *
   */
-class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with ActorLogging {
+class BrokerQoSMonitor extends Actor with Timers with ActorLogging {
   implicit val ec: ExecutionContext = context.dispatcher
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
   val cpuThreadCount: Int = Runtime.getRuntime.availableProcessors()
   var operatorsOnNode: mutable.Map[Query, ActorRef] = mutable.Map.empty
   var currentNodeIOMetrics: Map[ActorRef, IOMetrics] = Map()
+  val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
+  private val systemLoadUpdater: ActorRef = context.actorOf(Props(classOf[SystemLoadUpdater]), "SystemLoadUpdater")
+  var currentLoad: Double = 0.0d
 
   override def preStart(): Unit = {
     super.preStart()
     timers.startTimerWithFixedDelay(IOMetricUpdateKey, IOMetricUpdateTick, samplingInterval)
   }
 
-  override def receive: Receive = super.receive orElse {
-    case GetCPULoad => sender() ! currentLoad //TODO currently returns avg jvm load of last minute from JMXBean; alternative would be mpstat for entire node over arbitrary interval
+  override def receive: Receive = {
+    case CPULoadUpdate(load) => currentLoad = load // received from systemLoadUpdater
+    case GetCPULoad => sender() ! CPULoad(currentLoad) // currently returns avg userspace-related cpu load over the last sampling interval
     case GetCPUThreadCount => sender() ! cpuThreadCount
     case GetNodeOperatorCount => sender() ! operatorsOnNode.size
     case GetIOMetrics => sender() ! currentNodeIOMetrics.values.fold(IOMetrics())((a,b) => a + b)
@@ -81,7 +86,11 @@ class BrokerQoSMonitor extends Actor with SystemLoadUpdater with Timers with Act
 }
 
 object BrokerQoSMonitor {
+  case class CPULoad(load: Double) extends MeasurementMessage
   case object GetCPULoad
+  case class CPULoadUpdate(load: Double) extends MeasurementMessage
+  case object CPULoadUpdateTick
+  case object CPULoadUpdateTickKey
   case object GetCPUThreadCount
   case object GetNodeOperatorCount
   case object GetIncomingEventRate
