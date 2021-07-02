@@ -11,6 +11,7 @@ import tcep.simulation.tcep.MobilityData
 import tcep.utils.SizeEstimator
 
 import java.time.Duration
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.collection.mutable.HashMap
@@ -23,11 +24,11 @@ import scala.reflect.runtime.universe.{TypeTag, typeOf}
 object Queries {
 
   sealed trait NStream { val publisherName: String }
-  case class NStream1[A]                (publisherName: String)(implicit tagA: TypeTag[A]) extends NStream
-  case class NStream2[A, B]             (publisherName: String)(implicit tagA: TypeTag[A], tagB: TypeTag[B]) extends NStream
-  case class NStream3[A, B, C]          (publisherName: String)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C]) extends NStream
-  case class NStream4[A, B, C, D]       (publisherName: String)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D]) extends NStream
-  case class NStream5[A, B, C, D, E]    (publisherName: String)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E]) extends NStream
+  case class NStream1[A]                (publisherName: String, id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A]) extends NStream
+  case class NStream2[A, B]             (publisherName: String, id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B]) extends NStream
+  case class NStream3[A, B, C]          (publisherName: String, id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C]) extends NStream
+  case class NStream4[A, B, C, D]       (publisherName: String, id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D]) extends NStream
+  case class NStream5[A, B, C, D, E]    (publisherName: String, id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E]) extends NStream
 
   sealed trait Window
   case class SlidingInstances  (instances: Int) extends Window
@@ -294,12 +295,12 @@ object Queries {
     def estimateEventSize: Long = SizeEstimator.estimate(Event6(getSampleValue(types(0)), getSampleValue(types(1)), getSampleValue(types(2)), getSampleValue(types(3)), getSampleValue(types(4)), getSampleValue(types(5))))
   }
 
-  case class Stream1[A]                (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A]) extends Query1[A] with StreamQuery
-  case class Stream2[A, B]             (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B]) extends Query2[A, B]             with StreamQuery
-  case class Stream3[A, B, C]          (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C]) extends Query3[A, B, C]          with StreamQuery
-  case class Stream4[A, B, C, D]       (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D]) extends Query4[A, B, C, D]       with StreamQuery
-  case class Stream5[A, B, C, D, E]    (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E]) extends Query5[A, B, C, D, E]    with StreamQuery
-  case class Stream6[A, B, C, D, E, F] (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E], tagF: TypeTag[F]) extends Query6[A, B, C, D, E, F] with StreamQuery
+  case class Stream1[A]                (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A]) extends Query1[A] with StreamQuery
+  case class Stream2[A, B]             (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B]) extends Query2[A, B]             with StreamQuery
+  case class Stream3[A, B, C]          (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C]) extends Query3[A, B, C]          with StreamQuery
+  case class Stream4[A, B, C, D]       (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D]) extends Query4[A, B, C, D]       with StreamQuery
+  case class Stream5[A, B, C, D, E]    (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E]) extends Query5[A, B, C, D, E]    with StreamQuery
+  case class Stream6[A, B, C, D, E, F] (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E], tagF: TypeTag[F]) extends Query6[A, B, C, D, E, F] with StreamQuery
 
   case class Sequence11[A, B]             (s1: NStream1[A],             s2: NStream1[B],             requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B]) extends Query2[A, B]             with SequenceQuery
   case class Sequence12[A, B, C]          (s1: NStream1[A],             s2: NStream2[B, C],          requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C]) extends Query3[A, B, C]          with SequenceQuery

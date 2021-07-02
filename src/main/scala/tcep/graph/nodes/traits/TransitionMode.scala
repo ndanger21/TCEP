@@ -150,7 +150,6 @@ trait TransitionMode extends ClusterActor with ActorLogging {
 
   def notifyMAPEK(cluster: Cluster, successor: ActorRef): Future[Unit] = {
     implicit val timeout = TCEPUtils.timeout
-    brokerQoSMonitor ! AddOperator((query, successor))
     brokerQoSMonitor ! RemoveOperator((query, self))
     for {
       knowledgeActor <- TCEPUtils.selectKnowledge(cluster).resolveOne().mapTo[ActorRef]

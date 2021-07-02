@@ -120,8 +120,9 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       speedPublishers.map(p => Stream1[MobilityData](p._1, Set())).sortBy(_.publisherName)
     // fewer speed publisher nodes than needed for the query
     else if(speedPublishers.nonEmpty) {
-      log.warning(s"not enough speed publishers for all stream operators, reusing some (${speedPublishers.size} of $nSpeedStreamOperators")
-      0 until nSpeedStreamOperators map { i => Stream1[MobilityData](speedPublishers(i % speedPublishers.size)._1, Set())} toVector
+      val streams = (0 until nSpeedStreamOperators).map(i => Stream1[MobilityData](speedPublishers(i % speedPublishers.size)._1, Set())).toVector
+      log.warning(s"not enough speed publishers for all stream operators, reusing some (${speedPublishers.size} of $nSpeedStreamOperators (unique Stream operators: ${streams.size}")
+      streams
     }
     else throw new IllegalArgumentException(s"no speed publishers found, publishers: \n $publishers")
   }
