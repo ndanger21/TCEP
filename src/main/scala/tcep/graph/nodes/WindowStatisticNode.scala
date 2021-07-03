@@ -1,24 +1,15 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.WindowStatisticQuery
-import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
-import tcep.graph.{CreatedCallback, EventCallback}
+import tcep.graph.nodes.traits.Node.NodeProperties
+import tcep.graph.nodes.traits.UnaryNode
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.{StatisticData, YahooDataNew}
 
 import scala.collection.mutable.{HashMap, ListBuffer}
 
-case class WindowStatisticNode(transitionConfig: TransitionConfig,
-                               hostInfo: HostInfo,
-                               backupMode: Boolean,
-                               mainNode: Option[ActorRef],
-                               query: WindowStatisticQuery,
-                               createdCallback: Option[CreatedCallback],
-                               eventCallback: Option[EventCallback],
-                               isRootOperator: Boolean,
-                                      _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+case class WindowStatisticNode(query: WindowStatisticQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   var storage: HashMap[Int, ListBuffer[Double]] = HashMap.empty[Int, ListBuffer[Double]]
 
@@ -42,7 +33,7 @@ case class WindowStatisticNode(transitionConfig: TransitionConfig,
       for (id <- updated) {
         val statEvent = Event1(StatisticData(id, this.storage.get(id).get.size))
         statEvent.monitoringData = event.monitoringData
-        emitEvent(statEvent, eventCallback)
+        emitEvent(statEvent, np.eventCallback)
       }
     case unhandledMessage =>
   }

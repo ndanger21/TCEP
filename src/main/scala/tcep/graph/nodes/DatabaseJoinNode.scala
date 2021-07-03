@@ -1,30 +1,21 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.DatabaseJoinQuery
-import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
-import tcep.graph.{CreatedCallback, EventCallback}
+import tcep.graph.nodes.traits.Node.NodeProperties
+import tcep.graph.nodes.traits.UnaryNode
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.YahooDataNew
 
 import scala.collection.mutable.ListBuffer
 
-case class DatabaseJoinNode(transitionConfig: TransitionConfig,
-                            hostInfo: HostInfo,
-                            backupMode: Boolean,
-                            mainNode: Option[ActorRef],
-                            query: DatabaseJoinQuery,
-                            createdCallback: Option[CreatedCallback],
-                            eventCallback: Option[EventCallback],
-                            isRootOperator: Boolean,
-                                _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+case class DatabaseJoinNode(query: DatabaseJoinQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
       event.updateArrivalTimestamp()
       val s = sender()
-      if(parentActor.contains(s)) {
+      if(np.parentActor.contains(s)) {
         val value: List[YahooDataNew] = event match {
           case Event1(e1) =>
             this.handle(List(e1))
@@ -42,7 +33,7 @@ case class DatabaseJoinNode(transitionConfig: TransitionConfig,
         for (data <- value) {
           val dbEvent = Event1(data)
           dbEvent.monitoringData = event.monitoringData
-          emitEvent(dbEvent, eventCallback)
+          emitEvent(dbEvent, np.eventCallback)
         }
       }
     case unhandledMessage =>

@@ -55,7 +55,7 @@ class Simulation(name: String, query: Query, transitionConfig: TransitionConfig,
     for {
       monitors <- (this.consumer ? GetMonitorFactories).mapTo[Array[MonitorFactory]]
       _ = {
-        log.info(s"Monitors are: $monitors")
+        log.info(s"Monitors are: \n${monitors.mkString("\n")}")
         queryGraph = new QueryGraph(query, transitionConfig, publishers, startingPlacementStrategy, Some(GraphCreatedCallback()), consumer, mapekType)
       }
       graph <- queryGraph.createAndStart()

@@ -1,27 +1,18 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.ConverterQuery
-import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
-import tcep.graph.{CreatedCallback, EventCallback}
+import tcep.graph.nodes.traits.Node.NodeProperties
+import tcep.graph.nodes.traits.UnaryNode
 import tcep.placement.HostInfo
 
-case class ConverterNode(transitionConfig: TransitionConfig,
-                         hostInfo: HostInfo,
-                         backupMode: Boolean,
-                         mainNode: Option[ActorRef],
-                         query: ConverterQuery,
-                         createdCallback: Option[CreatedCallback],
-                         eventCallback: Option[EventCallback],
-                         isRootOperator: Boolean,
-                          _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+case class ConverterNode(query: ConverterQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
       event.updateArrivalTimestamp()
       val s = sender()
-      if (parentActor.contains(s)) {
+      if (np.parentActor.contains(s)) {
         val eventList: List[Any] = event match {
           case Event1(e1) =>
             this.handle(e1)
@@ -39,7 +30,7 @@ case class ConverterNode(transitionConfig: TransitionConfig,
         }
         val convertedEvent = Event1(eventList)
         convertedEvent.monitoringData = event.monitoringData
-        emitEvent(convertedEvent, eventCallback)
+        emitEvent(convertedEvent, np.eventCallback)
       }
     case unhandledMessage =>
   }

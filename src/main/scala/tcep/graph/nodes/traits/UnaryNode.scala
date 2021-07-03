@@ -12,14 +12,13 @@ import tcep.utils.TCEPUtils
 /**
   * Handling of [[tcep.data.Queries.UnaryQuery]] is done by UnaryNode
   **/
-abstract class UnaryNode(var parentActor: Seq[ActorRef]) extends Node {
-
-  override val query: UnaryQuery
+trait UnaryNode extends Node {
+  val query: UnaryQuery
   private var transitionRequestor: ActorRef = _
   private var selfTransitionStarted = false
   private var transitionStartTime: Long = _
   //can have multiple active unary parents due to SMS mode (we could receive messages from older parents)
-  override def getParentActors(): List[ActorRef] = parentActor.toList
+  override def getParentActors(): List[ActorRef] = np.parentActor.toList
 
   override def preStart(): Unit = {
     super.preStart()
@@ -27,13 +26,13 @@ abstract class UnaryNode(var parentActor: Seq[ActorRef]) extends Node {
 
   override def childNodeReceive: Receive = {
 
-    case DependenciesRequest => sender() ! DependenciesResponse(parentActor)
+    case DependenciesRequest => sender() ! DependenciesResponse(np.parentActor)
 
     case TransferredState(placementAlgo, successor, oldParent, stats, lastOperator, placement) =>
       if(!selfTransitionStarted) {
         selfTransitionStarted = true
-        if (parentActor.contains(oldParent)) {
-          parentActor = Seq(successor)
+        if (np.parentActor.contains(oldParent)) {
+          np.parentActor = Seq(successor)
           updateParentOperatorMap(oldParent, successor)
         } else log.error(new IllegalStateException(s"received TransferState msg from non-parent: ${oldParent}; \n parent: \n $getParentActors()"), "TRANSITION ERROR")
 
@@ -42,25 +41,25 @@ abstract class UnaryNode(var parentActor: Seq[ActorRef]) extends Node {
       }
 
     case OperatorMigrationNotice(oldOperator, newOperator) =>  // received from migrating parent
-      if(parentActor.contains(oldOperator)) {
-        parentActor = Seq(newOperator)
+      if(np.parentActor.contains(oldOperator)) {
+        np.parentActor = Seq(newOperator)
         updateParentOperatorMap(oldOperator, newOperator)
       }
       TCEPUtils.guaranteedDelivery(context, newOperator, Subscribe(self, getParentOperatorMap().head._2))(blockingIoDispatcher).mapTo[AcknowledgeSubscription]
-      log.info(s"received operator migration notice from ${oldOperator}, \n new operator is $newOperator \n updated parent $parentActor")
+      log.info(s"received operator migration notice from ${oldOperator}, \n new operator is $newOperator \n updated parent $np.parentActor")
 
     case ShutDown() =>
-      parentActor.last ! ShutDown()
+      np.parentActor.last ! ShutDown()
       self ! PoisonPill
   }
 
 
   override def handleTransitionRequest(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
-    log.info(s"Asking ${parentActor.last.path.name} to transit to algorithm ${algorithm}")
-    transitionLog(s"asking old parent ${parentActor.last.path} to transit to new parent with ${algorithm}")
+    log.info(s"Asking ${np.parentActor.last.path.name} to transit to algorithm ${algorithm}")
+    transitionLog(s"asking old parent ${np.parentActor.last.path} to transit to new parent with ${algorithm}")
     transitionRequestor = requester
     transitionStartTime = System.currentTimeMillis()
-    TCEPUtils.guaranteedDelivery(context, parentActor.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))(blockingIoDispatcher)
+    TCEPUtils.guaranteedDelivery(context, np.parentActor.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))(blockingIoDispatcher)
   }
 
 

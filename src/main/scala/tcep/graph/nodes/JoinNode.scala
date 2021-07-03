@@ -1,15 +1,14 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import com.espertech.esper.client._
 import tcep.data.Events._
 import tcep.data.Queries._
+import tcep.graph.QueryGraph
 import tcep.graph.nodes.JoinNode._
 import tcep.graph.nodes.traits.EsperEngine._
-import tcep.graph.nodes.traits.Node.GetWindowStateEvents
+import tcep.graph.nodes.traits.Node.{GetWindowStateEvents, NodeProperties}
 import tcep.graph.nodes.traits.TransitionModeNames.{apply => _}
 import tcep.graph.nodes.traits._
-import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 import java.time.Duration
@@ -19,18 +18,10 @@ import java.time.Duration
   *
   * @see [[QueryGraph]]
   **/
-case class JoinNode(transitionConfig: TransitionConfig,
-                    hostInfo: HostInfo,
-                    backupMode: Boolean,
-                    mainNode: Option[ActorRef],
-                    query: JoinQuery,
-                    createdCallback: Option[CreatedCallback],
-                    eventCallback: Option[EventCallback],
-                    isRootOperator: Boolean,
-                    parents: ActorRef*) extends BinaryNode with EsperEngine {
+case class JoinNode(query: JoinQuery, hostInfo: HostInfo, np: NodeProperties) extends BinaryNode with EsperEngine {
 
-  var parentNode1 = parents.head
-  var parentNode2 = parents.last
+  var parentNode1 = np.parentActor.head
+  var parentNode2 = np.parentActor.last
   override val esperServiceProviderUri: String = name
   var esperInitialized = false
   var epStatement: EPStatement = _
@@ -72,7 +63,7 @@ case class JoinNode(transitionConfig: TransitionConfig,
           mergeMonitoringData(res, monitoringData1, monitoringData2, log)
       }
       log.debug(s"creating new event $event with merged monitoringData")
-      emitEvent(event, eventCallback)
+      emitEvent(event, np.eventCallback)
     })
     epStatement.addListener(updateListener)
     esperInitialized = true

@@ -1,25 +1,16 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.ObserveChangeQuery
-import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
-import tcep.graph.{CreatedCallback, EventCallback}
+import tcep.graph.nodes.traits.Node.NodeProperties
+import tcep.graph.nodes.traits.UnaryNode
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.LinearRoadDataNew
 
 import scala.collection.mutable.{HashMap, ListBuffer}
 
 
-case class ObserveChangeNode(transitionConfig: TransitionConfig,
-                             hostInfo: HostInfo,
-                             backupMode: Boolean,
-                             mainNode: Option[ActorRef],
-                             query: ObserveChangeQuery,
-                             createdCallback: Option[CreatedCallback],
-                             eventCallback: Option[EventCallback],
-                             isRootOperator: Boolean,
-                                  _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+case class ObserveChangeNode(query: ObserveChangeQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   var storage: HashMap[Int, AnyVal] = HashMap.empty[Int, AnyVal]
   var lastEmit: Double = System.currentTimeMillis().toDouble
@@ -28,7 +19,7 @@ case class ObserveChangeNode(transitionConfig: TransitionConfig,
     case event: Event =>
       event.updateArrivalTimestamp()
       val s = sender()
-      if (parentActor.contains(s)) {
+      if (np.parentActor.contains(s)) {
         val value: List[LinearRoadDataNew] = event match {
           case Event1(e1) =>
             this.getToForward(List(e1))
@@ -54,7 +45,7 @@ case class ObserveChangeNode(transitionConfig: TransitionConfig,
           //Events.initializeMonitoringData(log, changeEvent, 1000.0d / (System.currentTimeMillis().toDouble-lastEmit), cluster.selfAddress)
           changeEvent.monitoringData = event.monitoringData
           lastEmit = System.currentTimeMillis().toDouble
-          emitEvent(changeEvent, eventCallback)
+          emitEvent(changeEvent, np.eventCallback)
         }
         //} else {
           /*var changedData = ListBuffer.empty[(Int, Int)]

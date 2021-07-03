@@ -1,12 +1,12 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import com.espertech.esper.client._
 import tcep.data.Events._
 import tcep.data.Queries._
+import tcep.graph.QueryGraph
 import tcep.graph.nodes.traits.EsperEngine._
+import tcep.graph.nodes.traits.Node.NodeProperties
 import tcep.graph.nodes.traits._
-import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 /**
@@ -14,18 +14,10 @@ import tcep.placement.HostInfo
   *
   * @see [[QueryGraph]]
   **/
-case class ConjunctionNode(transitionConfig: TransitionConfig,
-                           hostInfo: HostInfo,
-                           backupMode: Boolean,
-                           mainNode: Option[ActorRef],
-                           query: ConjunctionQuery,
-                           createdCallback: Option[CreatedCallback],
-                           eventCallback: Option[EventCallback],
-                           isRootOperator: Boolean,
-                              parents: ActorRef*) extends BinaryNode with EsperEngine {
+case class ConjunctionNode(query: ConjunctionQuery, hostInfo: HostInfo, np: NodeProperties) extends BinaryNode with EsperEngine {
 
-  var parentNode1 = parents.head
-  var parentNode2 = parents.last
+  var parentNode1 = np.parentActor.head
+  var parentNode2 = np.parentActor.last
 
   override val esperServiceProviderUri: String = name
   var esperInitialized = false
@@ -68,7 +60,7 @@ case class ConjunctionNode(transitionConfig: TransitionConfig,
             val res = Event6(values(0), values(1), values(2), values(3), values(4), values(5))
             mergeMonitoringData(res, monitoringData1, monitoringData2, log)
         }
-        emitEvent(event, eventCallback)
+        emitEvent(event, np.eventCallback)
       } catch {
         case e: Throwable => log.error(e, s"failed to merge events from event beans: \n $values1 \n $values2")
       }

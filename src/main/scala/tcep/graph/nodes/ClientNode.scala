@@ -41,7 +41,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
   implicit val timeout = Timeout(5 seconds)
   var eventRateOut: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS))
   var eventSizeOut: Long = 0
-  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor")
+  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], ClientDummyQuery(), self, mapek.monitor), "operatorQosMonitor")
   var currentCPULoad = 0.0d
 
   override def receive: Receive = {

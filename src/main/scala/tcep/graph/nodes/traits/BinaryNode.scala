@@ -17,8 +17,6 @@ import scala.concurrent.ExecutionContext
   **/
 trait BinaryNode extends Node {
   override val query: BinaryQuery
-  var parentNode1: ActorRef
-  var parentNode2: ActorRef
   //can have multiple active parents due to SMS mode (we could receive messages from previous parent instances during transition)
   val p1List: ListBuffer[ActorRef] = ListBuffer()
   val p2List: ListBuffer[ActorRef] = ListBuffer()
@@ -32,21 +30,21 @@ trait BinaryNode extends Node {
 
   override def preStart(): Unit = {
     super.preStart()
-    p1List += parentNode1
-    p2List += parentNode2
+    p1List += np.parentActor.head
+    p2List += np.parentActor.last
   }
 
   private def updateParent1(oldParent: ActorRef, newParent: ActorRef): Unit = {
     p1List += newParent
     p1List -= oldParent
-    parentNode1 = newParent
+    np.parentActor = Seq(newParent, np.parentActor.last)
     updateParentOperatorMap(oldParent, newParent)
   }
 
   private def updateParent2(oldParent: ActorRef, newParent: ActorRef): Unit = {
     p2List += newParent
     p2List -= oldParent
-    parentNode2 = newParent
+    np.parentActor = Seq(np.parentActor.head, newParent)
     updateParentOperatorMap(oldParent, newParent)
   }
 
@@ -54,7 +52,7 @@ trait BinaryNode extends Node {
   def handleTransferredState(algorithm: String, newParent: ActorRef, oldParent: ActorRef, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
     implicit val ec: ExecutionContext = blockingIoDispatcher
     if(!selfTransitionStarted) {
-      transitionConfig.transitionExecutionMode match {
+      np.transitionConfig.transitionExecutionMode match {
         case TransitionExecutionModes.CONCURRENT_MODE =>
           if (p1List.contains(oldParent)) {
             updateParent1(oldParent, newParent)
@@ -87,7 +85,7 @@ trait BinaryNode extends Node {
 
       if (!parent1TransitInProgress && !parent2TransitInProgress) {
         selfTransitionStarted = true
-        log.info(s"parents transition complete, executing own transition -\n new parents: ${parentNode1.toString()} ${parentNode2.toString()}")
+        log.debug("parents transition complete, executing own transition")
         transitionLog(s"old parents transition to new parents with ${algorithm} complete, executing own transition")
         executeTransition(transitionRequestor, algorithm, transitionStatsAcc, placement)
       }
@@ -125,7 +123,7 @@ trait BinaryNode extends Node {
     transitionStartTime = System.currentTimeMillis()
     transitionRequestor = requester
     transitionStatsAcc = TransitionStats()
-    transitionConfig.transitionExecutionMode match {
+    np.transitionConfig.transitionExecutionMode match {
       case TransitionExecutionModes.CONCURRENT_MODE => {
         TCEPUtils.guaranteedDelivery(context, p1List.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
         TCEPUtils.guaranteedDelivery(context, p2List.last, TransitionRequest(algorithm, self, stats, placement), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))

@@ -1,30 +1,21 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.ShrinkingFilterQuery
-import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
-import tcep.graph.{CreatedCallback, EventCallback}
+import tcep.graph.nodes.traits.Node.NodeProperties
+import tcep.graph.nodes.traits.UnaryNode
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.LinearRoadDataNew
 
 import scala.collection.mutable.ListBuffer
 
-case class ShrinkingFilterNode(transitionConfig: TransitionConfig,
-                               hostInfo: HostInfo,
-                               backupMode: Boolean,
-                               mainNode: Option[ActorRef],
-                               query: ShrinkingFilterQuery,
-                               createdCallback: Option[CreatedCallback],
-                               eventCallback: Option[EventCallback],
-                               isRootOperator: Boolean,
-                                      _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+case class ShrinkingFilterNode(query: ShrinkingFilterQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
       event.updateArrivalTimestamp()
       val s = sender()
-      if (parentActor.contains(s)) {
+      if (np.parentActor.contains(s)) {
         val value: List[Any] = event match {
           case Event1(e1) =>
             this.handle(List(e1))
@@ -60,7 +51,7 @@ case class ShrinkingFilterNode(transitionConfig: TransitionConfig,
         }
         if (outEvent.isDefined) {
           outEvent.get.monitoringData = event.monitoringData
-          emitEvent(outEvent.get, eventCallback)
+          emitEvent(outEvent.get, np.eventCallback)
         }
       }
     case unhandledMessage =>

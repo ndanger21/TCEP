@@ -54,10 +54,14 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
   val sampleFileHeader: String = DynamicCFMNames.ALL_FEATURES.mkString(";") + ";" + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
 
   override def preStart(): Unit = {
-    timers.startTimerAtFixedRate(GetSamplingDataKey, GetSamplingDataTick, samplingInterval)
+    //timers.startTimerAtFixedRate(GetSamplingDataKey, GetSamplingDataTick, samplingInterval)
   }
 
   override def receive: Receive = super.receive orElse {
+    case s@SampleUpdate(query, lastSamples) =>
+      logSample(sender(), lastSamples)
+      mapek.knowledge.forward(s)
+
     case GetSamplingDataTick => mapek.knowledge ! GetOperators // response below
     case CurrentOperators(placement) =>
       log.debug("received placement {}", placement.mkString("\n"))
@@ -87,6 +91,26 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
         mostRecentSamples.pipeTo(mapek.knowledge)
       }
     case _ =>
+  }
+
+  def logSample(op: ActorRef, samples: Samples): Unit = {
+    // only log if any events arrived
+    if(samples.nonEmpty && samples.head._1.ioMetrics.incomingEventRate.amount > 0) {
+      val logFileString: String = op.toString().split("-").head.split("/").last
+      if (!headersInit.contains(op)) {
+        SpecialStats.log(logFileString, logFileString, sampleFileHeader)
+        headersInit = headersInit.updated(op, true)
+      }
+
+      def getShiftedSample: Sample = if (shiftTarget) samples.last else samples.head
+
+      if (!shiftTarget || shiftTarget && samples.size > 1) {
+        if(transitionsEnabled) updateOnlineModel(getShiftedSample)
+        SpecialStats.log(logFileString, logFileString,
+          DynamicCFMNames.ALL_FEATURES.map(f => getFeatureValue(samples.head, f)).mkString(";") + ";" +
+            DynamicCFMNames.ALL_TARGET_METRICS.map(m => getTargetMetricValue(getShiftedSample, m)).mkString(";"))
+      }
+    }
   }
 
   private object GetSamplingDataTick

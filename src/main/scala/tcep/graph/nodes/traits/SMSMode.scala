@@ -27,7 +27,6 @@ trait SMSMode extends TransitionMode {
   override val modeName = "SMS mode"
   protected val deltaFactor = 10.0
   private var sentSubscribe = false
-  val sched = Executors.newSingleThreadScheduledExecutor()
   val task = new Runnable {
     def run() = {
       startEvents()
@@ -57,7 +56,7 @@ trait SMSMode extends TransitionMode {
           startEvents()
         } else { // still time left until minStateTime, schedule event send start
           val timeLeftUntil = Instant.now().until(minStateTime, ChronoUnit.NANOS)
-          sched.schedule(task, timeLeftUntil, TimeUnit.NANOSECONDS)
+          Executors.newSingleThreadScheduledExecutor().schedule(task, timeLeftUntil, TimeUnit.NANOSECONDS)
           transitionLog(s"received StartExecutionAtTime from predecessor, it is BEFORE minStateTime $minStateTime -> scheduling event start in ${timeLeftUntil / 1e6}ms")
         }
         self ! UpdateTask(algorithm)
@@ -111,7 +110,7 @@ trait SMSMode extends TransitionMode {
               val timestamp = System.currentTimeMillis()
               val migrationTime = 0
               val nodeSelectionTime = timestamp - startTime
-              GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
+              GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, np.isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
               notifyMAPEK(cluster, successor) // notify mapek knowledge about operator change
               val placementOverhead = newHostInfo.operatorMetrics.accPlacementMsgOverhead
               // remote operator creation, state transfer and execution start, subscription management
@@ -123,7 +122,7 @@ trait SMSMode extends TransitionMode {
                 notifyChild(successor, updatedStats)
               } else { // still time left until minStateTime, schedule call to notifyChild
                 val timeLeftUntil = Instant.now().until(minStateTime, ChronoUnit.NANOS)
-                sched.schedule(() => notifyChild(successor, updatedStats), timeLeftUntil, TimeUnit.NANOSECONDS)
+                Executors.newSingleThreadScheduledExecutor().schedule(() => notifyChild(successor, updatedStats), timeLeftUntil, TimeUnit.NANOSECONDS)
                 transitionLog(s"received ACK for StartExecutionAtTime from successor, it is BEFORE minStateTime -> scheduling event stop and child notification in ${timeLeftUntil / 1e6}ms")
               }
               Unit

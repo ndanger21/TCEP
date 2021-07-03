@@ -5,6 +5,7 @@ import breeze.stats._
 import breeze.stats.meanAndVariance.MeanAndVariance
 import com.typesafe.config.ConfigFactory
 import tcep.data.Events.Event
+import tcep.data.Queries.Query
 import tcep.graph.qos.OperatorQosMonitor._
 import tcep.graph.transition.mapek.DynamicCFMNames._
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BytePerSec, KBytePerSec}
@@ -27,7 +28,7 @@ import scala.concurrent.duration.FiniteDuration
   * - mean + var processing latency
   * - mean + var of network latency to parent operator (time between sending from parent until event is taken off mailbox at this operator)
   */
-class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with ActorLogging {
+class OperatorQosMonitor(query: Query, operator: ActorRef, monitorCentral: ActorRef) extends Actor with Timers with ActorLogging {
 
   val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
   implicit val blockingIoDispatcher: ExecutionContext = context.system.dispatchers.lookup("blocking-io-dispatcher")
@@ -43,13 +44,10 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
   val eventSamples: ListBuffer[Event] = ListBuffer.empty
   val brokerQoSMonitor: ActorSelection = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))
   var lastSamples: Samples = List()
-  //var sched = Executors.newSingleThreadScheduledExecutor()
-  //var samplingTask: ScheduledFuture[_] = _
 
   override def preStart(): Unit = {
     super.preStart()
     timers.startTimerAtFixedRate(SamplingTickKey, SamplingTick, samplingInterval)
-    //samplingTask = sched.scheduleAtFixedRate(() => self ! SamplingTick, 1, samplingInterval.toSeconds, TimeUnit.SECONDS)
   }
 
   override def receive: Receive = {
@@ -91,6 +89,7 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
       val currentValues = getCurrentMetrics
       operator ! CPULoadUpdate(b.cpuLoad)
       lastSamples = List(Some((currentValues, b)),  lastSamples.headOption).flatten
+      monitorCentral ! SampleUpdate(query, lastSamples)
       log.debug("received broker samples, last sample is now {}", lastSamples.head)
 
     case GetIOMetrics =>
@@ -112,6 +111,7 @@ class OperatorQosMonitor(operator: ActorRef) extends Actor with Timers with Acto
 }
 
 object OperatorQosMonitor {
+  case class SampleUpdate(query: Query, lastSamples: Samples)
   case object GetSamples
   type Sample = (OperatorQoSMetrics, BrokerQosMetrics)
   type Samples = List[Sample]

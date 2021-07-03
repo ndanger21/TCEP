@@ -42,7 +42,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
   override def emitEvent(event: Event, eventCallback: Option[EventCallback]): Unit = {
     if (started) super.emitEvent(event, eventCallback)
     // store events that were not sent while waiting to move operator
-    else if (transitionInitiated && transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart)
+    else if (transitionInitiated && np.transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart)
       unsentEvents += Tuple2(self, event)
   }
 
@@ -171,7 +171,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
         val windowEvents = if (!maxWindowTime().isZero) slidingMessageQueue.toList else List()
         transitionLog(s"sending TransferEvents (${windowEvents.size} window state events and ${unsentEvents.size} unsent events) to $successor with timeout $retryTimeout")
         // do NOT send subscriber set unless the subscriber is the clientNode (we do not want to receive new events on old operators); instead, let successor of child subscribe by itself
-        val subs = if (isRootOperator) subscribers.toList else List()
+        val subs = if (np.isRootOperator) subscribers.toList else List()
         val transferEventsMessage = TransferEvents(downTime.getOrElse(System.currentTimeMillis()), startTime, subs, windowEvents, unsentEvents.toList, algorithm)
         val transferACK = TCEPUtils.guaranteedDelivery(context, successor, transferEventsMessage, tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
         transferACK.map(ack => {
@@ -179,7 +179,7 @@ trait NaiveStopMoveStartMode extends TransitionMode {
           val timestamp = System.currentTimeMillis()
           val migrationTime = timestamp - downTime.get
           val nodeSelectionTime = timestamp - startTime
-          GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
+          GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, np.isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
           // notify mapek knowledge about operator change
           notifyMAPEK(cluster, successor)
           val placementOverhead = newHostInfo.operatorMetrics.accPlacementMsgOverhead

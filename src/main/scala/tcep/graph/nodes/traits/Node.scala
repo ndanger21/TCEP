@@ -5,7 +5,7 @@ import akka.event.LoggingReceive
 import akka.pattern.ask
 import com.typesafe.config.ConfigFactory
 import tcep.data.Queries._
-import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, UnSubscribe, UpdateTask}
+import tcep.graph.nodes.traits.Node.{NodeProperties, OperatorMigrationNotice, UnSubscribe, UpdateTask}
 import tcep.graph.nodes.traits.TransitionExecutionModes.ExecutionMode
 import tcep.graph.nodes.traits.TransitionModeNames.Mode
 import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, GetSamples, UpdateEventRateOut, UpdateEventSizeOut}
@@ -30,26 +30,22 @@ import scala.concurrent.{ExecutionContext, Future}
   * The base class for all of the nodes
   **/
 trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveStopMoveStartMode with ActorLogging {
-
-  val name: String = self.path.name
+  val np: NodeProperties
+  val query: Query
   val hostInfo: HostInfo
-  val transitionConfig: TransitionConfig
+  val name: String = self.path.name
   @volatile var started: Boolean = false
   val placementUpdateInterval: Int = ConfigFactory.load().getInt("constants.placement.update-interval")
-  val backupMode: Boolean
-  val mainNode: Option[ActorRef]
   private var currAlgorithm: String = ""
   implicit val creatorAddress: Address = cluster.selfAddress
 
-  val createdCallback: Option[CreatedCallback]
-  val eventCallback: Option[EventCallback]
   var updateTask: Cancellable = _
 
   override def executeTransition(requester: ActorRef, algorithm: String, stats: TransitionStats, placement: Option[Map[Query, Address]]): Unit = {
-    log.info(s"${self.path.name} executing transition on $transitionConfig")
-    if (transitionConfig.transitionStrategy == TransitionModeNames.SMS) super[SMSMode].executeTransition(requester, algorithm, stats, placement)
-    else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState) super[NaiveMovingStateMode].executeTransition(requester, algorithm, stats, placement)
-    else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart) super[NaiveStopMoveStartMode].executeTransition(requester, algorithm, stats, placement)
+    log.info(s"${self.path.name} executing transition on ${np.transitionConfig}")
+    if (np.transitionConfig.transitionStrategy == TransitionModeNames.SMS) super[SMSMode].executeTransition(requester, algorithm, stats, placement)
+    else if(np.transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState) super[NaiveMovingStateMode].executeTransition(requester, algorithm, stats, placement)
+    else if(np.transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart) super[NaiveStopMoveStartMode].executeTransition(requester, algorithm, stats, placement)
     else super[MFGSMode].executeTransition(requester, algorithm, stats, placement)
   }
 
@@ -59,7 +55,7 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
     // must explicitly start execution by receiving StartExecution(WithData/WithDependencies)
     // message from knowledge actor (initial) or predecessor (when transiting)
     scheduleHeartBeat()
-    log.info(s"starting operator $self in transition mode $transitionConfig")
+    log.info(s"starting operator $self in transition mode $np.transitionConfig")
   }
 
   override def postStop(): Unit = {
@@ -69,9 +65,9 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
   }
 
   def scheduleHeartBeat() = {
-    if (backupMode) {
+    if (np.backupMode) {
       started = false
-      this.context.watch(mainNode.get)
+      this.context.watch(np.mainNode.get)
     }
   }
 
@@ -79,11 +75,11 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
 
   override def receive: Receive = LoggingReceive {
     placementReceive orElse (
-      if (transitionConfig.transitionStrategy == TransitionModeNames.SMS)
+      if (np.transitionConfig.transitionStrategy == TransitionModeNames.SMS)
         super[SMSMode].transitionReceive
-      else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState)
+      else if(np.transitionConfig.transitionStrategy == TransitionModeNames.NaiveMovingState)
         super[NaiveMovingStateMode].transitionReceive
-      else if(transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart)
+      else if(np.transitionConfig.transitionStrategy == TransitionModeNames.NaiveStopMoveStart)
         super[NaiveStopMoveStartMode].transitionReceive
       else
         super[MFGSMode].transitionReceive
@@ -139,7 +135,7 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
             optimalHost: HostInfo <- algorithm.findOptimalNode(hostInfo.operator, hostInfo.operator, dependencies, HostInfo(cluster.selfMember, hostInfo.operator))
           } yield {
             if (!cluster.selfAddress.equals(optimalHost.member.address)) {
-              log.info(s"Relaxation periodic placement update for $query: " +
+              log.info(s"Relaxation periodic placement update for ${query}: " +
                 s"\n moving operator from ${cluster.selfMember} to ${optimalHost.member} " +
                 s"\n with dependencies $dependencies")
               // creates copy of operator on new host
@@ -148,7 +144,7 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
               this.started = false
               val downTime = System.currentTimeMillis()
                 // TODO support other modes
-              if (transitionConfig.transitionStrategy == TransitionModeNames.MFGS) newOperator ! StartExecutionWithData(downTime, startTime, subscribers.toList, slidingMessageQueue.toList, algorithmType)
+              if (np.transitionConfig.transitionStrategy == TransitionModeNames.MFGS) newOperator ! StartExecutionWithData(downTime, startTime, subscribers.toList, slidingMessageQueue.toList, algorithmType)
               else newOperator ! StartExecutionAtTime(subscribers.toList, Instant.now(), algorithmType)
               newOperator ! UpdateTask(algorithmType)
               // inform subscribers about new operator location; parent will receive
@@ -159,14 +155,14 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
               val timestamp = System.currentTimeMillis()
               val migrationTime = timestamp - downTime
               val nodeSelectionTime = timestamp - startTime
-              GUIConnector.sendOperatorTransitionUpdate(self, newOperator, algorithm.name, timestamp, migrationTime, nodeSelectionTime, getParentActors().toList, optimalHost, isRootOperator)(selfAddress = cluster.selfAddress, blockingIoDispatcher)
+              GUIConnector.sendOperatorTransitionUpdate(self, newOperator, algorithm.name, timestamp, migrationTime, nodeSelectionTime, getParentActors(), optimalHost, np.isRootOperator)(selfAddress = cluster.selfAddress, blockingIoDispatcher)
 
               log.info(s"${self} shutting down Self")
               SystemLoad.operatorRemoved()
               updateTask.cancel()
               self ! PoisonPill
 
-            }} else log.info(s"periodic placement update for $query: no change of host \n dependencies: ${dependencies}")
+            }} else log.info(s"periodic placement update for ${query}: no change of host \n dependencies: ${dependencies}")
           }
         }
 
@@ -177,12 +173,12 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
   }
 
 
-  def createDuplicateNode(nodeInfo: HostInfo): Future[ActorRef] = {
+  def createDuplicateNode(duplicateHostInfo: HostInfo): Future[ActorRef] = {
     val startTime = System.currentTimeMillis()
-    val props = Props(getClass, transitionConfig, nodeInfo, backupMode, mainNode, query, createdCallback, eventCallback, isRootOperator, getParentActors())
+    val props = Props(getClass, query, duplicateHostInfo, np)
     for {
-      taskManager <- TCEPUtils.getTaskManagerOfMember(cluster, nodeInfo.member)
-      deployDuplicate <- TCEPUtils.guaranteedDelivery(context, taskManager, CreateRemoteOperator(nodeInfo, props), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher)).mapTo[RemoteOperatorCreated]
+      taskManager <- TCEPUtils.getTaskManagerOfMember(cluster, duplicateHostInfo.member)
+      deployDuplicate <- TCEPUtils.guaranteedDelivery(context, taskManager, CreateRemoteOperator(duplicateHostInfo, props), tlf = Some(transitionLog), tlp = Some(transitionLogPublisher)).mapTo[RemoteOperatorCreated]
     } yield {
       log.info(s"$self spent ${System.currentTimeMillis() - startTime} milliseconds to create duplicate ${deployDuplicate.ref}")
       deployDuplicate.ref
@@ -201,6 +197,15 @@ trait Node extends MFGSMode with SMSMode with NaiveMovingStateMode with NaiveSto
 
 
 object Node {
+  case class NodeProperties(transitionConfig: TransitionConfig,
+                            backupMode: Boolean,
+                            mainNode: Option[ActorRef],
+                            createdCallback: Option[CreatedCallback],
+                            eventCallback: Option[EventCallback],
+                            isRootOperator: Boolean,
+                            monitorCentral: ActorRef,
+                            var parentActor: Seq[ActorRef]
+                           )
   case class Subscribe(subscriber: ActorRef, operator: Query) extends PlacementMessage
   case class UnSubscribe() extends PlacementMessage
   case class UpdateTask(algorithmType: String) extends PlacementMessage

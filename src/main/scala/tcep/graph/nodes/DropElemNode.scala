@@ -1,10 +1,10 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries._
+import tcep.graph.QueryGraph
+import tcep.graph.nodes.traits.Node.NodeProperties
 import tcep.graph.nodes.traits._
-import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 /**
@@ -13,16 +13,7 @@ import tcep.placement.HostInfo
   * @see [[QueryGraph]]
   **/
 
-case class DropElemNode(transitionConfig: TransitionConfig,
-                        hostInfo: HostInfo,
-                        backupMode: Boolean,
-                        mainNode: Option[ActorRef],
-                        query: DropElemQuery,
-                        createdCallback: Option[CreatedCallback],
-                        eventCallback: Option[EventCallback],
-                        isRootOperator: Boolean,
-                        _parentActor: Seq[ActorRef]
-                      ) extends UnaryNode(_parentActor) {
+case class DropElemNode(query: DropElemQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   val elemToBeDropped: Int = query match {
     case DropElem1Of2(_, _) => 1
@@ -84,7 +75,7 @@ case class DropElemNode(transitionConfig: TransitionConfig,
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
 
-    case event: Event if parentActor.contains(sender()) =>
+    case event: Event if np.parentActor.contains(sender()) =>
       event.updateArrivalTimestamp()
       val newEvent = event match {
         case Event1(_) => sys.error("Panic! Control flow should never reach this point!")
@@ -95,7 +86,7 @@ case class DropElemNode(transitionConfig: TransitionConfig,
         case Event6(e1, e2, e3, e4, e5, e6) => handleEvent6(e1, e2, e3, e4, e5, e6)
       }
       newEvent.monitoringData = event.monitoringData
-      emitEvent(newEvent, eventCallback)
+      emitEvent(newEvent, np.eventCallback)
 
     case unhandledMessage =>
   }

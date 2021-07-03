@@ -6,7 +6,7 @@ import tcep.ClusterActor
 import tcep.data.Events.{Event, updateMonitoringData}
 import tcep.data.Queries.Query
 import tcep.graph.EventCallback
-import tcep.graph.nodes.traits.Node.{Dependencies, Subscribe, UnSubscribe}
+import tcep.graph.nodes.traits.Node.{Dependencies, NodeProperties, Subscribe, UnSubscribe}
 import tcep.graph.qos.OperatorQosMonitor
 import tcep.graph.transition.MAPEK.{AddOperator, RemoveOperator}
 import tcep.graph.transition._
@@ -26,22 +26,19 @@ import scala.concurrent.{ExecutionContext, Future}
   * Common methods for different transition modes
   */
 trait TransitionMode extends ClusterActor with ActorLogging {
+  val np: NodeProperties
   val query: Query
+  val hostInfo: HostInfo
   val modeName: String = "transition-mode name not specified"
   val parentOperators: mutable.Map[ActorRef, Query] = mutable.Map()
   val subscribers: mutable.Map[ActorRef, Query] = mutable.Map()
-  val isRootOperator: Boolean
   @volatile var started: Boolean
-  val backupMode: Boolean
-  val mainNode: Option[ActorRef]
-  val hostInfo: HostInfo
-  val transitionConfig: TransitionConfig
   var transitionInitiated = false
   val slidingMessageQueue: ListBuffer[(ActorRef, Event)]
   var eventRateOut: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS))
   var eventSizeOut: Long = 0
   var currentCPULoad: Double = 0.0d
-  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], self), "operatorQosMonitor") //TODO use custom dispatcher?
+  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], query, self, np.monitorCentral), "operatorQosMonitor")
   val brokerQoSMonitor: ActorSelection = context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*"))
 
   def createDuplicateNode(hostInfo: HostInfo): Future[ActorRef]
@@ -126,7 +123,7 @@ trait TransitionMode extends ClusterActor with ActorLogging {
       TransferredState(algorithm, successor, oldParent, updateTransitionStats(stats, oldParent, transferredStateSize(oldParent), updatedOpMap = Some(opmap) ), lastOperator, placement) //childReceive will handle this message
 
     case Terminated(killed) =>
-      if (killed.equals(mainNode.get)) {
+      if (killed.equals(np.mainNode.get)) {
         started = true
       }
 
@@ -193,4 +190,5 @@ trait TransitionMode extends ClusterActor with ActorLogging {
     TCEPUtils.guaranteedDelivery(context, requester, transferredStateMsg, tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
       .recoverWith { case e: Throwable => transitionLog(s"failed to notify child retrying... ${e.toString}".toUpperCase()); notifyChild(requester, successor, transferredStateMsg, updatedStats) }
   }.mapTo[ACK]
+  
 }

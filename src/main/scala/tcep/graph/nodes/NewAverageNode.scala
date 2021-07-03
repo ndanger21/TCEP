@@ -1,24 +1,15 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import tcep.data.Events.{Event, Event1}
 import tcep.data.Queries.NewAverageQuery
-import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
-import tcep.graph.{CreatedCallback, EventCallback}
+import tcep.graph.nodes.traits.Node.NodeProperties
+import tcep.graph.nodes.traits.UnaryNode
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.LinearRoadDataNew
 
 import scala.collection.mutable.ListBuffer
 
-case class NewAverageNode(transitionConfig: TransitionConfig,
-                          hostInfo: HostInfo,
-                          backupMode: Boolean,
-                          mainNode: Option[ActorRef],
-                          query: NewAverageQuery,
-                          createdCallback: Option[CreatedCallback],
-                          eventCallback: Option[EventCallback],
-                          isRootOperator: Boolean,
-                            _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+case class NewAverageNode(query: NewAverageQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   var lastEmit = System.currentTimeMillis()
 
@@ -26,7 +17,7 @@ case class NewAverageNode(transitionConfig: TransitionConfig,
     case event: Event =>
       event.updateArrivalTimestamp()
       val s = sender()
-      if (parentActor.contains(s)) {
+      if (np.parentActor.contains(s)) {
         val avgData = event match {
           case Event1(e1) =>
             this.computeAverage(List(e1))
@@ -38,12 +29,12 @@ case class NewAverageNode(transitionConfig: TransitionConfig,
           for (data <- avgData) {
             val avgEvent = Event1(data)
             avgEvent.monitoringData = event.monitoringData
-            emitEvent(avgEvent, eventCallback)
+            emitEvent(avgEvent, np.eventCallback)
           }
         } else {
           val emptyEvent = Event1(LinearRoadDataNew(-1, -1, -1, -100, false))
           emptyEvent.monitoringData = event.monitoringData
-          emitEvent(emptyEvent, eventCallback)
+          emitEvent(emptyEvent, np.eventCallback)
         }
       }
     case unhandledMessage =>

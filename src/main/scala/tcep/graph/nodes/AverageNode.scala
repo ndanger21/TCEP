@@ -1,27 +1,16 @@
 package tcep.graph.nodes
 
-import akka.actor.ActorRef
 import tcep.data.Events._
 import tcep.data.Queries.AverageQuery
-import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
-import tcep.graph.{CreatedCallback, EventCallback}
+import tcep.graph.nodes.traits.Node.NodeProperties
+import tcep.graph.nodes.traits.UnaryNode
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.MobilityData
 
 /**
   * Operator that calculates the average of the values contained in the received event
   */
-case class AverageNode(
-                        transitionConfig: TransitionConfig,
-                        hostInfo: HostInfo,
-                        backupMode: Boolean,
-                        mainNode: Option[ActorRef],
-                        query: AverageQuery,
-                        createdCallback: Option[CreatedCallback],
-                        eventCallback: Option[EventCallback],
-                        isRootOperator: Boolean,
-                        _parentActor: Seq[ActorRef]
-                      ) extends UnaryNode(_parentActor) {
+case class AverageNode(query: AverageQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   /**
     * calculate the average of the given dataList of Ints, Doubles or MobilityData items
@@ -47,7 +36,7 @@ case class AverageNode(
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
 
-    case event: Event if parentActor.contains(sender()) =>
+    case event: Event if np.parentActor.contains(sender()) =>
       event.updateArrivalTimestamp()
       //log.debug(s"averageNode received event: ${event}")
       val value = event match {
@@ -62,7 +51,7 @@ case class AverageNode(
       val averageEvent: Event1 = Event1(value)
       averageEvent.monitoringData = event.monitoringData
       //log.debug(s"average event with monitoring data: $averageEvent")
-      emitEvent(averageEvent, eventCallback)
+      emitEvent(averageEvent, np.eventCallback)
 
     case unhandledMessage =>
   }

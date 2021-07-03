@@ -156,7 +156,7 @@ trait NaiveMovingStateMode extends TransitionMode {
        log.info(s"sending StartExecutionWithWindowData to $successor with timeout $retryTimeout")
        // include events from window if windowed so  new operator doesn't lose any events
        val windowEvents = if(!maxWindowTime().isZero) slidingMessageQueue.toList else List()
-       val subs = if(isRootOperator) subscribers.toList else List()
+       val subs = if(np.isRootOperator) subscribers.toList else List()
        // do NOT send subscriber set unless the subscriber is the clientNode (we do not want to receive new events on old operators); instead, let successor of child subscribe by itself
        val startExecutionMessage = StartExecutionWithData(downTime.get, startTime, subs, windowEvents, algorithm)
        val startACK = TCEPUtils.guaranteedDelivery(context, successor, startExecutionMessage, tlf = Some(transitionLog), tlp = Some(transitionLogPublisher))
@@ -165,7 +165,7 @@ trait NaiveMovingStateMode extends TransitionMode {
          val timestamp = System.currentTimeMillis()
          val migrationTime = timestamp - downTime.get
          val nodeSelectionTime = timestamp - startTime
-         GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
+         GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, parents, newHostInfo, np.isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
          // notify mapek knowledge about operator change
          notifyMAPEK(cluster, successor)
          val placementOverhead = newHostInfo.operatorMetrics.accPlacementMsgOverhead

@@ -10,7 +10,7 @@ import tcep.data.Events.Event
 import tcep.data.Queries._
 import tcep.factories.NodeFactory
 import tcep.graph.nodes._
-import tcep.graph.nodes.traits.Node.Dependencies
+import tcep.graph.nodes.traits.Node.{Dependencies, NodeProperties}
 import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition._
@@ -147,7 +147,7 @@ class QueryGraph(query: Query,
     val reliabilityReqPresent = (query.requirements collect { case r: ReliabilityRequirement => r }).nonEmpty
     SpecialStats.log(s"$this", "placement", s"deploying operator $operator in mode $transitionConfig with placement strategy ${placementStrategy.name}")
 
-    val deployment: Future[(ActorRef, HostInfo)] = {
+    val deployment: Future[ActorRef] = {
       if (placementStrategy.hasInitialPlacementRoutine() && initialOperatorPlacement.contains(operator)) {
         for {hostInfo <- placementStrategy.asInstanceOf[SpringRelaxationLike]
                                           .findHost(initialOperatorPlacement(operator), Map(), operator, placementStrategy.parentAddressTransform(dependencies), queryDependencies.mapValues(_._4).toMap)
@@ -171,17 +171,22 @@ class QueryGraph(query: Query,
             (deployedOperator, hostInfo)
           }
       }
-    }
-    deployment map { opAndHostInfo => {
-      SpecialStats.log(s"$this", "placement", s"deployed ${ opAndHostInfo._1 } on; ${opAndHostInfo._2.member} ; with " +
-        s"hostInfo ${opAndHostInfo._2.operatorMetrics}; parents: $parentOperators; path.name: ${parentOperators.map(_._1).head.path.name}")
+    } map { opAndHostInfo =>
       mapek.knowledge ! AddOperator((opAndHostInfo._2.operator, opAndHostInfo._1))
       deployedOperators += operator -> opAndHostInfo._1
       GUIConnector.sendInitialOperator(opAndHostInfo._2.member.address, placementStrategy.name,
                                        opAndHostInfo._1.path.name, s"$transitionConfig", parentOperators.map(_._1),
                                        opAndHostInfo._2, isRootOperator)(selfAddress = cluster.selfAddress, ec)
       opAndHostInfo._1
-    }}
+    }
+
+    deployment.onComplete {
+      case Failure(exception) =>
+        SpecialStats.log(s"$this", "placement", s"failed to deploy $operator due to $exception")
+        log.error(s"failed to deploy $operator", exception)
+      case Success(value) => SpecialStats.log(s"$this", "placement", s"deployed ${value} for ${operator}")
+    }
+    deployment
   }
 
   protected def createOperator(operator: Query,
@@ -191,8 +196,7 @@ class QueryGraph(query: Query,
                                parentOperators: ActorRef*)
                               (implicit eventCallback: Option[EventCallback], isRootOperator: Boolean): Future[ActorRef] = {
     val operatorType = NodeFactory.getOperatorTypeFromQuery(operator)
-    val props = Props(operatorType, transitionConfig, hostInfo, backupMode, mainNode, operator, createdCallback,
-                      eventCallback, isRootOperator, parentOperators)
+    val props = Props(operatorType, operator, hostInfo, NodeProperties(transitionConfig, backupMode, mainNode, createdCallback, eventCallback, isRootOperator, mapek.monitor, parentOperators))
     NodeFactory.createOperator(hostInfo, props, brokerQoSMonitor)
   }
 

@@ -96,7 +96,7 @@ trait MFGSMode extends TransitionMode {
           val migrationTime = timestamp - downTime.get
           val nodeSelectionTime = timestamp - startTime
           //log.info(s"\nBDP DEBUG========\nself: $self \n successor: $successor\n parents: \n${getParentActors().mkString("\n")} \n dependencies parents: \n ${dependencies.parents.mkString("\n")} \n newHostInfo: \n${newHostInfo.operatorMetrics.operatorToParentBDP.mkString("\n")} \n============")
-          GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, getParentActors(), newHostInfo, isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
+          GUIConnector.sendOperatorTransitionUpdate(self, successor, algorithm, timestamp, migrationTime, nodeSelectionTime, getParentActors(), newHostInfo, np.isRootOperator)(cluster.selfAddress, blockingIoDispatcher)
           notifyMAPEK(cluster, successor) // notify mapek knowledge about operator change
           transitionLog(s"received ACK for StartExecutionWithData from successor ${System.currentTimeMillis() - downTime.get}ms after stopping events (total time: $migrationTime ms), handing control over to requester and shutting down self")
           val placementOverhead = newHostInfo.operatorMetrics.accPlacementMsgOverhead

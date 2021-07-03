@@ -1,28 +1,19 @@
 package tcep.graph.nodes
 
-import java.time.Duration
-import java.util.concurrent.TimeUnit
-
-import akka.actor.{ActorRef, Cancellable}
+import akka.actor.Cancellable
 import tcep.data.Events.{Event, Event1, Event6}
 import tcep.data.Queries.SlidingWindowQuery
-import tcep.graph.nodes.traits.{TransitionConfig, UnaryNode}
-import tcep.graph.{CreatedCallback, EventCallback}
+import tcep.graph.nodes.traits.Node.NodeProperties
+import tcep.graph.nodes.traits.UnaryNode
 import tcep.placement.HostInfo
 import tcep.simulation.tcep.LinearRoadDataNew
 
+import java.time.Duration
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.FiniteDuration
 
-case class SlidingWindowNode(transitionConfig: TransitionConfig,
-                             hostInfo: HostInfo,
-                             backupMode: Boolean,
-                             mainNode: Option[ActorRef],
-                             query: SlidingWindowQuery,
-                             createdCallback: Option[CreatedCallback],
-                             eventCallback: Option[EventCallback],
-                             isRootOperator: Boolean,
-                                  _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) {
+case class SlidingWindowNode(query: SlidingWindowQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
   var storage: ListBuffer[(Double, Double)] = ListBuffer.empty[(Double, Double)]
   var lastEmit: Double = System.currentTimeMillis().toDouble
@@ -38,7 +29,7 @@ case class SlidingWindowNode(transitionConfig: TransitionConfig,
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
       val s = sender()
-      if (this.parentActor.contains(s)) {
+      if (np.parentActor.contains(s)) {
         event match {
           case Event6(e1, e2, e3, e4, e5, e6) =>
             this.store(List(e1.asInstanceOf[LinearRoadDataNew], e2.asInstanceOf[LinearRoadDataNew], e3.asInstanceOf[LinearRoadDataNew], e4.asInstanceOf[LinearRoadDataNew], e5.asInstanceOf[LinearRoadDataNew], e6.asInstanceOf[LinearRoadDataNew]))
@@ -52,7 +43,7 @@ case class SlidingWindowNode(transitionConfig: TransitionConfig,
         val avgEvent = Event1(eventData)
         avgEvent.init()
         avgEvent.copyMonitoringData(event.monitoringData)
-        emitEvent(avgEvent, eventCallback)
+        emitEvent(avgEvent, np.eventCallback)
       }
     case unhandledMessage =>
   }
@@ -63,12 +54,12 @@ case class SlidingWindowNode(transitionConfig: TransitionConfig,
       val avgEvent = Event1(eventData)
       avgEvent.init()
       //TODO how to include monitoringData from parent events?
-      emitEvent(avgEvent, eventCallback)
+      emitEvent(avgEvent, np.eventCallback)
     } else {
       val eventData = LinearRoadDataNew(-1, this.query.sectionFilter.get, -1, -1, false, Some(List(0)))
       val avgEvent = Event1(eventData)
       avgEvent.init()
-      emitEvent(avgEvent, eventCallback)
+      emitEvent(avgEvent, np.eventCallback)
     }
   }
 

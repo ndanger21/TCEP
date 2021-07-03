@@ -1,14 +1,15 @@
 package tcep.graph.nodes
 
-import akka.actor.{ActorLogging, ActorRef}
+import akka.actor.ActorLogging
 import com.espertech.esper.client._
 import tcep.data.Events._
 import tcep.data.Queries._
+import tcep.graph.QueryGraph
 import tcep.graph.nodes.JoinNode._
 import tcep.graph.nodes.traits.EsperEngine._
+import tcep.graph.nodes.traits.Node.NodeProperties
 import tcep.graph.nodes.traits.TransitionModeNames.{apply => _}
 import tcep.graph.nodes.traits._
-import tcep.graph.{CreatedCallback, EventCallback, QueryGraph}
 import tcep.placement.HostInfo
 
 import java.time.Duration
@@ -18,22 +19,14 @@ import java.time.Duration
   *
   * @see [[QueryGraph]]
   **/
-case class SelfJoinNode(transitionConfig: TransitionConfig,
-                        hostInfo: HostInfo,
-                        backupMode: Boolean,
-                        mainNode: Option[ActorRef],
-                        query: SelfJoinQuery,
-                        createdCallback: Option[CreatedCallback],
-                        eventCallback: Option[EventCallback],
-                        isRootOperator: Boolean,
-                        _parentActor: Seq[ActorRef]) extends UnaryNode(_parentActor) with EsperEngine with
-                                                             ActorLogging {
+case class SelfJoinNode(query: SelfJoinQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode
+  with EsperEngine with ActorLogging {
 
   override val esperServiceProviderUri: String = name
   var esperInitialized = false
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
-    case event: Event if parentActor.contains(sender()) && esperInitialized =>
+    case event: Event if np.parentActor.contains(sender()) && esperInitialized =>
       event.updateArrivalTimestamp()
       event match {
       case Event1(e1) => sendEvent("sq", Array(toAnyRef(event.monitoringData), toAnyRef(e1)))
@@ -47,7 +40,6 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
     case unhandledMessage =>
   }
 
-
   override def maxWindowTime(): Duration = {
     def windowTime(w: Window): Duration = w match {
       case SlidingTime(seconds) => Duration.ofSeconds(seconds)
@@ -56,8 +48,8 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
       case TumblingInstances(instances) => Duration.ofNanos(instances * eventIntervalMicroseconds * 1000)
     }
 
-    val w1 = windowTime(query.w1)
-    val w2 = windowTime(query.w2)
+    val w1 = windowTime(query.asInstanceOf[SelfJoinQuery].w1)
+    val w2 = windowTime(query.asInstanceOf[SelfJoinQuery].w2)
     if (w1.compareTo(w2) > 0) w1 else w2
   }
 
@@ -90,7 +82,7 @@ case class SelfJoinNode(transitionConfig: TransitionConfig,
         }
         event.monitoringData = monitoringData
         //log.info(s"creating new event $event")
-        emitEvent(event, eventCallback)
+        emitEvent(event, np.eventCallback)
       })
 
       epStatement.addListener(updateListener)
