@@ -1,0 +1,208 @@
+# You can set the hostname of docker host by using this command `sudo hostname <name>`
+version: "3.7"
+services:
+
+  nserver:
+    image: cloudwattfr/ntpserver:latest
+    ports:
+      - 2200:2200
+    networks:
+      - main
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints: [node.labels.subscriber == true]
+    privileged: true
+
+  gui:
+    image: nieda2018/tcep-gui
+    ports:
+      - 3000:3000
+    networks:
+       - main
+    deploy:
+      replicas: 1
+      restart_policy:
+         condition: on-failure
+      placement:
+        constraints: [node.labels.subscriber == true]
+    privileged: true
+
+  simulator:
+    image: nieda2018/tcep
+    environment:
+      - MAIN=tcep.simulation.tcep.SimulationRunner
+      - ARGS=--dir ./logs --mode 15 --ip simulator --port 2500 --query AdAnalysis --mapek ExchangeablePerformanceModel --req throughput --transitionStrategy MFGS --transitionExecutionMode 0 --duration 720 --loadTestMax 1 --initialAlgorithm ProducerConsumer
+      - LOG_FILE_PATH=/app/logs
+      - JMX_PORT=8484
+    ports:
+      - 8484:8484
+    volumes:
+       - $HOME/logs:/app/logs
+       - $HOME/tcep/event_traces:/app/event_traces
+    networks:
+       - main
+    deploy:
+      replicas: 1
+      restart_policy:
+         condition: on-failure
+      placement:
+        constraints: [node.labels.subscriber == true]
+    privileged: true
+
+  consumer:
+    image: nieda2018/tcep
+    environment:
+      - MAIN=tcep.machinenodes.ConsumerApp
+      - ARGS=--dir ./logs --ip consumer --port 2700 --kind AdAnalysis --loadTestMax 1
+      - LOG_FILE_PATH=/app/logs
+    volumes:
+      - $HOME/logs:/app/logs
+      - $HOME/tcep/event_traces:/app/event_traces
+    networks:
+      - main
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints: [node.labels.subscriber == true]
+    privileged: true
+
+  speedPublisher1:
+    image: nieda2018/tcep
+    environment:
+      - MAIN=tcep.machinenodes.PublisherApp
+      - ARGS=--ip speedPublisher1 --port 2501 --kind YahooPublisher --numberOfPublishers 1
+      - LOG_FILE_PATH=/app/logs
+    volumes:
+      - $HOME/logs:/app/logs
+      - $HOME/tcep/event_traces:/app/event_traces
+    networks:
+      - main
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        # place replicas of this service evenly across nodes labeled as publisher, differentiated by their hostname
+        # if there are more services than publisher nodes, some node will host multiple publisher services
+        constraints: [node.labels.publisher == true]
+        preferences:
+          - spread: node.hostname
+    privileged: true
+
+  speedPublisher2:
+    image: nieda2018/tcep
+    environment:
+      - MAIN=tcep.machinenodes.PublisherApp
+      - ARGS=--ip speedPublisher2 --port 2502 --kind YahooPublisher --numberOfPublishers 2
+      - LOG_FILE_PATH=/app/logs
+    volumes:
+      - $HOME/logs:/app/logs
+      - $HOME/tcep/event_traces:/app/event_traces
+    networks:
+      - main
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        # place replicas of this service evenly across nodes labeled as publisher, differentiated by their hostname
+        # if there are more services than publisher nodes, some node will host multiple publisher services
+        constraints: [node.labels.publisher == true]
+        preferences:
+          - spread: node.hostname
+    privileged: true
+
+  speedPublisher3:
+    image: nieda2018/tcep
+    environment:
+      - MAIN=tcep.machinenodes.PublisherApp
+      - ARGS=--ip speedPublisher3 --port 2503 --kind YahooPublisher --numberOfPublishers 3
+      - LOG_FILE_PATH=/app/logs
+    volumes:
+      - $HOME/logs:/app/logs
+      - $HOME/tcep/event_traces:/app/event_traces
+    networks:
+      - main
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        # place replicas of this service evenly across nodes labeled as publisher, differentiated by their hostname
+        # if there are more services than publisher nodes, some node will host multiple publisher services
+        constraints: [node.labels.publisher == true]
+        preferences:
+          - spread: node.hostname
+    privileged: true
+
+  speedPublisher4:
+    image: nieda2018/tcep
+    environment:
+      - MAIN=tcep.machinenodes.PublisherApp
+      - ARGS=--ip speedPublisher4 --port 2504 --kind YahooPublisher --numberOfPublishers 4
+      - LOG_FILE_PATH=/app/logs
+    volumes:
+      - $HOME/logs:/app/logs
+      - $HOME/tcep/event_traces:/app/event_traces
+    networks:
+      - main
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        # place replicas of this service evenly across nodes labeled as publisher, differentiated by their hostname
+        # if there are more services than publisher nodes, some node will host multiple publisher services
+        constraints: [node.labels.publisher == true]
+        preferences:
+          - spread: node.hostname
+    privileged: true
+
+  worker:
+    image: nieda2018/tcep
+    environment:
+      - MAIN=tcep.machinenodes.EmptyApp
+      - ARGS=--port 3400
+      - LOG_FILE_PATH=/app/logs
+    depends_on:
+      - simulator
+    volumes:
+      - $HOME/logs:/app/logs
+    networks:
+      - main
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+      placement:
+      # place replicas of this service evenly across nodes labeled as worker, differentiated by their hostname
+        constraints: [node.labels.worker == true]
+        preferences:
+              - spread: node.hostname
+    privileged: true
+
+  predictionEndpoint:
+    image: nieda2018/tcep-prediction-endpoint
+    volumes:
+      - $HOME/logs:/app/logs
+    depends_on:
+      - simulator
+    networks:
+      - main
+    ports:
+      - 9091:9091
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints: [node.labels.subscriber == true]
+
+
+networks:
+  main:

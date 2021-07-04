@@ -4,26 +4,67 @@
 # Description: Sets up and execute TCEP on GENI testbed
 
 
-if [ -z $2 ]; then
-  config_file="docker-swarm_local.cfg"
-  stack_file="docker-stack_local.yml"
+work_dir="$(cd "$(dirname "$0")" ; pwd -P)/.."
+
+CMD="$1"
+shift
+POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+key="$1"
+
+case $key in
+    -u|--user)
+    u="$2"
+    shift
+    shift
+    ;;
+    -h|--host)
+    host="$2"
+    shift
+    shift
+    ;;
+    -s|--stack-file)
+    stack_file="$2"
+    shift
+    shift
+    ;;
+    -c|--cfg)
+    config_file="$2"
+    shift
+    shift
+    ;;
+    -l|--location)
+    location="$2"
+    shift
+    shift
+    ;;
+esac
+done
+
+if [ -z $location ]; then
+  if [ -z $config_file ]; then
+    config_file="/docker-swarm_local.cfg"
+  fi
+  if [ -z $stack_file ]; then
+    stack_file="docker-stack_local.yml"
+  fi
 else
-  config_file="docker-swarm_$2.cfg"
+  config_file="/docker-swarm_$2.cfg"
   stack_file="docker-stack_$2.yml"
 fi
-work_dir="$(cd "$(dirname "$0")" ; pwd -P)/../"
+
 source "$work_dir/$config_file"
+echo "docker stack file is $work_dir$stack_file"
+echo "cfg file is $work_dir$config_file"
 source "$work_dir/scripts/common_functions.sh"
-if [ -z $3 ]; then
+if [ -z $u ]; then
   u=user
-else
-  u=$3
 fi
-if [ -z $4 ]; then
+if [ -z $host ]; then
   host=$manager
-else
-  host=$4
 fi
+
 if [[ ${host} == "localhost" ]]; then
   local_run=true
 else
@@ -72,6 +113,7 @@ adjust_cfg() {
       local nNodesTotal=7
     else
       local nNodesTotal=$((${#workers[@]}+1))
+      echo "total nodes: $nNodesTotal, (speed) streams: $n_speed_streams"
     fi
     # numberOfMininetMobilitySections nSpeedPublishers nNodesTotal GUIHost mininetSimulation mininetWifiSimulation
     adjust_config $sections $sections $nNodesTotal $host "false" "false"
@@ -130,6 +172,7 @@ join_workers() {
     count=0
     ${local_run} || for i in "${workers[@]}"
     do
+      ssh ${u}@${i} "mkdir -p ~/tcep/event_traces"
       setUser $i
 	    count=$((count+1))
       ssh $u@$i "echo 'processing worker $i'"
@@ -147,6 +190,7 @@ join_workers() {
     ${local_run} && docker node update --label-add worker=true node0 && docker node update --label-add publisher=true node0
     ssh -T -p $port $u@$manager "docker node update --label-add subscriber=true node0"
     echo "added label subscriber=true to node0"
+    ssh ${u}@${manager} "mkdir -p ~/tcep/event_traces"
 }
 
 rebootSwarm() {
@@ -182,8 +226,8 @@ clear_logs() {
 }
 
 build_image() {
-  adjust_cfg && \
-  ./build.sh "localhost" $config_file
+    adjust_cfg && \
+    bash $work_dir"/scripts/build.sh" "localhost" ${config_file}
 }
 
 publish_no_build() {
@@ -200,10 +244,12 @@ publish_no_build() {
     ssh $user@$manager 'docker stack rm tcep'
 
     echo "Booting up new stack"
+    IFS='/' read -ra my_array <<< ${stack_file}
+    stack_file_name=my_array[-1]
     ssh -p $port $u@$manager 'mkdir -p ~/logs && rm -f ~/logs/** && mkdir -p ~/src';
-    scp -P $port $work_dir/${stack_file} $u@$manager:~/src/${stack_file}
+    scp -P $port $work_dir/${stack_file} $u@$manager:~/src/${stack_file_name}
     #ssh -p $port $u@$manager 'cd ~/src && docker stack deploy --prune --with-registry-auth -c docker-stack.yml tcep';
-    ssh -p $port $u@$manager 'cd ~/src && docker stack deploy --with-registry-auth -c '${stack_file}' tcep';
+    ssh -p $port $u@$manager 'cd ~/src && docker stack deploy --with-registry-auth -c '${stack_file_name}' tcep';
     #clear_logs
 }
 
@@ -232,18 +278,18 @@ take_down: Delete docker swarm cluster
 all: Run all steps to publish the cluster and start the application
 "
 
-if [ -z $1 ]; then
+if [ -z ${CMD} ]; then
     echo "$help"
     exit 1
 fi
 
-if [ $1 == "publish" ]; then publish
-elif [ $1 == "setup" ]; then setup
-elif [ $1 == "all" ]; then all
-elif [ $1 == "take_down" ]; then take_down_swarm
-elif [ $1 == "init_manager" ]; then init_manager
-elif [ $1 == "reboot" ]; then rebootSwarm
-elif [ $1 == "build_remote" ]; then build_remote
-elif [ $1 == "get_output" ]; then get_output
-else $1
+if [ ${CMD} == "publish" ]; then publish
+elif [ ${CMD} == "setup" ]; then setup
+elif [ ${CMD} == "all" ]; then all
+elif [ ${CMD} == "take_down" ]; then take_down_swarm
+elif [ ${CMD} == "init_manager" ]; then init_manager
+elif [ ${CMD} == "reboot" ]; then rebootSwarm
+elif [ ${CMD} == "build_remote" ]; then build_remote
+elif [ ${CMD} == "get_output" ]; then get_output
+else ${CMD}
 fi

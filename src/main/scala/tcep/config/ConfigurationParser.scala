@@ -1,9 +1,9 @@
 package tcep.config
 
-import java.net.InetAddress
-
 import com.typesafe.config.ConfigFactory
 import org.slf4j.LoggerFactory
+
+import java.net.InetAddress
 
 /**
   * Created by anjaria on 31.07.17.
@@ -73,8 +73,6 @@ trait ConfigurationParser {
       .withFallback(ConfigFactory.parseString(s"akka.cluster.roles=[$getRole]"))
       .withFallback(ConfigFactory.load())
 
-  implicit lazy val baseEventRate: Double = options.getOrElse('eventRate,
-    throw new IllegalArgumentException("base event rate of publishers must be given as argument to each App")
-  ).toDouble
+  implicit lazy val baseEventRate: Double = options.getOrElse('eventRate, "100.0").toDouble
   def getRole: String
 }

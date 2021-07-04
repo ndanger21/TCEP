@@ -11,6 +11,7 @@ import tcep.data.Structures.MachineLoad
 import tcep.dsl.Dsl._
 import tcep.graph.QueryGraph
 import tcep.graph.nodes.traits.{TransitionConfig, TransitionExecutionModes, TransitionModeNames}
+import tcep.machinenodes.consumers.AnalysisConsumer
 import tcep.machinenodes.consumers.Consumer.SetStreams
 import tcep.machinenodes.helper.actors._
 import tcep.placement.manets.StarksAlgorithm
@@ -50,8 +51,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   // publisher naming convention: P:hostname:port, e.g. "P:p1:2502", or "P:localhost:2501" (for local testing)
   var publishers: Map[String, ActorRef] = Map.empty[String, ActorRef]
   implicit var publisherEventRates: Map[String, Throughput] = Map()
-  val publisherPorts: Set[Int] = if(overridePublisherPorts.isDefined && overridePublisherPorts.get.size >= 2) overridePublisherPorts.get // for unit/integration testing
-                       else densityPublisherNodePort :: speedPublisherNodePorts.toList toSet
+  val publisherPorts: Set[Int] = if(Mode.YAHOO_STREAMING == mode) speedPublisherNodePorts.toSet  else densityPublisherNodePort :: speedPublisherNodePorts.toList toSet
   var consumers: Set[ActorRef] = Set()
   var taskManagerActorRefs: Map[Member, ActorRef] = Map()
   var coordinatesEstablished: Set[Address] = Set()
@@ -127,38 +127,41 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
     else throw new IllegalArgumentException(s"no speed publishers found, publishers: \n $publishers")
   }
   def densityPublishers: Vector[(String, ActorRef)] = publishers.toVector.filter(_._2.path.address.port.getOrElse(-1) >= densityPublisherNodePort)
-  def singlePublisherNodeDensityStream(section: Int): Stream1[Int] = {
+  def singlePublisherNodeDensityStream(section: Int): Stream1[SectionDensity] = {
     val sectionDensityPublisher = densityPublishers.find(_._2.path.name.split("-").last.contentEquals(section.toString))
       .getOrElse(throw new IllegalArgumentException(s"density publisher actor for section $section not found among $densityPublishers"))
-    val dp = Stream1[Int](sectionDensityPublisher._1, Set())
+    val dp = Stream1[SectionDensity](sectionDensityPublisher._1, Set())
     log.info(s"using density publisher actor ${sectionDensityPublisher._2 } for section $section from a single node")
     dp
   }
 
-  def getStreams(): /*(Vector[Stream1[MobilityData]],Vector[Stream1[Int]])*/ Seq[Any] = {
+  def getStreams(streamOperatorCount: Int): Seq[Vector[Stream1[_ <: StreamDataType]]] = {
     log.info("Creating Streams!")
-    val streams = mode match {
+    val streams: Seq[Vector[Stream1[_ <: StreamDataType]]] = mode match {
       case Mode.MADRID_TRACES =>
         val dense = 0 to nSections-1 map (section => {
           this.singlePublisherNodeDensityStream(section)
         })
         //(this.speedStreams, dense.toVector)
-        Seq(this.speedStreams(12), dense.toVector)
+        Seq(this.speedStreams(streamOperatorCount), dense.toVector)
+
       case Mode.LINEAR_ROAD =>
         val linearRoadPublishers = publishers.toVector
         //linearRoadPublishers.map(p => Stream1[LinearRoadData](p._1, Set())).sortBy(_.publisherName)
-        val publisherVector = linearRoadPublishers.map(p => Stream1[LinearRoadDataNew](p._1, Set())).sortBy(_.publisherName)
+        val publisherVector: Vector[Stream1[LinearRoadDataNew]] = linearRoadPublishers.map(p => Stream1[LinearRoadDataNew](p._1, Set())).sortBy(_.publisherName)
         Seq(publisherVector)
+
       case Mode.YAHOO_STREAMING =>
-        val yahooPublishers = publishers.toVector
-        val pubVector = yahooPublishers.map(p => Stream1[YahooDataNew](p._1, Set())).sortBy(_.publisherName)
-        Seq(pubVector)
+        val pubVector: Vector[Stream1[YahooDataNew]] = if(publishers.size < streamOperatorCount)
+          (0 until streamOperatorCount).map(i => Stream1[YahooDataNew](publishers.toVector(i % publishers.size)._1, Set())).toVector
+        else publishers.map(p => Stream1[YahooDataNew](p._1, Set())).toVector
+        Seq(pubVector.sortBy(_.publisherName))
 
       case _ =>
         val dense = 0 to nSections-1 map (section => {
           this.singlePublisherNodeDensityStream(section)
         })
-        Seq(this.speedStreams(12), dense.toVector)
+        Seq(this.speedStreams(streamOperatorCount), dense.toVector)
     }
     log.info(s"Streams are: ${streams}")
     streams
@@ -197,7 +200,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       //val and = avgSpeed.join(density, slidingWindow(1 instances), slidingWindow(1 instances))
       val and = avgSpeed.and(density)
       val filter = and.where(
-        (_: MobilityData, _: Int) => true /*(sA: Double, dA: Double) => sA <= 60 && dA >= 10*/ // replace with always true to keep events (and measurements) coming in
+        (_: MobilityData, _: SectionDensity) => true /*(sA: Double, dA: Double) => sA <= 60 && dA >= 10*/ // replace with always true to keep events (and measurements) coming in
       )
       filter
     })
@@ -362,11 +365,11 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       cluster.state.members.foreach(m => TCEPUtils.selectDistVivaldiOn(cluster, m.address) ! StartVivaldiUpdates())
       // broadcast publisher actorRefs to all nodes so that when transitioning, not every placement algorithm instance has to retrieve them for themselves
       // distinguish publishers by ports since they're easier to generalize and set up for mininet, geni and testing than hostnames
-      if(publisherPorts.subsetOf(foundPublisherPorts) && taskManagerActorRefs.size >= minNumberOfTaskManagers && publishers.size >= nSpeedPublishers + nSections)
+      if(publisherPorts.subsetOf(foundPublisherPorts) && taskManagerActorRefs.size >= minNumberOfTaskManagers && publishers.size >= nSpeedPublishers)
         upMembers.foreach(m => if(!m.hasRole("Consumer")) TCEPUtils.selectTaskManagerOn(cluster, m.address) ! SetPublisherActorRefs(publishers))
 
       // publishers found (speed publisher nodes with 1 speed publisher actors, 1 density publisher node with nSections densityPublisher actors
-      if (publisherPorts.subsetOf(foundPublisherPorts) && publishers.size >= nSpeedPublishers + nSections && upMembers.size >= minNumberOfMembers && // nodes up
+      if (publisherPorts.subsetOf(foundPublisherPorts) && publishers.size >= nSpeedPublishers && upMembers.size >= minNumberOfMembers && // nodes up
         taskManagerActorRefs.size >= minNumberOfTaskManagers && // taskManager ActorRefs have been found and broadcast to all other taskManagers
         coordinatesEstablished.size >= minNumberOfTaskManagers && // all nodes have established their coordinates
         publisherActorBroadcastAcks.size >= minNumberOfTaskManagers &&
@@ -374,7 +377,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
         simulationStarted = true
         log.info(s"telling publishers to start streams...")
         publishers.foreach(p => p._2 ! StartStreams())
-        this.consumers.foreach(c => TCEPUtils.guaranteedDelivery(context, c, SetStreams(this.getStreams())))
+        this.consumers.foreach(c => TCEPUtils.guaranteedDelivery(context, c, SetStreams(this.getStreams(12))))
         this.executeSimulation()
 
       } else {
@@ -408,6 +411,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       case "Join" => stream[MobilityData](speedPublishers(0)._1).join(stream[MobilityData](speedPublishers(1)._1), slidingWindow(1.seconds), slidingWindow(1.seconds)).where((_, _) => true, initialRequirements.toSeq: _*)
       case "SelfJoin" => stream[MobilityData](speedPublishers(0)._1).selfJoin(slidingWindow(1.seconds), slidingWindow(1.seconds), initialRequirements.toSeq: _*)
       case "AccidentDetection" => accidentQuery(initialRequirements.toSeq: _*)
+      case "AdAnalysis" => AnalysisConsumer.adAnalysisQuery(getStreams(8), AnalysisConsumer.loadStorageDatabase()(log))
     }
 
         //accidentQuery(initialRequirements.toSeq: _*)
@@ -707,7 +711,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       case Mode.YAHOO_STREAMING =>
         this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("YahooStreaming simulation ended"),
-          Set(latencyRequirement), Some(Set()))
+          Set(latencyRequirement), Some(Set(messageHopsRequirement)), true)
     }
 
   } catch {
@@ -800,9 +804,11 @@ case class RecordProcessingNodes() {
 }
 
 
+trait StreamDataType
+case class MobilityData(publisherSection: Int, speed: Double) extends StreamDataType
+case class SectionDensity(density: Int) extends StreamDataType
+case class LinearRoadDataNew(vehicleId: Int, section: Int, density: Int, speed: Double, var change: Boolean = false, var dataWindow: Option[List[Double]] = None, var avgSpeed: Option[Double] = None) extends StreamDataType
+case class YahooDataNew(adId: Int, eventType: Int, var campaignId: Option[Int] = None) extends StreamDataType
+case class StatisticData(id: Int, performance: Double) extends StreamDataType
 
-case class MobilityData(publisherSection: Int, speed: Double)
 case object SetMissingBandwidthMeasurementDefaults
-case class LinearRoadDataNew(vehicleId: Int, section: Int, density: Int, speed: Double, var change: Boolean = false, var dataWindow: Option[List[Double]] = None, var avgSpeed: Option[Double] = None)
-case class YahooDataNew(adId: Int, eventType: Int, var campaignId: Option[Int] = None)
-case class StatisticData(id: Int, performance: Double)

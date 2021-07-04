@@ -8,7 +8,7 @@ import tcep.graph.qos._
 import tcep.machinenodes.consumers.Consumer._
 import tcep.machinenodes.helper.actors.Message
 import tcep.placement.vivaldi.VivaldiCoordinates
-import tcep.simulation.tcep.{RecordAverageLoad, RecordFrequency, RecordLatency, RecordMessageHops, RecordMessageOverhead, RecordNetworkUsage, RecordProcessingNodes, RecordPublishingRate, RecordTransitionStatus}
+import tcep.simulation.tcep._
 
 abstract class Consumer extends VivaldiCoordinates with ActorLogging {
 
@@ -17,7 +17,7 @@ abstract class Consumer extends VivaldiCoordinates with ActorLogging {
   var monitorFactories: Array[MonitorFactory] = Array.empty[MonitorFactory]
   var monitors: Array[Monitor] = Array.empty[Monitor]
   var transitionStatus: Int = 0
-  var eventStreams: Seq[Vector[Stream1[Any]]] = _
+  var eventStreams: Seq[Vector[Stream1[StreamDataType]]] = _
 
   override def postStop(): Unit = {
     log.info(s"stopping self $self")
@@ -68,7 +68,7 @@ abstract class Consumer extends VivaldiCoordinates with ActorLogging {
         log.info(s"Setting QoS Monitors set. AllRecords are: ${this.allRecords.getValues}")
       }
     case SetStreams(streams) =>
-      this.eventStreams = streams.asInstanceOf[Seq[Vector[Stream1[Any]]]]
+      this.eventStreams = streams.asInstanceOf[Seq[Vector[Stream1[StreamDataType]]]]
       log.info("Event streams received")
   }
 

@@ -11,9 +11,7 @@ import tcep.publishers.{RegularPublisher, UnregularPublisher}
 import tcep.simulation.tcep.{LinearRoadDataNew, MobilityData, YahooDataNew}
 
 import scala.collection.immutable.HashMap
-import scala.concurrent.Future
 import scala.io.Source
-import scala.sys.process._
 import scala.util.Random
 
 /**
@@ -145,7 +143,7 @@ object PublisherApp extends ConfigurationParser with App {
       logger.info("starting to create YahooPublisher")
       type Time = Int
       val pubId: Int = options.getOrElse('numberOfPublishers, "1").toInt
-      val tracefile = s"/app/mobility_traces/yahooTraceP${pubId}.csv"
+      val tracefile = s"/app/event_traces/yahooTraceP${pubId}.csv"
       val nextTime: Int = options.getOrElse('eventWaitTime, "30").toInt
       try {
         val eventTrace: HashMap[Time, (YahooDataNew, Double)] = {
@@ -168,7 +166,7 @@ object PublisherApp extends ConfigurationParser with App {
           res
         }
         val pub = actorSystem.actorOf(Props(UnregularPublisher(30, id => {
-          val key = id.toInt
+          val key = id.toInt % (eventTrace.size + 1) // roll over after traces end
           if (eventTrace.contains(key)) (Event1(eventTrace(key)._1), eventTrace(key)._2)
           else (Event1(YahooDataNew(-1, -1)), 0.1)})), publisherName)
       } catch {

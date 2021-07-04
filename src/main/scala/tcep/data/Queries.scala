@@ -7,7 +7,7 @@ import tcep.dsl.Dsl.{Frequency, FrequencyMeasurement, LatencyMeasurement, LoadMe
 import tcep.machinenodes.helper.actors.MySerializable
 import tcep.placement.QueryDependencies
 import tcep.prediction.PredictionHelper.Throughput
-import tcep.simulation.tcep.MobilityData
+import tcep.simulation.tcep._
 import tcep.utils.SizeEstimator
 
 import java.time.Duration
@@ -116,6 +116,10 @@ object Queries {
         case t if t == typeOf[Float].toString => 1.0f
         case t if t == typeOf[Double].toString => 1.0d
         case t if t == typeOf[MobilityData].toString => MobilityData(0, 0.0d)
+        case t if t == typeOf[SectionDensity].toString => SectionDensity(1)
+        case t if t == typeOf[LinearRoadDataNew].toString => LinearRoadDataNew(1, 1, 1, 1.0d, false, Some(List(1,2,3)), Some(1.0d))
+        case t if t == typeOf[YahooDataNew].toString => YahooDataNew(1, 1, Some(1))
+        case t if t == typeOf[StatisticData].toString => StatisticData(1, 1.0d)
         // no idea how else to handle disjunction operator here; extend as needed
         case t if t == typeOf[Either[Int, String]] .toString=> Right("DefaultString") // use the largest of the other possible values
         case t if t == typeOf[Either[String, Int]].toString => Left("DefaultString")

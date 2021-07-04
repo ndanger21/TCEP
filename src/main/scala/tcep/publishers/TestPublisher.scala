@@ -3,6 +3,9 @@ package tcep.publishers
 import tcep.data.Events.Event
 import tcep.graph.nodes.traits.Node._
 import tcep.graph.transition.StartExecution
+import tcep.prediction.PredictionHelper.Throughput
+
+import scala.concurrent.duration.FiniteDuration
 
 case class TestPublisher() extends Publisher {
 
@@ -18,4 +21,6 @@ case class TestPublisher() extends Publisher {
       subscribers.keys.foreach(_ ! message)
   }
 
+  override var eventRateOut: Throughput = Throughput(0, FiniteDuration(0, "seconds"))
+  override val eventSizeOut: Long = 0
 }
