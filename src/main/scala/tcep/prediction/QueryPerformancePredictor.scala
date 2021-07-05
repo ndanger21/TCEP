@@ -9,30 +9,26 @@ import breeze.stats.meanAndVariance.MeanAndVariance
 import com.typesafe.config.ConfigFactory
 import tcep.data.Queries
 import tcep.data.Queries._
-import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics, Sample, getFeatureValue}
-import tcep.graph.transition.mapek.DynamicCFMNames
+import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics, Sample}
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.BytePerSec
 import tcep.machinenodes.qos.BrokerQoSMonitor.{Bandwidth, BrokerQosMetrics, GetBrokerMetrics, IOMetrics}
 import tcep.prediction.PredictionHelper.{MetricPredictions, Throughput}
 import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
 import tcep.utils.TCEPUtils
 
-import java.io.StringWriter
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.{Executors, TimeUnit}
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
-class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLogging {
+class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
-  implicit val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
-  val jsonMapper = new ObjectMapper()
-  jsonMapper.registerModule(DefaultScalaModule)
-  val predictionEndPointAddress: Uri = ConfigFactory.load().getString("constants.prediction-endpoint")
-  val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
+  val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
+  val singleThreadDispatcher: ExecutionContext = scala.concurrent.ExecutionContext.fromExecutor(Executors.newSingleThreadExecutor())
 
   override def receive: Receive = {
     case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates, contextFeatureSample) =>
+      implicit val ec = blockingIoDispatcher
       val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
       val publishers = TCEPUtils.getPublisherHosts(cluster)
 
@@ -104,15 +100,15 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
           }
       }).map(_.toMap) }
 
-      val perQueryPredictions: Future[MetricPredictions] = samples flatMap  { samples =>
+      val perQueryPredictions: Future[MetricPredictions] = samples flatMap ( s => {
         log.debug("retrieving predictions from endpoint {}", predictionEndPointAddress)
-        val pred = getPerOperatorPredictions(rootOperator, samples, publisherEventRates)
+        val pred = getPerOperatorPredictions(rootOperator, s, publisherEventRates) // avoid running prediction requests in parallel since online models are updated with them as well
         pred.onComplete {
           case Success(value) => log.debug("per-operator predictions are \n{}", value.mkString("\n"))
-          case Failure(exception) => log.error(exception, "failed to retrieve predictions from endpoint {}", predictionEndPointAddress)
+          case Failure(exception) => log.error(exception, s"failed to retrieve predictions from endpoint $predictionEndPointAddress")
         }
         pred
-      } flatMap  { perOperatorPredictions =>
+      }) flatMap  { perOperatorPredictions =>
         Future {
           val combinedPrediction = combinePerOperatorPredictions(rootOperator, perOperatorPredictions)
           log.info("per-query prediction is {}", combinedPrediction)
@@ -133,56 +129,33 @@ class QueryPerformancePredictor(cluster: Cluster) extends Actor with ActorLoggin
     * @return metric predictions for each operator (currently throughput and end-to-end latency)
     */
   def getPerOperatorPredictions(rootOperator: Query, operatorSampleMap: Map[Query, Sample], publisherEventRates: Map[String, Throughput]): Future[Map[Query, MetricPredictions]] = {
-      // start predictions at publishers; use parent throughput predictions as input event rate for child operators
+    implicit val ec = singleThreadDispatcher
+    //TODO eval: update incomingEventrate with parent event rate predictions
+
+    // start predictions at publishers
     def getPerOperatorPredictionsRec(curOp: Query): Future[Map[Query, MetricPredictions]] = {
       curOp match {
         case b: BinaryQuery => for {
           parentPredictions <- getPerOperatorPredictionsRec(b.sq1).zip(getPerOperatorPredictionsRec(b.sq2)).map(f => f._1 ++ f._2)
-          predictions <- predictMetrics(operatorSampleMap(b), parentPredictions(b.sq1).THROUGHPUT, parentPredictions(b.sq2).THROUGHPUT)
+          predictions <- getMetricPredictions(curOp, operatorSampleMap(b))
         } yield parentPredictions.updated(b, predictions)
 
         case u: UnaryQuery => for {
           parentPredictions <- getPerOperatorPredictionsRec(u.sq)
-          predictions <- predictMetrics(operatorSampleMap(u), parentPredictions(u.sq).THROUGHPUT)
+          predictions <- getMetricPredictions(curOp, operatorSampleMap(u))
         } yield parentPredictions.updated(u, predictions)
 
-        case s: StreamQuery => predictMetrics(operatorSampleMap(s), publisherEventRates(s.publisherName)).map(f => Map(s -> f))
-        case s: SequenceQuery => predictMetrics(operatorSampleMap(s), publisherEventRates(s.s1.publisherName), publisherEventRates(s.s2.publisherName)).map(f => Map(s -> f))
+        case s: StreamQuery => getMetricPredictions(curOp, operatorSampleMap(s)).map(f => Map(s -> f))
+        case s: SequenceQuery => getMetricPredictions(curOp, operatorSampleMap(s)).map(f => Map(s -> f))
         case _ => throw new IllegalArgumentException(s"unknown operator type $curOp")
       }
     }
+
     getPerOperatorPredictionsRec(rootOperator)
   }
 
 
-  def predictMetrics(sample: Sample, parentEventRates: Throughput*): Future[MetricPredictions] = {
-    //TODO eval: update incomingEventrate with parent event rate predictions
-    val sampleMap = DynamicCFMNames.ALL_FEATURES.map(f => f -> getFeatureValue(sample, f)).toMap ++ DynamicCFMNames.ALL_TARGET_METRICS.map(m => m -> 0)
-    val out = new StringWriter()
-    jsonMapper.writeValue(out, sampleMap)
-    val sampleJson = out.toString
-    Http(context.system).singleRequest(
-      HttpRequest(
-        method = HttpMethods.POST,
-        uri = predictionEndPointAddress,
-        entity = HttpEntity(ContentTypes.`application/json`, sampleJson)
-      )
-    ) flatMap  {
-        case response@HttpResponse(StatusCodes.OK, headers, entity, protocol) =>
-          implicit val mat: Materializer = Materializer(context)
-          entity.dataBytes.runFold(ByteString(""))(_ ++ _).map(bytes => bytes.toArray)
-            .map(bytes => {
-              val predictions = jsonMapper.readValue(bytes, classOf[PredictionResponse])
-              val predictedLatency = EndToEndLatency(FiniteDuration(predictions.latency.toLong, TimeUnit.MILLISECONDS))
-              val predictedThroughput = Throughput(predictions.throughput, samplingInterval)
-              log.debug("predictions are {}", predictions)
-              MetricPredictions(predictedLatency, predictedThroughput)
-            })
-        case response@HttpResponse(code, _, _, _) =>
-          response.discardEntityBytes(context.system)
-          throw HttpStatusException(code.intValue(), "", "bad prediction server response")
-      }
-  }
+
 
   /**
     * combine per-operator predictions according to query graph structure into per-query prediction for each metric

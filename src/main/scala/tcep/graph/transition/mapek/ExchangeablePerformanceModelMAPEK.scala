@@ -18,7 +18,6 @@ import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextDat
 import tcep.graph.transition.mapek.contrast._
 import tcep.placement.PlacementStrategy
 import tcep.prediction.PredictionHelper.{MetricPredictions, Throughput}
-import tcep.prediction.QueryPerformancePredictor
 import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
 import tcep.prediction.{PredictionHttpClient, QueryPerformancePredictor}
 import tcep.utils.{SpecialStats, TCEPUtils}
@@ -45,13 +44,13 @@ class ExchangeablePerformanceModelMAPEK(query: Query, mode: TransitionConfig, st
   * M of the MAPE-K cycle
   * responsible for retrieving sample data from the distributed monitor instances on operators and the brokers they are deployed on and sending it to knowledge
   */
-class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends MonitorComponent(mapek) with ActorLogging with Timers {
+class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends MonitorComponent(mapek) with ActorLogging with Timers with PredictionHttpClient {
 
-  val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
   val shiftTarget: Boolean = false
   var headersInit: Map[ActorRef, Boolean] = Map()
   val sampleFileHeader: String = DynamicCFMNames.ALL_FEATURES.mkString(";") + ";" + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
+  val transitionsEnabled: Boolean = ConfigFactory.load().getBoolean("constants.mapek.transitions-enabled") // mapek planner enabled with prediction endpoint interaction
 
   override def preStart(): Unit = {
     //timers.startTimerAtFixedRate(GetSamplingDataKey, GetSamplingDataTick, samplingInterval)
@@ -71,22 +70,7 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
         // log samples to file per operator
         mostRecentSamples.foreach(f => f.sampleMap.foreach(op => {
           log.debug("received {} samples from {}", op._2.size, op._1._1.getClass.toString)
-          // only log if any events arrived
-          if(op._2.nonEmpty && op._2.head._1.ioMetrics.incomingEventRate.amount > 0) {
-            val logFileString: String = op._1._2.toString().split("-").head.split("/").last
-            if (!headersInit.contains(op._1._2)) {
-              SpecialStats.log(logFileString, logFileString, sampleFileHeader)
-              headersInit = headersInit.updated(op._1._2, true)
-            }
-
-            def getShiftedSample: Sample = if (shiftTarget) op._2.last else op._2.head
-
-            if (!shiftTarget || shiftTarget && op._2.size > 1) {
-              SpecialStats.log(logFileString, logFileString,
-                DynamicCFMNames.ALL_FEATURES.map(f => getFeatureValue(op._2.head, f)).mkString(";") + ";" +
-                  DynamicCFMNames.ALL_TARGET_METRICS.map(m => getTargetMetricValue(getShiftedSample, m)).mkString(";"))
-            }
-          }
+          logSample(op._1._2, op._2)
         }))
         mostRecentSamples.pipeTo(mapek.knowledge)
       }
@@ -140,12 +124,15 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
         publishers: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
         contextSample <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, Sample]]
       } yield {
+        log.info("received context sample and current placement")
         val rootOperator: Query = mapek.getQueryRoot
         val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
         Future.traverse(allPlacementAlgorithms)(p => {
+          val s = System.currentTimeMillis()
           for {
             _ <- p.initialize()(ec, cluster, Some(publisherEventRates))
             placement: Map[Query, Address] <- p.initialVirtualOperatorPlacement(rootOperator, publishers)(ec, cluster, queryDependencyMap).map(_.map(e => e._1 -> e._2.member.address))
+            _ = log.info("{} virtual placement calculation complete after {}ms", p.name, System.currentTimeMillis() - s)
             pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample))).mapTo[MetricPredictions]
           } yield p.name -> (pred, placement)
         }).map(p => {
@@ -210,7 +197,10 @@ class ExchangeablePerformanceModelKnowledge(query: Query, transitionConfig: Tran
         // received from DecentralizedMonitor
     case m: MonitorSamples =>
       mostRecentSamples = m.sampleMap.map(e => e._1._1 -> e._2)
-      log.info("received context sample update, {} operators,  {} samples each", mostRecentSamples.size, mostRecentSamples.head._2.size)
+      log.debug("received context sample update, {} operators,  {} samples each", mostRecentSamples.size, mostRecentSamples.head._2.size)
+
+    case s@SampleUpdate(query, lastSamples) =>
+      mostRecentSamples.updated(query, lastSamples)
 
     case GetCFM => sender() ! this.cfm
     case GetContextSample => sender() ! mostRecentSamples.map(e => e._1 -> e._2.head)

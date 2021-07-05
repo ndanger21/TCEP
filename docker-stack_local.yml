@@ -182,6 +182,8 @@ services:
 
   predictionEndpoint:
     image: localhost:5000/tcep-prediction-endpoint
+    volumes:
+      - $HOME/logs:/app/logs
     depends_on:
       - simulator
     networks:
