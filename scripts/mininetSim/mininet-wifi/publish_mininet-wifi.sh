@@ -133,10 +133,10 @@ if [ -z "$transitionStrategy" ]; then
   transitionStrategy="MFGS"
 fi
 if [ -z "$transitionExecutionMode" ]; then
-  transitionExecutionMode="1"
+  transitionExecutionMode="0"
 fi
 if [ -z "$eventrate" ]; then
-  eventrate="100"
+  eventrate="20"
 fi
 host=${u}@${machine}
 if [[ ${controller_ip} == "localhost" ]] || [[ ${controller_ip} == "127.0.0.1" ]]; then

@@ -1,0 +1,2 @@
+python3 /usr/share/sumo/tools/randomTrips.py -e 21600 --period 4 --fringe-factor 100.0 --vehicle-class passenger -n osm.net.xml -r routes.rou.xml -o trips.xml
+#sed -i 's#vClass="veh_passenger"#vClass="passenger"#' routes.rou.xml

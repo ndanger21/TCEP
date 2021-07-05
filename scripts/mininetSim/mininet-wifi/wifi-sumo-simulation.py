@@ -6,24 +6,23 @@
 sumo 1.5.0
 sumo-gui"""
 
+import datetime
 import os
 import os.path
-import datetime
-import time
-import sys
 import re
 import subprocess
+import sys
+import time
 
-from mininet.link import TCLink, TCULink
-from mininet.node import Controller, RemoteController
+from mininet.link import TCULink
 from mininet.log import setLogLevel, info
+from mininet.node import RemoteController
 from mininet.util import macColonHex
-from mn_wifi.node import UserAP
-from mn_wifi.cli import CLI
 from mn_wifi.net import Mininet_wifi
+
+from mn_wifi.link import TCWirelessLink
+from mn_wifi.node import UserAP
 from mn_wifi.sumo.runner import sumo
-from mn_wifi.link import wmediumd, TCWirelessLink
-from mn_wifi.wmediumdConnector import interference
 
 
 def topology(enable_tcep=True):
@@ -60,6 +59,7 @@ def topology(enable_tcep=True):
     # manually stop network-manager since it interferes with wpa_cli association
     aps[4].cmd('pkill -f NetworkManager')
     aps[4].cmd('pkill -f tcep.machinenodes')
+    aps[4].cmd('pkill -f tcep.simulation')
 
     info("*** Configuring Propagation Model\n")
     net.setPropagationModel(model="logDistance", exp=rsu_range)
@@ -184,7 +184,7 @@ def topology(enable_tcep=True):
                     '-cp %s "tcep.machinenodes.PublisherApp" %s > /dev/null &'
                     % (COMMON_CONFIG, LOG_PATH, 1, LOG_PATH, 1, 8484 + n_publishers + 2, 8484 + n_publishers + 2, JARFILE, ARGS))
 
-        ARGS = '--dir %s/simulation --mode 12 --ip %s --port %i --duration %i ' \
+        ARGS = '--dir %s/simulation --mode 5 --ip %s --port %i --duration %i ' \
                '--initialAlgorithm %s --numberOfPublishers %i --req %s --query %s --mapek %s --transitionStrategy %s --transitionExecutionMode %s ' \
                '--eventRate %s ' \
                % (LOG_PATH, sim_rsu.IP(), base_port, duration, placement, n_publishers, reqChange, query, mapek, transitionStrategy, transitionExecutionMode, eventrate)
@@ -232,7 +232,7 @@ if __name__ == '__main__':
     n_publishers = int(sys.argv[3]) if len(sys.argv) > 3 else 12
     user = str(sys.argv[4]) if len(sys.argv) > 4 else 'niels' # this returns 'root' since mininet must run with sudo: pwd.getpwuid(os.getuid())[0]
     enable_gui = sys.argv[5].lower() == 'true' if len(sys.argv) > 5 else True
-    controller_ip = sys.argv[6] if len(sys.argv) > 6 else '10.0.30.15'
+    controller_ip = sys.argv[6] if len(sys.argv) > 6 else 'localhost'
     n_rsus = int(sys.argv[7]) if len(sys.argv) > 7 else 4
     gui_image = sys.argv[8] if len(sys.argv) > 8 else 'nieda2018/tcep-gui'
     mapek = sys.argv[9] if len(sys.argv) > 9 else 'requirementBased'

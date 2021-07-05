@@ -107,7 +107,7 @@ adjust_config() {
    	    sed -i -r "s#isLocalSwarm = .*#isLocalSwarm = true#" ${work_dir}/src/main/resources/application.conf
    	  fi
     fi
-
+  echo "config adjusted"
 }
 
 
