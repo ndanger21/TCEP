@@ -28,11 +28,12 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
 
   val eventSizeOut: Long = SizeEstimator.estimate(createEventFromId(0))
   var eventRateOut: Throughput = Throughput(1000000 / waitTime, FiniteDuration(1, TimeUnit.SECONDS)) // events/s
-  var lastEventCount = 0
-  val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
+  var eventDelays: List[Long] = 1 to 5 map(waitTime / _) toList
+  val eventRateChangeDelay: FiniteDuration = FiniteDuration(1, TimeUnit.HOURS)
 
   override def preStart() = {
-    log.info(s"starting regular publisher with interval $waitTime microseconds (${1e6 / waitTime }/s) and roles ${cluster.getSelfRoles}")
+    log.info(s"starting regular publisher with interval $waitTime microseconds (${1e6 / waitTime }/s) and roles ${cluster.getSelfRoles}; event rate increases to ${eventDelays.map(1e6 / _)} each hour")
+    timers.startTimerWithFixedDelay(ChangeEventRateTickKey, ChangeEventRateTick, eventRateChangeDelay)
     super.preStart()
   }
   override def postStop(): Unit = {
@@ -43,6 +44,15 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
 
   override def receive: Receive = {
     super.receive orElse {
+      case ChangeEventRateTick =>
+        emitEventTask.cancel(true)
+        eventDelays = eventDelays.tail
+        if(eventDelays.nonEmpty) {
+          emitEventTask = sched.scheduleAtFixedRate(() => self ! SendEventTick, 0, eventDelays.head, TimeUnit.MICROSECONDS)
+          log.info("increased event rate to {}", 1e6 / eventDelays.head)
+        } else log.info("all event rates processed, stopping events")
+
+
       case StartStreams() =>
         if (!startedPublishing) {
           log.info("starting to stream events!")
@@ -58,4 +68,7 @@ case class RegularPublisher(waitTime: Long, createEventFromId: Integer => Event)
         subscribers.keys.foreach(_ ! event)
     }
   }
+
+  private case object ChangeEventRateTick
+  private case object ChangeEventRateTickKey
 }
