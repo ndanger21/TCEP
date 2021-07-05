@@ -178,7 +178,7 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
       if(publisherEventRates.isEmpty) {
         implicit val timeout = Timeout(15, TimeUnit.SECONDS)
         for {
-          publisherActorMap <- TCEPUtils.getPublisherActors() // TODO check if this blocks since the ask goes to self
+          publisherActorMap <- TCEPUtils.getPublisherActors()
           publisherEventRatesResp <- TCEPUtils.makeMapFuture(publisherActorMap.map(p => p._1 -> (p._2 ? GetEventsPerSecond).mapTo[Throughput]))
         } yield {
           publisherEventRates = publisherEventRatesResp
@@ -220,6 +220,6 @@ class TaskManagerActor extends VivaldiCoordinates with ActorLogging {
     case t: AllTaskManagerActors => taskManagerActors = t.refs
 
     case GetTaskManagerActor(node) => sender() ! TaskManagerActorResponse(taskManagerActors.get(node))
-    case other => log.info(s"ignoring unknown message $other")
+    case other => log.info("ignoring unknown message {}", other)
   }
 }

@@ -74,7 +74,7 @@ trait TransitionMode extends ClusterActor with ActorLogging {
     if (started) {
       updateMonitoringData(log, event, hostInfo, currentCPULoad, eventRateOut, eventSizeOut)
       subscribers.keys.foreach(sub => {
-        //SpecialStats.log(s"$this", s"sendEvent_${currAlgorithm}_${self.path.name}", s"STREAMING EVENT $event FROM ${s} TO ${sub}")
+        //SpecialStats.log(s"$this", s"sendEvent_${self.path.name}", s"STREAMING EVENT $event FROM ${sender()} TO ${sub}")
         //log.debug(s"STREAMING EVENT $event TO ${sub}")
         if (eventCallback.isDefined) {
           log.debug(s"applying callback to event $event")

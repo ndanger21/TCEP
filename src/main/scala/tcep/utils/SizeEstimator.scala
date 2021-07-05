@@ -81,7 +81,7 @@ object SizeEstimator {
       */
       case _ =>
         val est = estimate(obj, new IdentityHashMap[AnyRef, AnyRef])
-        if(est >= 2000) log.warn(s"estimating size of object $obj, result may not be reliable: $est")
+        if(est >= 5000) log.warn(s"estimating size of object $obj, result may not be reliable: $est")
         est
     }
   }

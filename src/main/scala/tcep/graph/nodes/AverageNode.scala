@@ -26,7 +26,9 @@ case class AverageNode(query: AverageQuery, hostInfo: HostInfo, np: NodeProperti
         else Some(m.speed)
       case d: Double => Some(d)
       case d: Int => Some(d.toDouble)
-      case other => throw new IllegalArgumentException(s"unknown data type: $other")
+      case other =>
+        log.error(s"unhandled event type: $other")
+        throw new IllegalArgumentException(s"unknown data type: $other")
     }
     val values = dataList.flatMap(extract)
     //SpecialStats.log(this.getClass.toString, "avgEvent", s"data: $dataList, sectionFilter: ${query.sectionFilter}, values: $values, avg: ${values.sum / values.length}")

@@ -92,13 +92,15 @@ all() {
     echo "running TCEP simulation with manager $host and workers $workers"
     $local_run && echo "local_run $local_run"
     #setup
+    publish_with_swarm_restart
+}
+
+publish_with_swarm_restart() {
     START=$(date +%s.%N)
     take_down_swarm
     swarm_token=$(init_manager) && \
     join_workers $swarm_token && \
     PUB_START=$(date +%s.%N) && \
-    adjust_cfg && \
-    ./build.sh "localhost" ${config_file} && \
     publish && \
     END=$(date +%s.%N) && \
     TOT_DIFF=$(echo "$END - $START" | bc) && \
@@ -179,7 +181,7 @@ join_workers() {
       ssh -T -p $port $u@$i "docker swarm join --token $1 $manager:2377"
       #ssh -T -p $port $u@$i "sudo systemctl restart docker" 2> /dev/null
       # add labels to docker nodes so replicas can be deployed according to label
-      if [ "$count" -le "$n_speed_streams" ]; then
+      if [ "$count" -le "$n_publisher_nodes_total" ]; then
         ssh -T -p $port $user@$manager "docker node update --label-add publisher=true node$count"
         echo "added label publisher=true to node$count "
       else
@@ -236,16 +238,19 @@ publish_no_build() {
     setUser $manager
     printf "\nPulling image from registry\n"
     ssh -T -p $port $user@$manager "docker pull $registry_user/$tcep_image"
-    rm -rf $work_dir/dockerbuild
     ssh -T -p $port $user@$manager "docker pull $registry_user/$gui_image"
+    ssh -T -p $port $user@$manager "docker pull $registry_user/tcep-prediction-endpoint"
 
     # stop already existing services
     #ssh $user@$manager 'docker service rm $(docker service ls -q)'
     ssh $user@$manager 'docker stack rm tcep'
+    sleep 10s  # wait a bit so stack network is removed properly
+    #ssh $user@$manager 'docker network prune'
 
     echo "Booting up new stack"
     IFS='/' read -ra my_array <<< ${stack_file}
-    stack_file_name=my_array[-1]
+    stack_file_name=${my_array[-1]} #TODO fix this
+    echo "stack_file name: $stack_file_name"
     ssh -p $port $u@$manager 'mkdir -p ~/logs && rm -f ~/logs/** && mkdir -p ~/src';
     scp -P $port $work_dir/${stack_file} $u@$manager:~/src/${stack_file_name}
     #ssh -p $port $u@$manager 'cd ~/src && docker stack deploy --prune --with-registry-auth -c docker-stack.yml tcep';

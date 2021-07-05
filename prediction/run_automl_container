@@ -1,0 +1,1 @@
+docker run -d -v $PWD:/opt/nb -p 8888:8888 nieda2018/automl_container /bin/bash -c "mkdir -p /opt/nb && jupyter notebook --notebook-dir=/opt/nb --ip='0.0.0.0' --port=8888 --no-browser --allow-root"

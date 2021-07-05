@@ -62,12 +62,12 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   val totalDuration = if(durationInMinutes.isDefined) FiniteDuration(durationInMinutes.get, TimeUnit.MINUTES) else FiniteDuration(defaultDuration, TimeUnit.MINUTES)
   val startDelay = new FiniteDuration(5, TimeUnit.SECONDS)
   val samplingInterval = new FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
-  val requirementChangeDelay = new FiniteDuration(15, TimeUnit.SECONDS)
+  val requirementChangeDelay = new FiniteDuration(120, TimeUnit.SECONDS)
   val ws = slidingWindow(1.seconds) // join window size
   val latencyRequirement = latency < timespan(1100.milliseconds) otherwise None
   val messageHopsRequirement = hops < 3 otherwise None
   val loadRequirement = load < MachineLoad(10.0d) otherwise None
-  val frequencyRequirement = frequency > Frequency(50, 5) otherwise None
+  val frequencyRequirement = frequency > Frequency(1000, 1) otherwise None
   var graphs: Map[Int, QueryGraph] = Map()
   //val query = ConfigFactory.load().getStringList("constants.query")
   // performance influence model paths for LearnOn
@@ -442,7 +442,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       graphs = graphs.+(i -> graph)
       context.system.scheduler.scheduleOnce(totalDuration)(this.shutdown())
       if (requirementChanges.isDefined && requirementChanges.get.nonEmpty) {
-        val firstDelay = requirementChangeDelay.+(FiniteDuration(40, TimeUnit.SECONDS))
+        val firstDelay = requirementChangeDelay
         log.info(s"scheduling first requirement change after $firstDelay for graph ${graphs(i)}")
         context.system.scheduler.scheduleOnce(firstDelay)(changeReqTask(i, initialRequirements.toSeq, requirementChanges.get.toSeq))
         //log.info(s"scheduling second requirement change after ${requirementChangeDelay.mul(2)} for graph ${graphs(i-1)}")
@@ -453,7 +453,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
           val allAlgorithms = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala
           //val allAlgorithms = List(PietzuchAlgorithm.name, GlobalOptimalBDPAlgorithm.name)
           var mult = 1
-          val repetitions: Double =  (totalDuration.-(firstDelay).div(requirementChangeDelay) - 2) / allAlgorithms.size
+          val repetitions: Double = (totalDuration.-(firstDelay).div(requirementChangeDelay) - 2) / allAlgorithms.size
           for (repeat <- 0 until repetitions.toInt) {
             allAlgorithms.foreach(a => {
               val t = firstDelay.+(requirementChangeDelay.mul(mult))
@@ -638,6 +638,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       case "latency" => latencyRequirement
       case "load" => loadRequirement
       case "hops" => messageHopsRequirement
+      case "throughput" => frequencyRequirement
       case _ =>
         log.warning(s"unknown initial requirement supplied as argument: $requirementStr, defaulting to latencyReq")
         latencyRequirement

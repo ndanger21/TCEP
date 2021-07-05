@@ -68,7 +68,8 @@ adjust_config() {
     if [ -z $8 ]; then
       prediction_port=9091
     fi
-    echo "configuring application.conf for $nSpeedPublishers speed publishers and $nNodesTotal containers total"
+    echo "work_dir is $work_dir"
+    echo "configuring ${work_dir}/src/main/resources/application.conf for $nSpeedPublishers speed publishers and $nNodesTotal containers total"
     sed -i -r "s#mininet-simulation = .*#mininet-simulation = ${mininet}#" ${work_dir}/src/main/resources/application.conf
     sed -i -r "s#isLocalSwarm = .*#isLocalSwarm = false#" ${work_dir}/src/main/resources/application.conf
     sed -i -r "s#min-nr-of-members = [0-9]*#min-nr-of-members = $nNodesTotal#" ${work_dir}/src/main/resources/application.conf
@@ -79,8 +80,7 @@ adjust_config() {
     sed -i -r "s#const GUI_PORT = .*#const GUI_PORT = ${gui_port}#" ${work_dir}/gui/src/graph.js
     sed -i -r "s#const GUI_PORT = .*#const GUI_PORT = ${gui_port}#" ${work_dir}/gui/constants.js
     # use perl since sed is a pia to use for multi-line matching
-    perl -0777 -i -pe "s/tcep-gui\n\s+ports:\s+-\s[0-9]+:[0-9]+/tcep-gui\n    ports:\n      - ${gui_port}:${gui_port}/igs" ${work_dir}/docker-stack.yml
-
+    perl -0777 -i -pe "s/tcep-gui\n\s+ports:\s+-\s[0-9]+:[0-9]+/tcep-gui\n    ports:\n      - ${gui_port}:${gui_port}/igs" ${work_dir}/${stack_file}
     if [[ $mininet == "true" ]]; then # mininet simulation
       sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://${gui_host}:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
    	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://${gui_host}:${prediction_port}/\"#" ${work_dir}/src/main/resources/application.conf

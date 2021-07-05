@@ -1,7 +1,7 @@
 package tcep
 
 import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
-import akka.cluster.ClusterEvent.{CurrentClusterState, MemberEvent, MemberUp}
+import akka.cluster.ClusterEvent.{CurrentClusterState, MemberEvent, MemberJoined, MemberUp}
 import akka.cluster.{Cluster, Member}
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
@@ -72,6 +72,7 @@ trait ClusterActor extends Actor with ActorLogging {
   override def receive: Receive = {
     case c: CurrentClusterState => currentClusterState(c)
     case m: MemberUp => memberUp(m.member)
+    case m: MemberJoined => log.info("member joined, now {} members, cluster state: {}", cluster.state.members.size, cluster.state.members)
   }
 
   def currentClusterState(state: CurrentClusterState): Unit = {}

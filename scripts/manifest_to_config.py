@@ -7,7 +7,6 @@
 # Description: Parses the Manifest XML file downloaded from GENI and outputs
 # the hosts IP addresses in the config file format
 
-import json
 import os
 import re
 import sys
@@ -34,7 +33,7 @@ for ip in ip_array:
     worker_str += "\"" + ip + "\" "
 worker_str += ")"
 
-configPath = os.path.join(project_root, "docker-swarm.cfg")
+configPath = os.path.join(project_root, "docker-swarm_geni.cfg")
 with open(configPath) as f:
     config_manager = re.sub('manager=.*', 'manager="' + manager_ip + '"', f.read())
     config_workers = re.sub('workers=.*', 'workers=' + worker_str, config_manager)

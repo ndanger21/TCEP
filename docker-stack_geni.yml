@@ -34,7 +34,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.simulation.tcep.SimulationRunner
-      - ARGS=--dir ./logs --mode 5 --ip simulator --port 2500 --query AccidentDetection --eventRate 1000 --mapek ExchangeablePerformanceModel --req throughput --transitionStrategy MFGS --transitionExecutionMode 1 --duration 20 --loadTestMax 1 --initialAlgorithm Relaxation
+      - ARGS=--dir ./logs --mode 5 --ip simulator --port 2500 --query AccidentDetection --eventRate 100 --mapek ExchangeablePerformanceModel --req throughput --transitionStrategy MFGS --transitionExecutionMode 1 --duration 720 --loadTestMax 1 --initialAlgorithm ProducerConsumer
       - LOG_FILE_PATH=/app/logs
       - JMX_PORT=8484
     ports:
@@ -55,7 +55,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.machinenodes.ConsumerApp
-      - ARGS=--dir ./logs --ip consumer --port 2700 --kind Accident --eventRate 500 --loadTestMax 1
+      - ARGS=--dir ./logs --ip consumer --port 2700 --kind Accident --eventRate 100 --loadTestMax 1
       - LOG_FILE_PATH=/app/logs
     volumes:
       - $HOME/logs:/app/logs
@@ -73,7 +73,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.machinenodes.PublisherApp
-      - ARGS=--ip speedPublisher1 --port 2501 --kind SpeedPublisher --numberOfPublishers 1 --eventRate 500
+      - ARGS=--ip speedPublisher1 --port 2501 --kind SpeedPublisher --numberOfPublishers 1 --eventRate 100
       - LOG_FILE_PATH=/app/logs
     volumes:
       - $HOME/logs:/app/logs
@@ -95,7 +95,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.machinenodes.PublisherApp
-      - ARGS=--ip speedPublisher2 --port 2502 --kind SpeedPublisher --numberOfPublishers 2 --eventRate 500
+      - ARGS=--ip speedPublisher2 --port 2502 --kind SpeedPublisher --numberOfPublishers 2 --eventRate 100
       - LOG_FILE_PATH=/app/logs
     volumes:
       - $HOME/logs:/app/logs
@@ -117,7 +117,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.machinenodes.PublisherApp
-      - ARGS=--ip speedPublisher3 --port 2503 --kind SpeedPublisher --numberOfPublishers 3 --eventRate 500
+      - ARGS=--ip speedPublisher3 --port 2503 --kind SpeedPublisher --numberOfPublishers 3 --eventRate 100
       - LOG_FILE_PATH=/app/logs
     volumes:
       - $HOME/logs:/app/logs
@@ -139,7 +139,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.machinenodes.PublisherApp
-      - ARGS=--ip densityPublisher --port 2504 --kind DensityPublisher --numberOfPublishers 0 --eventRate 500
+      - ARGS=--ip densityPublisher --port 2504 --kind DensityPublisher --numberOfPublishers 0 --eventRate 100
       - LOG_FILE_PATH=/app/logs
     volumes:
       - $HOME/logs:/app/logs
@@ -161,7 +161,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.machinenodes.EmptyApp
-      - ARGS=--port 3400 --eventRate 500
+      - ARGS=--port 3400 --eventRate 100
       - LOG_FILE_PATH=/app/logs
     depends_on:
       - simulator
@@ -170,7 +170,7 @@ services:
     networks:
       - main
     deploy:
-      replicas: 2
+      replicas: 3
       restart_policy:
         condition: on-failure
       placement:

@@ -8,7 +8,7 @@ import tcep.config.ConfigurationParser
 import tcep.data.Events.Event1
 import tcep.machinenodes.helper.actors.TaskManagerActor
 import tcep.publishers.{RegularPublisher, UnregularPublisher}
-import tcep.simulation.tcep.{LinearRoadDataNew, MobilityData, YahooDataNew}
+import tcep.simulation.tcep.{LinearRoadDataNew, MobilityData, SectionDensity, YahooDataNew}
 
 import scala.collection.immutable.HashMap
 import scala.io.Source
@@ -98,7 +98,7 @@ object PublisherApp extends ConfigurationParser with App {
 
         def getDensity(section: Int) = Random.nextInt(8) // TODO use values calculated from madrid traces
         val dps = 0 until nSections map { i =>
-          actorSystem.actorOf(Props(RegularPublisher(eventIntervalMicros, id => Event1(getDensity(i)))), publisherName + s"-densityPublisher-$i-")
+          actorSystem.actorOf(Props(RegularPublisher(eventIntervalMicros, id => Event1(SectionDensity(getDensity(i))))), publisherName + s"-densityPublisher-$i-")
         }
         logger.info(s"creating $nSections DensityPublishers with ActorRefs: \n ${dps.mkString("\n")}")
 
