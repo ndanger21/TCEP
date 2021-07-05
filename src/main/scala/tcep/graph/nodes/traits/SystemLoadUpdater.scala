@@ -6,7 +6,7 @@ import com.typesafe.config.ConfigFactory
 import tcep.machinenodes.qos.BrokerQoSMonitor.{CPULoadUpdate, CPULoadUpdateTick, CPULoadUpdateTickKey}
 import tcep.simulation.adaptive.cep.SystemLoad
 
-import java.util.concurrent.{Executors, TimeUnit}
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -18,8 +18,8 @@ class SystemLoadUpdater extends Actor with Timers with ActorLogging {
 
   var currentLoad: Double = 0.0
   val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
-  val singleThreadDispatcher: ExecutionContext = scala.concurrent.ExecutionContext.fromExecutor(Executors.newSingleThreadExecutor())
-
+  //val singleThreadDispatcher: ExecutionContext = scala.concurrent.ExecutionContext.fromExecutor(Executors.newSingleThreadExecutor())
+  lazy val blockingIoDispatcher: ExecutionContext = context.system.dispatchers.lookup("blocking-io-dispatcher")
   override def preStart(): Unit = {
     super.preStart()
     timers.startTimerWithFixedDelay(CPULoadUpdateTickKey, CPULoadUpdateTick, samplingInterval) // use fixed delay here to avoid starting multiple futures at once
@@ -27,7 +27,7 @@ class SystemLoadUpdater extends Actor with Timers with ActorLogging {
 
   override def receive: Receive = {
     case CPULoadUpdateTick =>
-      implicit val ec = singleThreadDispatcher
+      implicit val ec = blockingIoDispatcher
       val update = Future {
         val start = System.nanoTime()
         val update = CPULoadUpdate(SystemLoad.getSystemLoad(samplingInterval))
