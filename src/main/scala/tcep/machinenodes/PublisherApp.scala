@@ -31,7 +31,7 @@ object PublisherApp extends ConfigurationParser with App {
     // publishers can host operators
     actorSystem.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
     val publisherName = s"P:${options.getOrElse('ip, ipDefault)}:${options.getOrElse('port, 0)}"
-    val eventIntervalMicros = (1000000 / baseEventRate).toLong
+    //val eventIntervalMicros = (1000000 / baseEventRate).toLong
     val logFilePathStr = System.getProperty("logFilePath").split("/")
     val idx = logFilePathStr.indexOf("logs")
     val traceLocation = logFilePathStr.slice(0, idx + 1).mkString("/") + "/../mobility_traces"
@@ -81,7 +81,7 @@ object PublisherApp extends ConfigurationParser with App {
 
           //logger.debug(s"tracefile contents: \n ${mobilityTraces.toList.sortBy(_._1).map(e => s"\n${e._1} : ${e._2}")}")
           val pub = actorSystem.actorOf(Props(
-            RegularPublisher(eventIntervalMicros, id => {
+            RegularPublisher(baseEventRate, id => {
               val key = (id.toDouble * 0.5d) % ((mobilityTraces.size + 1) / 2) // roll over after traces end
               if (mobilityTraces.contains(key)) Event1(mobilityTraces(key))
               else Event1(MobilityData(-1, 0.0d))
@@ -98,7 +98,7 @@ object PublisherApp extends ConfigurationParser with App {
 
         def getDensity(section: Int) = Random.nextInt(8) // TODO use values calculated from madrid traces
         val dps = 0 until nSections map { i =>
-          actorSystem.actorOf(Props(RegularPublisher(eventIntervalMicros, id => Event1(SectionDensity(getDensity(i))))), publisherName + s"-densityPublisher-$i-")
+          actorSystem.actorOf(Props(RegularPublisher(baseEventRate, id => Event1(SectionDensity(getDensity(i))))), publisherName + s"-densityPublisher-$i-")
         }
         logger.info(s"creating $nSections DensityPublishers with ActorRefs: \n ${dps.mkString("\n")}")
 
@@ -174,7 +174,7 @@ object PublisherApp extends ConfigurationParser with App {
       }
 
       case _ =>
-        val pub = actorSystem.actorOf(Props(RegularPublisher(eventIntervalMicros, id => Event1(id))), publisherName)
+        val pub = actorSystem.actorOf(Props(RegularPublisher(baseEventRate, id => Event1(id))), publisherName)
         logger.info(s"creating RegularPublisher with ActorRef: $pub")
     }
   } catch {

@@ -2,8 +2,11 @@ package tcep.config
 
 import com.typesafe.config.ConfigFactory
 import org.slf4j.LoggerFactory
+import tcep.prediction.PredictionHelper.Throughput
 
 import java.net.InetAddress
+import java.util.concurrent.TimeUnit
+import scala.concurrent.duration.FiniteDuration
 
 /**
   * Created by anjaria on 31.07.17.
@@ -73,6 +76,6 @@ trait ConfigurationParser {
       .withFallback(ConfigFactory.parseString(s"akka.cluster.roles=[$getRole]"))
       .withFallback(ConfigFactory.load())
 
-  implicit lazy val baseEventRate: Double = options.getOrElse('eventRate, "100.0").toDouble
+  implicit lazy val baseEventRate: Throughput = Throughput(options.getOrElse('eventRate, "100.0").toDouble, FiniteDuration(1, TimeUnit.SECONDS))
   def getRole: String
 }

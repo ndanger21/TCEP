@@ -114,6 +114,7 @@ object PredictionHelper {
 
   case class Throughput(amount: Double, interval: FiniteDuration) extends PerformanceMetric {
     override def toString: String = f"${getEventsPerSec}"
+    def getDelayBetweenEventsMicros: Long = (1e6 / getEventsPerSec).toLong
     def metricHeader = s"throughput [per second]"
     def getEventsPerSec: Double = {
       val conversionFactor = interval.unit match {

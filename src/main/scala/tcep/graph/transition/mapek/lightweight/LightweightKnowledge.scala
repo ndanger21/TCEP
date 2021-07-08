@@ -16,7 +16,7 @@ import tcep.utils.SpecialStats
 import scala.collection.JavaConverters._
 
 class LightweightKnowledge(mapek: LightweightMAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: String, consumer: ActorRef)
-  extends KnowledgeComponent(query, transitionConfig, currentPlacementStrategy) {
+  extends KnowledgeComponent(mapek, query, transitionConfig, currentPlacementStrategy) {
 
   var placementAlgorithms: List[PlacementAlgorithm] = List()
   var fitnessScores: FitnessContainer = new FitnessContainer()

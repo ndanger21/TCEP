@@ -183,9 +183,11 @@ join_workers() {
       # add labels to docker nodes so replicas can be deployed according to label
       if [ "$count" -le "$n_publisher_nodes_total" ]; then
         ssh -T -p $port $user@$manager "docker node update --label-add publisher=true node$count"
+        ssh -T -p $port $user@$manager "docker node update --label-add worker=false node$count"
         echo "added label publisher=true to node$count "
       else
         ssh -T -p $port $user@$manager "docker node update --label-add worker=true node$count"
+        ssh -T -p $port $user@$manager "docker node update --label-add publisher=false node$count"
         echo "added label worker=true to node$count "
       fi
     done
@@ -211,14 +213,17 @@ rebootSwarm() {
 # get the output from the manager node
 # Usage bash publish_tcep.sh getOutput
 get_output(){
-	setUser $manager	
+	setUser $manager
+	ssh $u@$manager "mkdir -p ~/logs_backup/$(date '+%d-%b-%Y-%H-%M-%S')"
+	ssh $u@$manager "cd ~/logs && zip -r -o traces_$(date '+%d-%b-%Y-%H-%M-%S').zip *"
+	ssh $u@$manager "cp -r ~/logs/*.zip ~/logs_backup/"
 	mkdir -p $work_dir/logs_backup/$(date '+%d-%b-%Y-%H-%M-%S')
-	scp -r $u@$manager:~/logs/* $work_dir/logs_backup/$(date '+%d-%b-%Y-%H-%M-%S')
+	scp -r $u@$manager:~/logs/*.zip $work_dir/logs_backup/$(date '+%d-%b-%Y-%H-%M-%S')
 }
 
 clear_logs() {
     setUser $manager
-    ssh $u@$manager "rm -f ~/logs/*.log && rm -f ~/logs/*.csv" &
+    ssh $u@$manager "rm -f ~/logs/*.log && rm -f ~/logs/*.csv && rm -f ~/logs/*.zip" &
     for i in "${workers[@]}"
     do
 	    setUser $i

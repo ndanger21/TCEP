@@ -14,7 +14,8 @@ import scala.io.Source
 class AnalysisConsumer extends Consumer {
 
   var storage : HashMap[Int, Int] = HashMap[Int, Int]()
-
+  val latencyRequirement = latency < timespan(700.milliseconds) otherwise None
+  val loadRequirement = load < MachineLoad(3.0d) otherwise None
   override def preStart(): Unit = {
     super.preStart()
     storage = loadStorageDatabase()(log)
@@ -22,14 +23,13 @@ class AnalysisConsumer extends Consumer {
 
   override def receive: Receive = super.receive
 
-  override def queryFunction(): Queries.Query = adAnalysisQuery(eventStreams, storage)
+  override def queryFunction(): Queries.Query = adAnalysisQuery(eventStreams, storage, Set(latencyRequirement, loadRequirement))
 }
 
 object AnalysisConsumer {
-  def adAnalysisQuery(eventStreams: Seq[Vector[Stream1[_ <: StreamDataType]]], storage: HashMap[Int, Int]): Query = {
+  def adAnalysisQuery(eventStreams: Seq[Vector[Stream1[_ <: StreamDataType]]], storage: HashMap[Int, Int], requirements: Set[Requirement]): Query = {
     val streams = eventStreams(0).asInstanceOf[Vector[Stream1[YahooDataNew]]]
-    val latencyRequirement = latency < timespan(700.milliseconds) otherwise None
-    val loadRequirement = load < MachineLoad(3.0d) otherwise None
+
     val and01 = streams(0).and(streams(1))
     val and23 = streams(2).and(streams(3))
     val and45 = streams(4).and(streams(5))
@@ -42,7 +42,7 @@ object AnalysisConsumer {
     val purchaseFilter = ShrinkFilter2(dbAnd01234567, Set(), (event: Any) => {
       event.asInstanceOf[YahooDataNew].eventType == 2
     }, emitAlways = Some(false))
-    val stats = WindowStatistic1(purchaseFilter, Set(latencyRequirement, loadRequirement), 60)
+    val stats = WindowStatistic1(purchaseFilter, requirements, 60)
     //val stats = WindowStatistic1(purchaseFilter, Set(latencyRequirement), 60)
     stats
   }

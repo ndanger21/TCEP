@@ -62,12 +62,12 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   val totalDuration = if(durationInMinutes.isDefined) FiniteDuration(durationInMinutes.get, TimeUnit.MINUTES) else FiniteDuration(defaultDuration, TimeUnit.MINUTES)
   val startDelay = new FiniteDuration(5, TimeUnit.SECONDS)
   val samplingInterval = new FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
-  val requirementChangeDelay = new FiniteDuration(120, TimeUnit.SECONDS)
+  val requirementChangeDelay = new FiniteDuration(300, TimeUnit.SECONDS)
   val ws = slidingWindow(1.seconds) // join window size
-  val latencyRequirement = latency < timespan(1100.milliseconds) otherwise None
+  val latencyRequirement = latency < timespan(30.milliseconds) otherwise None
   val messageHopsRequirement = hops < 3 otherwise None
   val loadRequirement = load < MachineLoad(10.0d) otherwise None
-  val frequencyRequirement = frequency > Frequency(1000, 1) otherwise None
+  val frequencyRequirement = frequency > Frequency(500, 1) otherwise None
   var graphs: Map[Int, QueryGraph] = Map()
   //val query = ConfigFactory.load().getStringList("constants.query")
   // performance influence model paths for LearnOn
@@ -411,7 +411,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       case "Join" => stream[MobilityData](speedPublishers(0)._1).join(stream[MobilityData](speedPublishers(1)._1), slidingWindow(1.seconds), slidingWindow(1.seconds)).where((_, _) => true, initialRequirements.toSeq: _*)
       case "SelfJoin" => stream[MobilityData](speedPublishers(0)._1).selfJoin(slidingWindow(1.seconds), slidingWindow(1.seconds), initialRequirements.toSeq: _*)
       case "AccidentDetection" => accidentQuery(initialRequirements.toSeq: _*)
-      case "AdAnalysis" => AnalysisConsumer.adAnalysisQuery(getStreams(8), AnalysisConsumer.loadStorageDatabase()(log))
+      case "AdAnalysis" => AnalysisConsumer.adAnalysisQuery(getStreams(8), AnalysisConsumer.loadStorageDatabase()(log), initialRequirements)
     }
 
         //accidentQuery(initialRequirements.toSeq: _*)
@@ -437,33 +437,34 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
         }
 
     val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
-      log.info(s"starting $transitionMode ${placementStrategy} algorithm simulation number $i (progress: $percentage) with requirementChanges $requirementChanges \n mapek $mapek and query $query")
-      val graph = Await.result(sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback), FiniteDuration(15, TimeUnit.SECONDS)) // (start simulation time, interval, end time (s))
-      graphs = graphs.+(i -> graph)
-      context.system.scheduler.scheduleOnce(totalDuration)(this.shutdown())
-      if (requirementChanges.isDefined && requirementChanges.get.nonEmpty) {
-        val firstDelay = requirementChangeDelay
+    log.info(s"starting $transitionMode ${placementStrategy} algorithm simulation number $i (progress: $percentage) \n with requirements \n $initialRequirements \n and with requirementChanges \n $requirementChanges \n mapek $mapek and query $query")
+    val graph = Await.result(sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback), FiniteDuration(15, TimeUnit.SECONDS)) // (start simulation time, interval, end time (s))
+    graphs = graphs.+(i -> graph)
+    context.system.scheduler.scheduleOnce(totalDuration)(this.shutdown())
+    val firstDelay = requirementChangeDelay
+    val firstReqChange: Option[Cancellable] = if (requirementChanges.isDefined && requirementChanges.get.nonEmpty) {
         log.info(s"scheduling first requirement change after $firstDelay for graph ${graphs(i)}")
-        context.system.scheduler.scheduleOnce(firstDelay)(changeReqTask(i, initialRequirements.toSeq, requirementChanges.get.toSeq))
+        Some(context.system.scheduler.scheduleOnce(firstDelay)(changeReqTask(i, initialRequirements.toSeq, requirementChanges.get.toSeq)))
         //log.info(s"scheduling second requirement change after ${requirementChangeDelay.mul(2)} for graph ${graphs(i-1)}")
         //context.system.scheduler.scheduleOnce(requirementChangeDelay.mul(2))(changeReqTask(i, requirementChanges.get.toSeq, initialRequirements.toSeq))
+    } else None
 
-        // iterates over all available algorithms (-> 1 transition every requirementChangeDelay)
-        if (transitionTesting) {
-          val allAlgorithms = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala
-          //val allAlgorithms = List(PietzuchAlgorithm.name, GlobalOptimalBDPAlgorithm.name)
-          var mult = 1
-          val repetitions: Double = (totalDuration.-(firstDelay).div(requirementChangeDelay) - 2) / allAlgorithms.size
-          for (repeat <- 0 until repetitions.toInt) {
-            allAlgorithms.foreach(a => {
-              val t = firstDelay.+(requirementChangeDelay.mul(mult))
-              context.system.scheduler.scheduleOnce(t)(explicitlyChangeAlgorithmTask(i, a))
-              mult += 1
-              log.info(s"scheduling manual algorithm change to $a after $t ")
-            })
-          }
-        }
+    // iterates over all available algorithms (-> 1 transition every requirementChangeDelay)
+    if (transitionTesting) {
+      if (firstReqChange.isDefined) firstReqChange.get.cancel()
+      val allAlgorithms = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala
+      //val allAlgorithms = List(PietzuchAlgorithm.name, GlobalOptimalBDPAlgorithm.name)
+      var mult = 1
+      val repetitions: Double = (totalDuration.div(requirementChangeDelay)) / allAlgorithms.size
+      for (repeat <- 0 until repetitions.toInt) {
+        allAlgorithms.foreach(a => {
+          val t = requirementChangeDelay.mul(mult)
+          context.system.scheduler.scheduleOnce(t)(explicitlyChangeAlgorithmTask(i, a))
+          mult += 1
+          log.info(s"scheduling manual algorithm change to $a after $t ")
+        })
       }
+    }
   }
 
   def changeReqTask(i: Int, oldReq: Seq[Requirement], newReq: Seq[Requirement]): Unit = {
@@ -712,7 +713,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       case Mode.YAHOO_STREAMING =>
         this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("YahooStreaming simulation ended"),
-          Set(latencyRequirement), Some(Set(messageHopsRequirement)), true)
+          Set(latencyRequirement), None, true)
     }
 
   } catch {

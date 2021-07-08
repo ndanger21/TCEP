@@ -1,9 +1,9 @@
 // constants used by tcep-gui server application
 // set server name to simulator for docker stack deployment -> requests to TCEPSocket must go to simulator container, not gui container
-const TCEP_SERVER = "20.0.0.15"
+const TCEP_SERVER = "simulator"
 const TCEP_PORT = "25001"
 const GUI_PORT = 3000
-const INTERACTIVE_SIMULATION_ENABLED = false
+const INTERACTIVE_SIMULATION_ENABLED = true
 
 module.exports = {
     TCEP_SERVER,

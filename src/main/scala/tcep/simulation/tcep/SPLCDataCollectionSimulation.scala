@@ -8,7 +8,7 @@ import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.transition.MAPEK.{GetPlacementStrategyName, GetTransitionStatus, IsDeploymentComplete}
+import tcep.graph.transition.MAPEK.{GetAverageLatency, GetPlacementStrategyName, GetTransitionStatus, IsDeploymentComplete}
 import tcep.graph.transition.mapek.contrast.CFM
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData}
 import tcep.graph.transition.mapek.contrast.FmNames._
@@ -22,6 +22,7 @@ import tcep.prediction.PredictionHelper.Throughput
 import java.io.{File, PrintStream}
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
+import scala.concurrent.Future
 import scala.concurrent.duration._
 
 /**
@@ -67,7 +68,8 @@ class SPLCDataCollectionSimulation(
       s"Time \t Algorithm" +
         s"\t latency" +
         s"\t cpuUsage" +
-        s"\t eventPublishRate \t eventArrivalRate " +
+        //s"\t eventPublishRate
+        s"\t eventArrivalRate " +
         s"\t TransitionStatus" +
         s"\t AlgorithmFitnesses \t AlgorithmSelectionProbabilities "
     } else if (this.learningModel.equals("learnon")) {
@@ -98,10 +100,12 @@ class SPLCDataCollectionSimulation(
 
     var time = 0L
     log.info(s"starting splcData simulation log, asking ${queryGraph.mapek.knowledge} for cfm")
-    for { res <- (queryGraph.mapek.knowledge ? GetCFM).mapTo[CFM] } yield {
-      log.info("received cfm from knowledge")
-      cfm = Some(res)
-
+    val cfmInit = if(this.learningModel.equals("learnon"))
+      for { res <- (queryGraph.mapek.knowledge ? GetCFM).mapTo[CFM] } yield {
+        log.info("received cfm from knowledge")
+        cfm = Some(res)
+      } else Future {}
+    cfmInit map { _ =>
       // SPLC measurement file header; status of all features is needed for SPLC
       splcOut.append(splcHeader)
       splcOut.println()
@@ -113,6 +117,23 @@ class SPLCDataCollectionSimulation(
 
       log.info("simulation logging setup complete")
 
+      def addSPLCMeasurementLine(contextData: Map[String, AnyVal], activePlacementAlgorithm: String): Unit = {
+        val placementBooleans = allPlacementAlgorithms.map(pa => if (activePlacementAlgorithm == pa) 1 else 0).mkString(";") + ";"
+        // root, system, mechanisms, placement algorithm are always active
+        val measurementLine = "1;1;1;1;" +
+          // status of placement algorithm features
+          placementBooleans +
+          // context, network situation, fixedProperties and variableProperties - always active
+          "1;1;1;1;" +
+          fixedCFMAttributes.map(e => contextData.getOrElse(e, Double.NaN)).mkString(";") + ";" +
+          variableCFMAttributes.map(e => contextData.getOrElse(e, Double.NaN)).mkString(";") + ";" +
+          metricElements.map(e => contextData.getOrElse(e, Double.NaN)).mkString(";")
+
+
+        splcOut.append(measurementLine)
+        splcOut.println()
+      }
+
       def createCSVEntry(): Unit = {
         //log.info("called createCSVEntry()")
         try {
@@ -122,7 +143,7 @@ class SPLCDataCollectionSimulation(
             if recordsArrived(cAllRecords) && cAllRecords.allDefined
             deploymentComplete <- (queryGraph.mapek.knowledge ? IsDeploymentComplete).mapTo[Boolean]
             //_ <- Future { log.info(s"deployment complete: $deploymentComplete")}
-            contextData <- (queryGraph.mapek.knowledge ? GetContextData).mapTo[Map[String, AnyVal]]
+            avgLatency <- (queryGraph.mapek.knowledge ? GetAverageLatency(interval.toMillis)).mapTo[Double]
             //_ <- Future { log.info(s"contextData: ${contextData.mkString("\n")}")}
             if deploymentComplete //&& contextData.nonEmpty
             transitionStatus <- (queryGraph.mapek.knowledge ? GetTransitionStatus).mapTo[Int]
@@ -150,14 +171,16 @@ class SPLCDataCollectionSimulation(
 
             if (this.learningModel.equals("learnon")) {
               // map per metric with a list of hypothesis tuples of the form (hypothesisPrediction, hypothesisWeight, hypothesisId)
-              for {learnOnLogData <- (queryGraph.mapek.asInstanceOf[LearnOnMAPEK].learningModel ? GetLearnOnLogData(cfm.get, contextData, strategyName)).mapTo[mutable.HashMap[String, List[List[Double]]]]} yield {
+              for {
+                contextData <- (queryGraph.mapek.knowledge ? GetContextData).mapTo[Map[String, AnyVal]]
+                learnOnLogData <- (queryGraph.mapek.asInstanceOf[LearnOnMAPEK].learningModel ? GetLearnOnLogData(cfm.get, contextData, strategyName)).mapTo[mutable.HashMap[String, List[List[Double]]]]} yield {
                 //log.info(s"logData received: ${learnOnLogData.mkString("\n")}")
                 val estimatedLatency = learnOnLogData.get("latency").get.head.head
                 val estimatedLoad = learnOnLogData.get("load").get.head.head
                 out.append(
                   s"$time" +
                     s"\t$strategyName" +
-                    s"\t${cAllRecords.recordLatency.lastMeasurement.get.toMillis}" +
+                    s"\t${avgLatency}" +
                     s"\t$estimatedLatency" +
                     s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
                     s"\t$estimatedLoad" +
@@ -167,18 +190,20 @@ class SPLCDataCollectionSimulation(
                     s"\t${learnOnLogData.get("latency").get}" +
                     s"\t${learnOnLogData.get("load").get}\t"
                 )
+                addSPLCMeasurementLine(contextData, activePlacementAlgorithm)
                 //log.info("LearnOn data added!")
                 out.println()
               }
 
             } else if (this.learningModel.equals("lightweight")) {
+              log.info("requesting LightweightLogData")
               for {learnOnLogData <- (queryGraph.mapek.asInstanceOf[LearnOnMAPEK].learningModel ? GetLightweightLogData).mapTo[(List[Any], List[Any])]} yield {
                 out.append(
                   s"$time" +
                     s"\t$strategyName" +
-                    s"\t${cAllRecords.recordLatency.lastMeasurement.get.toMillis}" +
+                    s"\t${avgLatency}" +
                     s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
-                    s"\t${cAllRecords.recordPublishingRate.lastRateMeasurement.getOrElse(0)}" +
+                    //s"\t${cAllRecords.recordPublishingRate.lastRateMeasurement.getOrElse(0)}" +
                     s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
                     s"\t$transitionStatus" +
                     s"\t${learnOnLogData._1.toString()}" +
@@ -193,7 +218,7 @@ class SPLCDataCollectionSimulation(
                 out.append(
                   s"$time" +
                     s"\t$strategyName" +
-                    s"\t${cAllRecords.recordLatency.lastMeasurement.get.toMillis}" +
+                    s"\t${avgLatency}" +
                     s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
                     s"\t${cAllRecords.recordPublishingRate.lastRateMeasurement.getOrElse(0)}" +
                     s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
@@ -208,7 +233,7 @@ class SPLCDataCollectionSimulation(
               out.append(
                 s"$time" +
                   s"\t$strategyName" +
-                  s"\t${cAllRecords.recordLatency.lastMeasurement.get.toMillis}" +
+                  s"\t${avgLatency}" +
                   s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
                   //s"\t${cAllRecords.recordPublishingRate.lastRateMeasurement.getOrElse(0)}" +
                   s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
@@ -217,22 +242,6 @@ class SPLCDataCollectionSimulation(
               out.println()
             }
 
-
-            val placementBooleans = allPlacementAlgorithms.map(pa => if (activePlacementAlgorithm == pa) 1 else 0).mkString(";") + ";"
-            val measurementLine: String = {
-              // root, system, mechanisms, placement algorithm are always active
-              "1;1;1;1;" +
-                // status of placement algorithm features
-                placementBooleans +
-                // context, network situation, fixedProperties and variableProperties - always active
-                "1;1;1;1;" +
-                fixedCFMAttributes.map(e => contextData.getOrElse(e, Double.NaN)).mkString(";") + ";" +
-                variableCFMAttributes.map(e => contextData.getOrElse(e, Double.NaN)).mkString(";") + ";" +
-                metricElements.map(e => contextData.getOrElse(e, Double.NaN)).mkString(";")
-            }
-
-            splcOut.append(measurementLine)
-            splcOut.println()
             time += interval.toSeconds
 
           }

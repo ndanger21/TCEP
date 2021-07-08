@@ -5,6 +5,7 @@ import akka.cluster.Cluster
 import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
+import org.slf4j.LoggerFactory
 import tcep.data.Events.Event
 import tcep.data.Queries
 import tcep.data.Queries._
@@ -34,14 +35,17 @@ trait MAPEKComponent extends Actor with ActorLogging {
   implicit val ec: ExecutionContext = blockingIoDispatcher
 }
 abstract class MonitorComponent(mapek: MAPEK) extends MAPEKComponent {
+	var currentPlacementStrategy: String = ""
   override def receive: Receive = {
     case r: AddRequirement =>
       mapek.knowledge ! r
       mapek.analyzer ! r
 
     case r: RemoveRequirement => mapek.knowledge ! r
+    case SetPlacementStrategy(newStrategy) => currentPlacementStrategy = newStrategy
   }
 }
+
 trait AnalyzerComponent extends MAPEKComponent
 abstract class PlannerComponent(mapek: MAPEK) extends MAPEKComponent {
 
@@ -80,7 +84,7 @@ abstract class ExecutorComponent(mapek: MAPEK) extends MAPEKComponent {
   }
 }
 
-abstract case class KnowledgeComponent(query: Query, var transitionConfig: TransitionConfig, var currentPlacementStrategy: String) extends MAPEKComponent {
+abstract case class KnowledgeComponent(mapek: MAPEK, query: Query, var transitionConfig: TransitionConfig, var currentPlacementStrategy: String) extends MAPEKComponent {
   var client: ActorRef = _
   protected val requirements: scala.collection.mutable.Set[Requirement] = scala.collection.mutable.Set(pullRequirements(query, List()).toSeq: _*)
   var deploymentComplete: Boolean = false
@@ -100,6 +104,7 @@ abstract case class KnowledgeComponent(query: Query, var transitionConfig: Trans
     case GetPlacementStrategyName => sender() ! currentPlacementStrategy
     case SetPlacementStrategy(newStrategy) =>
       this.currentPlacementStrategy = newStrategy
+			mapek.monitor ! SetPlacementStrategy(newStrategy)
       log.info(s"updated current placementStrategy to $currentPlacementStrategy")
     case GetRequirements => sender() ! this.requirements.toList
     case ar: AddRequirement =>
@@ -197,7 +202,7 @@ abstract class MAPEK(context: ActorContext) {
 }
 
 object MAPEK {
-
+  val log = LoggerFactory.getLogger(getClass)
   def createMAPEK(mapekType: String, query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: Option[String], consumer: ActorRef, fixedSimulationProperties: Map[Symbol, Int] = Map(), pimPaths: (String, String))(implicit cluster: Cluster, context: ActorContext): MAPEK = {
 
     val placementAlgorithm = // get correct PlacementAlgorithm case class for both cases (explicit starting algorithm and implicit via requirements)
@@ -215,6 +220,9 @@ object MAPEK {
       case "lightweight" => new LightweightMAPEK(context, query, transitionConfig, placementAlgorithm.placement.name, consumer)
       case "LearnOn" => new LearnOnMAPEK(context, transitionConfig, query, stratName, fixedSimulationProperties, consumer, pimPaths)
       case "ExchangeablePerformanceModel" => new ExchangeablePerformanceModelMAPEK(query, transitionConfig, stratName, consumer)
+      case _ =>
+        log.error(s"unknown mapek name: $mapekType")
+        throw new IllegalArgumentException(s"unknown mapek name: $mapekType")
     }
 
   }

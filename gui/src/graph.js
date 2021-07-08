@@ -1,7 +1,7 @@
 // this must be the same as manager ip since requests are handled by route.js
-const SERVER = "localhost"
+const SERVER = "132.198.183.152"
 const GUI_PORT = 3000
-const INTERACTIVE_SIMULATION_ENABLED = false
+const INTERACTIVE_SIMULATION_ENABLED = true
 
 // Holds the current data received from the GUI server
 // Used to determine if the data changed so a redraw is not unnecessarily done

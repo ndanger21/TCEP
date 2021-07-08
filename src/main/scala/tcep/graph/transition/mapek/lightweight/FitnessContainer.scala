@@ -80,7 +80,7 @@ class FitnessContainer {
           case latencyReq: LatencyRequirement =>
             val reqValue = latencyReq.latency.toMillis
             val currentValue = measure._2
-            log.info(s"Requirement is: $reqValue and current Value is: $currentValue")
+            log.info(s"Requirement is: $latencyReq and current Value is: $currentValue")
             if (compareHelper(reqValue, latencyReq.operator, currentValue))
               this.increaseFitness(currentPlacement, requirement.get.name)
             else
@@ -88,7 +88,7 @@ class FitnessContainer {
           case freqReq: FrequencyRequirement =>
             val reqValue = freqReq.frequency.frequency.asInstanceOf[Double]
             val currentValue = measure._2
-            log.info(s"Requirement is: $reqValue and current Value is: $currentValue")
+            log.info(s"Requirement is: $freqReq and current Value is: $currentValue")
             if (compareHelper(reqValue, freqReq.operator, currentValue))
               this.increaseFitness(currentPlacement, requirement.get.name)
             else
@@ -96,7 +96,7 @@ class FitnessContainer {
           case loadReq: LoadRequirement =>
             val reqValue = loadReq.machineLoad.value
             val currentValue = measure._2
-            log.info(s"Requirement is: $reqValue and current Value is: $currentValue")
+            log.info(s"Requirement is: $loadReq and current Value is: $currentValue")
             if (compareHelper(reqValue, loadReq.operator, currentValue))
               this.increaseFitness(currentPlacement, requirement.get.name)
             else

@@ -54,6 +54,7 @@ class QueryGraph(query: Query,
   var mapek: MAPEK = MAPEK.createMAPEK(mapekType, query, transitionConfig, startingPlacementStrategy, consumer, fixedSimulationProperties, pimPaths)
   val placementStrategy: PlacementStrategy = PlacementStrategy.getStrategyByName(Await.result(
     mapek.knowledge ? GetPlacementStrategyName, timeout.duration).asInstanceOf[String])
+  mapek.monitor ! SetPlacementStrategy(placementStrategy.name)
   var clientNode: ActorRef = _
   val brokerQoSMonitor: ActorRef = Await.result(context.system.actorSelection(context.system./("TaskManager*")./("BrokerQosMonitor*")).resolveOne(), timeout.duration)
   var deployedOperators: Map[Query, ActorRef] = Map()

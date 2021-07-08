@@ -34,7 +34,7 @@ class ExchangeablePerformanceModelMAPEK(query: Query, mode: TransitionConfig, st
   override val analyzer: ActorRef = context.actorOf(Props(classOf[ExchangeablePerformanceModelAnalyzer], this))
   override val planner: ActorRef = context.actorOf(Props(classOf[ExchangeablePerformanceModelPlanner], this, cluster))
   override val executor: ActorRef = context.actorOf(Props(classOf[ExchangeablePerformanceModelExecutor], this))
-  override val knowledge: ActorRef = context.actorOf(Props(classOf[ExchangeablePerformanceModelKnowledge], query, mode, startingPlacementStrategy), "knowledge")
+  override val knowledge: ActorRef = context.actorOf(Props(classOf[ExchangeablePerformanceModelKnowledge], this, query, mode, startingPlacementStrategy), "knowledge")
   log.info("creating exchangeable performanceModel MAPEK")
 
   def getQueryRoot: Query = query
@@ -48,9 +48,11 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
 
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
   val shiftTarget: Boolean = false
+  val algorithmNames = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala
   var headersInit: Map[ActorRef, Boolean] = Map()
-  val sampleFileHeader: String = DynamicCFMNames.ALL_FEATURES.mkString(";") + ";" + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
+  val sampleFileHeader: String = algorithmNames.mkString(";") + ";" + DynamicCFMNames.ALL_FEATURES.mkString(";") + ";" + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
   val transitionsEnabled: Boolean = ConfigFactory.load().getBoolean("constants.mapek.transitions-enabled") // mapek planner enabled with prediction endpoint interaction
+
 
   override def preStart(): Unit = {
     //timers.startTimerAtFixedRate(GetSamplingDataKey, GetSamplingDataTick, samplingInterval)
@@ -91,11 +93,19 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
       if (!shiftTarget || shiftTarget && samples.size > 1) {
         if(transitionsEnabled) updateOnlineModel(getShiftedSample)
         SpecialStats.log(logFileString, logFileString,
-          DynamicCFMNames.ALL_FEATURES.map(f => getFeatureValue(samples.head, f)).mkString(";") + ";" +
+					currentPlacementStrategyToOneHot + ";" +
+					DynamicCFMNames.ALL_FEATURES.map(f => getFeatureValue(samples.head, f)).mkString(";") + ";" +
             DynamicCFMNames.ALL_TARGET_METRICS.map(m => getTargetMetricValue(getShiftedSample, m)).mkString(";"))
       }
     }
   }
+
+	def currentPlacementStrategyToOneHot: String = {
+		algorithmNames.map {
+      case name if name == currentPlacementStrategy => 1
+      case _ => 0
+    }.mkString(";")
+	}
 
   private object GetSamplingDataTick
   private object GetSamplingDataKey
@@ -109,14 +119,29 @@ class ExchangeablePerformanceModelAnalyzer(mapek: ExchangeablePerformanceModelMA
   }
 }
 
-class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAPEK)(implicit cluster: Cluster) extends PlannerComponent(mapek) {
+class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAPEK)(implicit cluster: Cluster) extends MAPEKComponent {
   val optimizationTarget: String = ConfigFactory.load().getString("constants.mapek.exchangeable-model.optimization-target")
   lazy val allPlacementAlgorithms: List[PlacementStrategy] = ConfigFactory.load()
     .getStringList("benchmark.general.algorithms").asScala.toList
     .map(PlacementStrategy.getStrategyByName)
   lazy val queryPerformancePredictor: ActorRef = context.actorOf(Props(classOf[QueryPerformancePredictor], cluster))
 
-  override def receive: Receive = super.receive orElse {
+  override def receive: Receive =  {
+    case ManualTransition(algorithmName) =>
+      val s = System.currentTimeMillis()
+      val p = PlacementStrategy.getStrategyByName(algorithmName)
+      val rootOperator = mapek.getQueryRoot
+      for {
+        publishers: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
+        publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
+        queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
+        _ <- p.initialize()(ec, cluster, Some(publisherEventRates))
+        placement: Map[Query, Address] <- p.initialVirtualOperatorPlacement(rootOperator, publishers)(ec, cluster, queryDependencyMap).map(_.map(e => e._1 -> e._2.member.address))
+        _ = log.info("{} virtual placement calculation for manual transition complete after {}ms", p.name, System.currentTimeMillis() - s)
+      } yield {
+        mapek.executor ! ExecuteTransitionWithPlacement(algorithmName, placement)
+      }
+
     case RunPlanner(cfm: CFM, contextConfig: Config, currentLatency: Double, qosRequirements: Set[Requirement]) =>
       for {
         currentPlacement: Option[Map[Query, ActorRef]] <- (mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
@@ -187,8 +212,8 @@ class ExchangeablePerformanceModelExecutor(mapek: ExchangeablePerformanceModelMA
   }
 }
 
-class ExchangeablePerformanceModelKnowledge(query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: String)
-  extends KnowledgeComponent(query, transitionConfig, startingPlacementStrategy) {
+class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: String)
+  extends KnowledgeComponent(mapek, query, transitionConfig, startingPlacementStrategy) {
 
   var mostRecentSamples: Map[Query, Samples] = Map()
   val cfm: DynamicCFM = new DynamicCFM(query)

@@ -12,7 +12,7 @@ import tcep.graph.transition.{KnowledgeComponent, MAPEK}
   * @param mapek reference to the running MAPEK instance
   */
 class ContrastKnowledge(mapek: MAPEK, query: Query, transitionConfig: TransitionConfig, currentPlacementStrategy: String)
-  extends KnowledgeComponent(query, transitionConfig, currentPlacementStrategy) {
+  extends KnowledgeComponent(mapek, query, transitionConfig, currentPlacementStrategy) {
 
   val operatorTreeDepth: Int = calculateOperatorTreeDepth(query)
   var contextData: Map[String, AnyVal] = Map()

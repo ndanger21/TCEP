@@ -72,6 +72,15 @@ class Lightweight extends LearningModel {
               this.increaseFitness(currentAlgorithm, requirement.get.name)
             else
               this.addSample(currentAlgorithm, requirement.get.name)
+
+          case frequencyRequirement: FrequencyRequirement =>
+            val reqval = frequencyRequirement.getEventsPerSec
+            val currentVal = this.handleValue(contextVal._2)
+            log.info(s"${requirement.get.name} Requirement is: $reqval and current Value is: $currentVal")
+            if (compareHelper(reqval, frequencyRequirement.operator, currentVal))
+              this.increaseFitness(currentAlgorithm, requirement.get.name)
+            else
+              this.addSample(currentAlgorithm, requirement.get.name)
         }
       }
     }

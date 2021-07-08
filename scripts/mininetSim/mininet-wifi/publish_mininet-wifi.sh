@@ -115,7 +115,7 @@ if [ -z "$query" ]; then
   query="Conjunction"
 fi
 if [ -z "$algorithm" ]; then
-   algorithm="Relaxation"
+   algorithm="MDCEP"
 fi
 if [ -z "$controller_ip" ]; then
   controller_ip="localhost"
@@ -136,7 +136,7 @@ if [ -z "$transitionExecutionMode" ]; then
   transitionExecutionMode="0"
 fi
 if [ -z "$eventrate" ]; then
-  eventrate="20"
+  eventrate="10"
 fi
 host=${u}@${machine}
 if [[ ${controller_ip} == "localhost" ]] || [[ ${controller_ip} == "127.0.0.1" ]]; then

@@ -4,6 +4,7 @@ package tcep.graph.transition.mapek.lightweight
 import akka.actor.{ActorRef, Address, Cancellable}
 import akka.pattern.ask
 import tcep.data.Queries.{FrequencyRequirement, LatencyRequirement, LoadRequirement, MessageHopsRequirement}
+import tcep.graph.qos.OperatorQosMonitor.SampleUpdate
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.MonitorComponent
 import tcep.graph.transition.mapek.lightweight.LightweightAnalyzer.NodeUnreachable
@@ -35,11 +36,12 @@ class LightweightMonitor(mapek: LightweightMAPEK/*, var allRecords: AllRecords*/
     super.postStop()
   }
 
-  override def receive: Receive = {
+  override def receive: Receive = super.receive orElse {
     case r: AddRequirement =>
       mapek.knowledge ! r
     case r: RemoveRequirement =>
       mapek.knowledge ! r
+    case SampleUpdate(u, v) => // ignore
   }
 
   def updatePerformance(): Unit = {
@@ -49,9 +51,9 @@ class LightweightMonitor(mapek: LightweightMAPEK/*, var allRecords: AllRecords*/
       allRecords <- (consumer ? GetAllRecords).mapTo[AllRecords]
       deploymentComplete <- (mapek.knowledge ? IsDeploymentComplete).mapTo[Boolean]
       transitionStatus <- (mapek.knowledge ? GetTransitionStatus).mapTo[Int]
+      latencyAvg <- (mapek.knowledge ? GetAverageLatency(mapek.samplingInterval.toMillis)).mapTo[Double]
       if deploymentComplete && allRecords.allDefined// && transitionStatus == 0
     } yield {
-      val currentLatency: Double = allRecords.recordLatency.lastMeasurement.get.toMillis
       val currentMsgHops: Int = allRecords.recordMessageHops.lastMeasurement.get
       val currentSystemLoad: Double = allRecords.recordAverageLoad.lastLoadMeasurement.get
       val currentArrivalRate: Int = allRecords.recordFrequency.lastMeasurement.get
@@ -59,7 +61,7 @@ class LightweightMonitor(mapek: LightweightMAPEK/*, var allRecords: AllRecords*/
       val msgOverhead: Long = allRecords.recordMessageOverhead.lastEventOverheadMeasurement.get
       val networkUsage: Double = allRecords.recordNetworkUsage.lastUsageMeasurement.get
       var measurements = new ListBuffer[(String,Double)]
-      measurements += ((LatencyRequirement.name, currentLatency))
+      measurements += ((LatencyRequirement.name, latencyAvg))
       measurements += ((MessageHopsRequirement.name, currentMsgHops))
       measurements += ((LoadRequirement.name, currentSystemLoad))
       measurements += ((FrequencyRequirement.name, currentArrivalRate))

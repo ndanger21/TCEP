@@ -1,14 +1,15 @@
 package tcep.graph.qos
 
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.{Executors, TimeUnit}
-
+import com.typesafe.config.ConfigFactory
 import org.slf4j.LoggerFactory
 import tcep.data.Events._
 import tcep.data.Queries._
 import tcep.dsl.Dsl.FrequencyMeasurement
 
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.{Executors, TimeUnit}
 import scala.collection.immutable.Queue
+import scala.concurrent.duration.FiniteDuration
 
 /**
   * Measures the frequency of messages in the interval
@@ -16,7 +17,9 @@ import scala.collection.immutable.Queue
 case class AverageFrequencyMonitor(query: Query, record: Option[FrequencyMeasurement]) extends Monitor {
   val log = LoggerFactory.getLogger(getClass)
   var frequencyRequirement: Option[FrequencyRequirement] = query.requirements.collect { case lr: FrequencyRequirement => lr }.headOption
-  val interval = if(frequencyRequirement.isDefined) frequencyRequirement.get.frequency.interval else 1
+  val interval = if(frequencyRequirement.isDefined) frequencyRequirement.get.frequency.interval
+  else FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS).toSeconds
+
   implicit def queue2finitequeue[A](q: Queue[A]) = new FiniteQueue[A](q)
   var messages = Queue[Long]()
 

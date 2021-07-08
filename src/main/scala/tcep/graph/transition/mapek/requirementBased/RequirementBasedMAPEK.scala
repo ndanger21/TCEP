@@ -24,7 +24,7 @@ class RequirementBasedMAPEK(context: ActorContext, val query: Query, mode: Trans
   val analyzer: ActorRef = context.actorOf(Props(new Analyzer()))
   val planner: ActorRef = context.actorOf(Props(new Planner(this)))
   val executor: ActorRef = context.actorOf(Props(new Executor(this)))
-  val knowledge: ActorRef = context.actorOf(Props(new Knowledge(query, mode, startingPlacementStrategy)), s"knowledge-${randomAlphaNumericString(6)}")
+  val knowledge: ActorRef = context.actorOf(Props(new Knowledge(this, query, mode, startingPlacementStrategy)), s"knowledge-${randomAlphaNumericString(6)}")
 
   // 6 - random alphanumeric
   def randomAlphaNumericString(length: Int): String = {
@@ -149,8 +149,8 @@ class RequirementBasedMAPEK(context: ActorContext, val query: Query, mode: Trans
 
   class Executor(mapek: RequirementBasedMAPEK) extends ExecutorComponent(mapek)
 
-  class Knowledge(query: Query, mode: TransitionConfig, var currentPlacementAlgorithm: PlacementAlgorithm)
-    extends KnowledgeComponent(query, mode, currentPlacementAlgorithm.placement.name) {
+  class Knowledge(mapek: MAPEK, query: Query, mode: TransitionConfig, var currentPlacementAlgorithm: PlacementAlgorithm)
+    extends KnowledgeComponent(mapek, query, mode, currentPlacementAlgorithm.placement.name) {
 
     override def preStart() = {
       super.preStart()

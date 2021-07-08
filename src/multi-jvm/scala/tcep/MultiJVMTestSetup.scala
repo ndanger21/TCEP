@@ -52,7 +52,7 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
   implicit var creatorAddress: Address = _
   implicit lazy val ec: ExecutionContext = ExecutionContext.fromExecutor(Executors.newCachedThreadPool())
   val errorMargin = 0.05
-  val eventIntervalMicros: Long = 500e3.toLong // 500ms
+  val eventIntervalMicros: Throughput = Throughput(2, FiniteDuration(1, TimeUnit.SECONDS)) // 500ms
   implicit var baseEventRates: Map[String, Throughput] = Map() // 2 per second
 
   override def initialParticipants = numNodes
@@ -110,7 +110,7 @@ abstract class MultiJVMTestSetup(numNodes: Int = 5) extends MultiNodeSpec(config
     val publisherRef1 = getPublisherOn(cluster.state.members.find(_.address == p1Addr).head, pNames(0)).get
     val publisherRef2 = getPublisherOn(cluster.state.members.find(_.address == p2Addr).head, pNames(1)).get
     publishers = Map(pNames(0) -> publisherRef1, pNames(1) -> publisherRef2) // need to override publisher map here because all nodes have hostname localhost during test
-    baseEventRates = List(0, 1).map(pNames).map(_ -> Throughput(1, FiniteDuration(eventIntervalMicros, TimeUnit.MICROSECONDS))).toMap
+    baseEventRates = List(0, 1).map(pNames).map(_ -> eventIntervalMicros).toMap
 
     runOn(client) {
       println(cluster.state.members.map(m => m + " " + m.roles).mkString("\n"))
