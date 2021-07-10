@@ -7,7 +7,7 @@ import org.discovery.vivaldi.Coordinates
 import org.scalatest.WordSpecLike
 import org.scalatest.time.SpanSugar.convertIntToGrainOfTime
 import tcep.data.Queries
-import tcep.data.Queries.{Conjunction11, Filter2, Stream1}
+import tcep.data.Queries.{Conjunction11, Conjunction22, Filter4, Stream1}
 import tcep.placement.manets.StarksAlgorithm
 import tcep.prediction.PredictionHelper.Throughput
 
@@ -37,8 +37,12 @@ class MDCEPTest extends TestKit(ActorSystem("testSystem", ConfigFactory.parseStr
       // pub2 (0, -100)
       val s1 = Stream1[Int]("A", Set())
       val s2 = Stream1[Int]("B", Set())
-      val and = Conjunction11[Int, Int](s1, s2, Set())
-      val f = Filter2[Int, Int](and, _ => true, Set())
+      val s3 = Stream1[Int]("A", Set())
+      val s4 = Stream1[Int]("B", Set())
+      val and1 = Conjunction11[Int, Int](s1, s2, Set())
+      val and2 = Conjunction11[Int, Int](s3, s4, Set())
+      val and3 = Conjunction22[Int, Int, Int, Int](and1, and2, Set())
+      val f = Filter4[Int, Int, Int, Int](and3, _ => true, Set())
       val clientAddr = Address("", "", "client", 0)
       val pub1Addr = Address("", "", "pub1", 0)
       val pub2Addr = Address("", "", "pub2", 0)
@@ -59,7 +63,9 @@ class MDCEPTest extends TestKit(ActorSystem("testSystem", ConfigFactory.parseStr
       assert(Queries.getOperators(f).forall(placement.contains), "placement must contain host for each operator")
       assert(placement(s1) == pub1Addr, "stream operator should be on its own publisher")
       assert(placement(s2) == pub2Addr, "stream operator should be on its own publisher")
-      assert(placement(and) == host2Addr, "binary operator should be on closest possible non-parent host")
+      assert(placement(and1) == host2Addr, "binary operator should be on closest possible non-parent host")
+      assert(placement(and2) == host2Addr, "binary operator should be on closest possible non-parent host")
+      assert(placement(and3) == host2Addr, "binary operator should be on same host as both parents if they are on the same host")
       assert(placement(f) == host2Addr, "unary root operator should be on same host as parent binary operator")
 
     }

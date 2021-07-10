@@ -279,7 +279,7 @@ object StarksAlgorithm extends PlacementStrategy {
     }
 
     req.onComplete {
-      case Failure(exception) => log.error("MDCEP - failed to complete virtual placement", exception)
+      case Failure(exception) => log.error(s"MDCEP - failed to complete virtual placement of ${Queries.getOperators(rootOperator).size} operators: \n${Queries.getOperators(rootOperator).mkString("\n")}", exception)
       case Success(value) => log.info("MDCEP - completed virtual placement after {}ms \n{}", System.currentTimeMillis() - start, value.mkString("\n"))
     }
     req
@@ -308,13 +308,35 @@ object StarksAlgorithm extends PlacementStrategy {
           Map(s -> relayNode)
 
         case u: UnaryQuery =>
-          getRelayNodes(u.sq)
+          val parentRelayNodes = getRelayNodes(u.sq)
+          val res = parentRelayNodes.updated(u, parentRelayNodes(u.sq))
+          //log.info(s"unary operator ${u.getClass} relay nodes:: \n${res.mkString("\n")}")
+          res
 
         case b: BinaryQuery =>
+
+          val parent1RelayNodes = getRelayNodes(b.sq1)
+          val relayNode1 = parent1RelayNodes(b.sq1) //parent1RelayNodes.map(r => r -> getParentPublishers(b.sq1).values.map(p => p._2.distance(memberCoords(r._2))).sum).minBy(_._2)._1
+          val parent2RelayNodes = getRelayNodes(b.sq2)
+          val relayNode2 = parent2RelayNodes(b.sq2) //parent2RelayNodes.map(r => r -> getParentPublishers(b.sq2).values.map(p => p._2.distance(memberCoords(r._2))).sum).minBy(_._2)._1
           // if parent is itself a binary operator, choose the relay node with minimum summed distance to both parent's publishers
-          val relayNode1 = getRelayNodes(b.sq1).map(r => r -> getParentPublishers(b.sq1).values.map(p => p._2.distance(memberCoords(r._2))).sum).minBy(_._2)._1
-          val relayNode2 = getRelayNodes(b.sq2).map(r => r -> getParentPublishers(b.sq2).values.map(p => p._2.distance(memberCoords(r._2))).sum).minBy(_._2)._1
-          Map(relayNode1, relayNode2)
+          val binaryOperatorRelayNode: Address =
+            // both parents have same relay node -> choose it
+            if(relayNode1 == relayNode2) relayNode1
+            // different relay nodes -> use the node closest to both relay nodes if both parents are streams
+            else if(b.sq1.isInstanceOf[LeafQuery] && b.sq2.isInstanceOf[LeafQuery]) {
+              memberCoords.filter(m => m._1 != relayNode1 && m._1 != relayNode2)
+                          .map(m => m._1 -> (m._2.distance(memberCoords(relayNode1)) + m._2.distance(memberCoords(relayNode2)))).toList.sortBy(_._2).map(_._1)
+                          .headOption.getOrElse(currentNode)
+            // use the parent relay node with minimum distance to current node
+            } else Seq(relayNode1, relayNode2).map(r => r -> memberCoords(r).distance(currentCoords)).minBy(_._2)._1
+
+          val res = (parent1RelayNodes ++ parent2RelayNodes)
+            .updated(b.sq1, relayNode1)
+            .updated(b.sq2, relayNode2)
+            .updated(b, binaryOperatorRelayNode)
+          //log.info(s"binary operator ${b.getClass} relay nodes: \n${res.mkString("\n")}")
+          res
 
         case s: SequenceQuery =>
           // same as StreamQuery, but use summed distances to the two publishers instead
@@ -329,45 +351,56 @@ object StarksAlgorithm extends PlacementStrategy {
 
     // get 1 relay node for each parent
     val curRelayNodes: Map[Query, Address] = getRelayNodes(subQuery)
+    log.info(s"relayNodes for ${subQuery}; are (${curRelayNodes.size} of ${Queries.getOperators(subQuery).size}) :\n${curRelayNodes.mkString("\n")}")
+    try {
+      subQuery match {
+        case s: StreamQuery =>
+          if (currentNode == curRelayNodes(s))
+            Map(s -> currentNode)
+          else
+            traverseNetworkTree(curRelayNodes(s), s)
 
-    subQuery match {
-      case s: StreamQuery =>
-        if(currentNode == curRelayNodes(s))
-          Map(s -> currentNode)
-        else
-          traverseNetworkTree(curRelayNodes(s), s)
+        case u: UnaryQuery => // always place on same node as parent
+          val parentPlacements = traverseNetworkTree(currentNode, u.sq)
+          parentPlacements.updated(u, parentPlacements(u.sq))
 
-      case u: UnaryQuery => // always place on same node as parent
-        val parentPlacements = traverseNetworkTree(currentNode, u.sq)
-        parentPlacements.updated(u, parentPlacements(u.sq))
-
-      case b: BinaryQuery =>
-        // 1. parents are forwarded to same host -> forward self to that host
-        if(curRelayNodes(b.sq1) == curRelayNodes(b.sq2)) {
-          traverseNetworkTree(curRelayNodes(b.sq1), b)
-        } else {
-          val relayNode1 = curRelayNodes(b.sq1)
-          val relayNode2 = curRelayNodes(b.sq2)
-          val minDistSumToRelayNodes = memberCoords.filter(m => m._1 != relayNode1 && m._1 != relayNode2)
-            .map(m => m -> (m._2.distance(memberCoords(relayNode1)) + m._2.distance(memberCoords(relayNode2)))).minBy(_._2)
-          // 2. parents not forwarded to same host, self is not neighbour closest to both -> find closest neighbour to both (that is neither of the parent relay nodes)
-          if(minDistSumToRelayNodes._1._1 != currentNode) {
-            traverseNetworkTree(minDistSumToRelayNodes._1._1, b)
-            // 3. parents forwarded to different hosts, currentNode is closest neighbour to both -> deploy on self
+        case b: BinaryQuery =>
+          // 1. parents are forwarded to same host -> forward self to that host
+          if (curRelayNodes(b.sq1) == curRelayNodes(b.sq2)) {
+            if(curRelayNodes(b.sq1) == currentNode) { // stop recursion
+              val parent1Placement = traverseNetworkTree(currentNode, b.sq1)
+              val parent2Placement = traverseNetworkTree(currentNode, b.sq2)
+              (parent1Placement ++ parent2Placement).updated(b, currentNode)
+            } else
+              traverseNetworkTree(curRelayNodes(b.sq1), b)
           } else {
-            val parent1Placement = traverseNetworkTree(curRelayNodes(b.sq1), b.sq1)
-            val parent2Placement = traverseNetworkTree(curRelayNodes(b.sq2), b.sq2)
-            (parent1Placement ++ parent2Placement).updated(b, currentNode)
+            val relayNode1 = curRelayNodes(b.sq1)
+            val relayNode2 = curRelayNodes(b.sq2)
+            val minDistSumToRelayNodes = memberCoords.filter(m => m._1 != relayNode1 && m._1 != relayNode2)
+              .map(m => m -> (m._2.distance(memberCoords(relayNode1)) + m._2.distance(memberCoords(relayNode2)))).minBy(_._2)
+            // 2. parents not forwarded to same host, self is not neighbour closest to both -> find closest neighbour to both (that is neither of the parent relay nodes)
+            if (minDistSumToRelayNodes._1._1 != currentNode) {
+              traverseNetworkTree(minDistSumToRelayNodes._1._1, b)
+              // 3. parents forwarded to different hosts, currentNode is closest neighbour to both -> deploy on self
+            } else {
+              val parent1Placement = traverseNetworkTree(curRelayNodes(b.sq1), b.sq1)
+              val parent2Placement = traverseNetworkTree(curRelayNodes(b.sq2), b.sq2)
+              (parent1Placement ++ parent2Placement).updated(b, currentNode)
+            }
           }
-        }
 
-      case s: SequenceQuery =>
-        if(currentNode == curRelayNodes(s))
-          Map(s -> currentNode)
-        else
-          traverseNetworkTree(curRelayNodes(s), s)
+        case s: SequenceQuery =>
+          if (currentNode == curRelayNodes(s))
+            Map(s -> currentNode)
+          else
+            traverseNetworkTree(curRelayNodes(s), s)
 
-      case _ => throw new IllegalArgumentException(s"unknown operator $subQuery")
+        case _ => throw new IllegalArgumentException(s"unknown operator $subQuery")
+      }
+    } catch {
+      case e: Throwable =>
+        log.error(s"failed to traverse tree, current relay nodes are (${curRelayNodes.size} of ${Queries.getOperators(subQuery).size}) for subquery \n$subQuery", e)
+        throw e
     }
   }
 }
