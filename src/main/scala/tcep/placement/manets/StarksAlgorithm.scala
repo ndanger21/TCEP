@@ -274,7 +274,7 @@ object StarksAlgorithm extends PlacementStrategy {
       memberCoords <- TCEPUtils.makeMapFuture(findPossibleNodesToDeploy(cluster).map(e => e.address -> getCoordinatesFromAddress(e.address, Some(rootOperator))).toMap)
     } yield {
       val clientNode = cluster.state.members.find(_.hasRole("Subscriber")).get
-      val placement = traverseNetworkTree(clientNode.address, rootOperator)(memberCoords, publishers.map(e => e._1 -> e._2.path.address))
+      val placement = traverseNetworkTree(clientNode.address, rootOperator, List())(memberCoords, publishers.map(e => e._1 -> e._2.path.address))
       placement.map(e => e._1 -> HostInfo(cluster.state.members.find(_.address == e._2).get, e._1, getPlacementMetrics(e._1)))
     }
 
@@ -284,8 +284,8 @@ object StarksAlgorithm extends PlacementStrategy {
     }
     req
   }
-
-  def traverseNetworkTree(currentNode: Address, subQuery: Query)
+  // visitedNodes is to break forwarding loops that occur in certain combinations of coordinates and query graphs
+  def traverseNetworkTree(currentNode: Address, subQuery: Query, visitedNodes: List[Address])
                          (implicit memberCoords: Map[Address, Coordinates], publishers: Map[String, Address]): Map[Query, Address] = {
     /**
       * @return the relay node (node closest to current one in the direction of the parent's publishers) for each immediate parent operator of the given query
@@ -358,33 +358,34 @@ object StarksAlgorithm extends PlacementStrategy {
           if (currentNode == curRelayNodes(s))
             Map(s -> currentNode)
           else
-            traverseNetworkTree(curRelayNodes(s), s)
+            traverseNetworkTree(curRelayNodes(s), s, currentNode :: visitedNodes)
 
         case u: UnaryQuery => // always place on same node as parent
-          val parentPlacements = traverseNetworkTree(currentNode, u.sq)
+          val parentPlacements = traverseNetworkTree(currentNode, u.sq, List())
           parentPlacements.updated(u, parentPlacements(u.sq))
 
         case b: BinaryQuery =>
           // 1. parents are forwarded to same host -> forward self to that host
           if (curRelayNodes(b.sq1) == curRelayNodes(b.sq2)) {
-            if(curRelayNodes(b.sq1) == currentNode) { // stop recursion
-              val parent1Placement = traverseNetworkTree(currentNode, b.sq1)
-              val parent2Placement = traverseNetworkTree(currentNode, b.sq2)
+            // parent relay node is current node -> deploy
+            if(curRelayNodes(b.sq1) == currentNode || visitedNodes.contains(currentNode)) { // stop recursion
+              val parent1Placement = traverseNetworkTree(currentNode, b.sq1, List())
+              val parent2Placement = traverseNetworkTree(currentNode, b.sq2, List())
               (parent1Placement ++ parent2Placement).updated(b, currentNode)
             } else
-              traverseNetworkTree(curRelayNodes(b.sq1), b)
+              traverseNetworkTree(curRelayNodes(b.sq1), b, currentNode :: visitedNodes)
           } else {
             val relayNode1 = curRelayNodes(b.sq1)
             val relayNode2 = curRelayNodes(b.sq2)
             val minDistSumToRelayNodes = memberCoords.filter(m => m._1 != relayNode1 && m._1 != relayNode2)
               .map(m => m -> (m._2.distance(memberCoords(relayNode1)) + m._2.distance(memberCoords(relayNode2)))).minBy(_._2)
             // 2. parents not forwarded to same host, self is not neighbour closest to both -> find closest neighbour to both (that is neither of the parent relay nodes)
-            if (minDistSumToRelayNodes._1._1 != currentNode) {
-              traverseNetworkTree(minDistSumToRelayNodes._1._1, b)
+            if (minDistSumToRelayNodes._1._1 != currentNode && !visitedNodes.contains(currentNode)) {
+              traverseNetworkTree(minDistSumToRelayNodes._1._1, b, currentNode :: visitedNodes)
               // 3. parents forwarded to different hosts, currentNode is closest neighbour to both -> deploy on self
             } else {
-              val parent1Placement = traverseNetworkTree(curRelayNodes(b.sq1), b.sq1)
-              val parent2Placement = traverseNetworkTree(curRelayNodes(b.sq2), b.sq2)
+              val parent1Placement = traverseNetworkTree(curRelayNodes(b.sq1), b.sq1, List())
+              val parent2Placement = traverseNetworkTree(curRelayNodes(b.sq2), b.sq2, List())
               (parent1Placement ++ parent2Placement).updated(b, currentNode)
             }
           }
@@ -393,7 +394,7 @@ object StarksAlgorithm extends PlacementStrategy {
           if (currentNode == curRelayNodes(s))
             Map(s -> currentNode)
           else
-            traverseNetworkTree(curRelayNodes(s), s)
+            traverseNetworkTree(curRelayNodes(s), s, currentNode :: visitedNodes)
 
         case _ => throw new IllegalArgumentException(s"unknown operator $subQuery")
       }
