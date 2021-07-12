@@ -23,9 +23,10 @@ import tcep.prediction.{PredictionHttpClient, QueryPerformancePredictor}
 import tcep.utils.{SpecialStats, TCEPUtils}
 
 import java.util.concurrent.TimeUnit
-import scala.concurrent.Future
 import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.{ExecutionContext, Future}
 import scala.jdk.CollectionConverters.collectionAsScalaIterableConverter
+import scala.util.{Failure, Success}
 
 class ExchangeablePerformanceModelMAPEK(query: Query, mode: TransitionConfig, startingPlacementStrategy: String, consumer: ActorRef)(implicit cluster: Cluster, context: ActorContext)
   extends MAPEK(context) {
@@ -128,18 +129,23 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
 
   override def receive: Receive =  {
     case ManualTransition(algorithmName) =>
+      log.info("received ManualTransition request to {}", algorithmName)
       val s = System.currentTimeMillis()
       val p = PlacementStrategy.getStrategyByName(algorithmName)
       val rootOperator = mapek.getQueryRoot
-      for {
+      implicit val ec: ExecutionContext = context.system.dispatchers.lookup("transition-dispatcher") // dedicated dispatcher for transition, avoid transition getting stuck
+      val executeWithPlacementF = for {
         publishers: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
         publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
         queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
         _ <- p.initialize()(ec, cluster, Some(publisherEventRates))
         placement: Map[Query, Address] <- p.initialVirtualOperatorPlacement(rootOperator, publishers)(ec, cluster, queryDependencyMap).map(_.map(e => e._1 -> e._2.member.address))
-        _ = log.info("{} virtual placement calculation for manual transition complete after {}ms", p.name, System.currentTimeMillis() - s)
       } yield {
         mapek.executor ! ExecuteTransitionWithPlacement(algorithmName, placement)
+      }
+      executeWithPlacementF.onComplete {
+        case Failure(exception) => log.error(exception, "failed to calculate virtual placement for {} after {}ms", p, System.currentTimeMillis() - s)
+        case Success(_) => log.info("{} virtual placement calculation for manual transition complete after {}ms", p.name, System.currentTimeMillis() - s)
       }
 
     case RunPlanner(cfm: CFM, contextConfig: Config, currentLatency: Double, qosRequirements: Set[Requirement]) =>

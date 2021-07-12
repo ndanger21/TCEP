@@ -80,8 +80,13 @@ object SizeEstimator {
       case Event6(_,_,_,_,_,_) => 520
       */
       case _ =>
+        val s = System.nanoTime()
         val est = estimate(obj, new IdentityHashMap[AnyRef, AnyRef])
-        if(est >= 5000) log.warn(s"estimating size of object $obj, result may not be reliable: $est")
+
+        if(est >= 5000) {
+          val timetaken = (System.nanoTime() - s) / 1e6
+          log.warn(s"took ${timetaken}ms estimating size of object $obj, result may not be reliable: $est")
+        }
         est
     }
   }

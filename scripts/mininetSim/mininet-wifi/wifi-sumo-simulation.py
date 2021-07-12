@@ -143,10 +143,11 @@ def topology(enable_tcep=True):
                         '-Djava.rmi.server.hostname=localhost '
         LOG_PATH = '%s/tcep/logs' % homedir
 
+        publisher_kind = "LinearRoadPublisher" if query == "LinearRoad" else "SpeedPublisher"
         # start publishers on cars
         for i in range(0, n_publishers):
-            ARGS = '--dir %s/p%i --ip %s --port %i --numberOfPublishers %i --kind SpeedPublisher --eventRate %s ' \
-                   % (LOG_PATH, i+1, net.cars[i].IP(), publisher_base_port+i, i+1, eventrate)
+            ARGS = '--dir %s/p%i --ip %s --port %i --numberOfPublishers %i --kind %s --eventRate %s ' \
+                   % (LOG_PATH, i+1, net.cars[i].IP(), publisher_base_port+i, i+1, publisher_kind, eventrate)
             net.cars[i].cmd('java %s -DlogFilePath=%s/p%i '
                             '-DIBM_HEAPDUMPDIR="%s/p%i" '
                             '-Dcom.sun.management.jmxremote.port=%i '
@@ -173,21 +174,24 @@ def topology(enable_tcep=True):
             info("*** %s Starting TCEP EmptyApp on %s with ARGS %s \n" % (datetime.datetime.now(), rsus[rsu_index], ARGS))
 
         sim_rsu = rsus[4]  # the rsu at the intersection of the two main roads in the SUMO sim, IP: 20.0.0.15 hosts densityPublisher and simulationRunner
-        ARGS = '--dir %s/dp%i --ip %s --port %i --kind DensityPublisher --eventRate %s' \
-               % (LOG_PATH, 1, sim_rsu.IP(), publisher_base_port + n_publishers, eventrate)
-        info("*** %s Starting TCEP DensityPublisher on %s with ARGS %s\n" % (datetime.datetime.now(), sim_rsu, ARGS))
-        sim_rsu.cmd('java %s -DlogFilePath=%s/dp%i '
-                    '-DIBM_HEAPDUMPDIR="%s/dp%i" '
-                    '-Dcom.sun.management.jmxremote.port=%i '
-                    '-Dcom.sun.management.jmxremote.rmi.port=%i '
-                    '-DMAIN=tcep.machinenodes.PublisherApp '
-                    '-cp %s "tcep.machinenodes.PublisherApp" %s > /dev/null &'
-                    % (COMMON_CONFIG, LOG_PATH, 1, LOG_PATH, 1, 8484 + n_publishers + 2, 8484 + n_publishers + 2, JARFILE, ARGS))
 
-        ARGS = '--dir %s/simulation --mode 5 --ip %s --port %i --duration %i ' \
+        if query == "AccidentDetection":
+            ARGS = '--dir %s/dp%i --ip %s --port %i --kind DensityPublisher --eventRate %s' \
+                   % (LOG_PATH, 1, sim_rsu.IP(), publisher_base_port + n_publishers, eventrate)
+            info("*** %s Starting TCEP DensityPublisher on %s with ARGS %s\n" % (datetime.datetime.now(), sim_rsu, ARGS))
+            sim_rsu.cmd('java %s -DlogFilePath=%s/dp%i '
+                        '-DIBM_HEAPDUMPDIR="%s/dp%i" '
+                        '-Dcom.sun.management.jmxremote.port=%i '
+                        '-Dcom.sun.management.jmxremote.rmi.port=%i '
+                        '-DMAIN=tcep.machinenodes.PublisherApp '
+                        '-cp %s "tcep.machinenodes.PublisherApp" %s > /dev/null &'
+                        % (COMMON_CONFIG, LOG_PATH, 1, LOG_PATH, 1, 8484 + n_publishers + 2, 8484 + n_publishers + 2, JARFILE, ARGS))
+
+        mode_id = 14 if query == "LinearRoad" else 5
+        ARGS = '--dir %s/simulation --mode %s --ip %s --port %i --duration %i ' \
                '--initialAlgorithm %s --numberOfPublishers %i --req %s --query %s --mapek %s --transitionStrategy %s --transitionExecutionMode %s ' \
                '--eventRate %s ' \
-               % (LOG_PATH, sim_rsu.IP(), base_port, duration, placement, n_publishers, reqChange, query, mapek, transitionStrategy, transitionExecutionMode, eventrate)
+               % (LOG_PATH, mode_id, sim_rsu.IP(), base_port, duration, placement, n_publishers, reqChange, query, mapek, transitionStrategy, transitionExecutionMode, eventrate)
         info("*** %s Starting TCEP SimulationRunner on %s with ARGS %s\n" % (datetime.datetime.now(), sim_rsu, ARGS))
         # rsu5 LOG_FILE_PATH='"/home/niels/tcep"' ; MAIN='"tcep_2.12-0.0.1-SNAPSHOT-one-jar.jar"'; ARGS='"--dir ${LOG_FILE_PATH}/simulation --mode 9 --ip 20.0.0.15 --port 2500 --duration 5 --initialAlgorithm MDCEP --numberOfPublishers 12 "'; java -DMAIN="tcep.simulation.tcep.SimulationRunner" -DlogFilePath=${LOG_FILE_PATH}/simulation -cp ${MAIN} ${ARGS}
         sim_rsu.cmd('java %s -DlogFilePath=%s/simulation '
@@ -198,8 +202,9 @@ def topology(enable_tcep=True):
                     '-cp %s "tcep.simulation.tcep.SimulationRunner" %s > /dev/null &'
                     % (COMMON_CONFIG, LOG_PATH, LOG_PATH, 8484, 8484, JARFILE, ARGS))
 
-        ARGS = '--dir %s/consumer --ip %s --port %i --kind Accident --eventRate %s' \
-               % (LOG_PATH, sim_rsu.IP(), base_port + 200, eventrate)
+        consumer_kind = "Toll" if query == "LinearRoad" else "Accident"
+        ARGS = '--dir %s/consumer --ip %s --port %i --kind %s --eventRate %s' \
+               % (LOG_PATH, sim_rsu.IP(), base_port + 200, consumer_kind, eventrate)
         info("*** %s Starting TCEP Consumer on %s with ARGS %s\n" % (datetime.datetime.now(), sim_rsu, ARGS))
         sim_rsu.cmd('java %s -DlogFilePath=%s/consumer '
                     '-DIBM_HEAPDUMPDIR="%s/consumer" '

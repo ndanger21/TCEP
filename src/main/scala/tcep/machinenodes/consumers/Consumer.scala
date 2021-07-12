@@ -31,7 +31,7 @@ abstract class Consumer extends VivaldiCoordinates with ActorLogging {
       log.info(s"Query is: ${this.query.toString}")
 
     case GetAllRecords =>
-      log.info(s"${sender()} asked for AllRecords, eventrate out/in: ${allRecords.recordPublishingRate.lastRateMeasurement} ${allRecords.recordFrequency.lastMeasurement}   load: ${allRecords.recordAverageLoad.lastLoadMeasurement}")
+      //log.debug(s"${sender()} asked for AllRecords, eventrate out/in: ${allRecords.recordPublishingRate.lastRateMeasurement} ${allRecords.recordFrequency.lastMeasurement}   load: ${allRecords.recordAverageLoad.lastLoadMeasurement}")
       sender() ! this.allRecords
 
     case GetMonitorFactories =>

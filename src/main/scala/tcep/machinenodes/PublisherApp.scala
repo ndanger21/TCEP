@@ -106,8 +106,8 @@ object PublisherApp extends ConfigurationParser with App {
       logger.info("starting to create LinearRoadPublisher")
       type Time = Int
       val pubId: Int = options.getOrElse('numberOfPublishers, "1").toInt
-      val nextTime: Int = options.getOrElse('eventWaitTime, "30").toInt
-      val tracefile = s"/app/mobility_traces/linearRoadT${nextTime}_P${pubId}.csv"
+      val nextTime: Int = options.getOrElse('eventWaitTime, "1").toInt
+      val tracefile = s"$traceLocation/linearRoadT${nextTime}_P${pubId}.csv"
       try {
         val eventTrace: HashMap[Time, (LinearRoadDataNew, Double)] = {
           val bufferedSource = Source.fromFile(tracefile)
@@ -130,10 +130,14 @@ object PublisherApp extends ConfigurationParser with App {
           bufferedSource.close()
           res
         }
-        val pub = actorSystem.actorOf(Props(UnregularPublisher(90, id => {
+        logger.info(s"trace length: ${eventTrace.size}")
+        val pub = actorSystem.actorOf(Props(UnregularPublisher(30, id => {
           val key = id.toInt
           if (eventTrace.contains(key)) (Event1(eventTrace(key)._1), eventTrace(key)._2)
-          else (Event1(LinearRoadDataNew(-1, -1, -1, -1)), 1)}
+          else {
+            logger.error(s"could not find $key for event id $id")
+            (Event1(LinearRoadDataNew(-1, -1, -1, -1)), 1)
+          }}
         )), publisherName)
       } catch {
         case e: Throwable => logger.error(s"error while creating linear road publisher from tracefile $tracefile", e)

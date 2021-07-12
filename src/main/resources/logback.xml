@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <timestamp key = "myTimestamp" datePattern="dd-MM-yyyy'_'HH-mm-ss:SSS"/>
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
         <file>${logFilePath}/${MAIN}-${myTimestamp}.log</file>
         <immediateFlush>false</immediateFlush>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logFile.%d{yyyy-MM-dd}.log</fileNamePattern>
-        </rollingPolicy>
         <encoder>
             <!--<pattern>%d{HH:mm:ss.SSS}  %-5level[%X{sourceThread}] %logger{36}  - %msg%n%rEx</pattern>-->
             <pattern>[%date{ISO8601}] [%level] [%logger] [%thread] - %msg MDC: {%mdc}%n</pattern>

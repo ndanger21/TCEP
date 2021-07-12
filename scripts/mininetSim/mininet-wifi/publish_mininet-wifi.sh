@@ -1,6 +1,6 @@
 #!/bin/bash
 work_dir="$(cd "$(dirname "$0")" ; pwd -P)/../../.."
-source "${work_dir}/docker-swarm.cfg"
+source "${work_dir}/docker-swarm_maki.cfg"
 source ${work_dir}/scripts/common_functions.sh
 
 echo "publish_mininet-wifi.sh args: $@"
@@ -103,16 +103,16 @@ if [ -z "$machine" ]; then
    machine="localhost"
 fi
 if [ -z "$duration" ]; then
-   duration=2
+   duration=151
 fi
 if [ -z "$mapek" ]; then
-    mapek='LearnOn'
+    mapek='ExchangeablePerformanceModel'
 fi
 if [ -z "$req" ]; then
-    req="load"
+    req="throughput"
 fi
 if [ -z "$query" ]; then
-  query="Conjunction"
+  query="AccidentDetection"
 fi
 if [ -z "$algorithm" ]; then
    algorithm="MDCEP"
@@ -136,22 +136,27 @@ if [ -z "$transitionExecutionMode" ]; then
   transitionExecutionMode="0"
 fi
 if [ -z "$eventrate" ]; then
-  eventrate="10"
+  eventrate="30"
 fi
 host=${u}@${machine}
-if [[ ${controller_ip} == "localhost" ]] || [[ ${controller_ip} == "127.0.0.1" ]]; then
-  gui_ip="localhost"
-else
+#if [[ ${controller_ip} == "localhost" ]] || [[ ${controller_ip} == "127.0.0.1" ]]; then
+#  gui_ip="20.0.0.15"
+#else
   gui_ip=${controller_ip}
-fi
+  gui_host=${u}@${gui_ip}
+#fi
 echo "all args: $host $duration $mapek $req $query $algorithm $controller_ip $nSpeedPublishers $nRSUs $sumo_gui"
 
 
 compile() {
   echo "adjusting application.conf"
 	# docker container for gui has different ip if controller runs locally
-
-  adjust_config 12 ${nSpeedPublishers} $(($nRSUs + $nSpeedPublishers + 3)) ${gui_ip} "true" "true" # there are always 12 aps (not all have a rsu); gui is run same host as controller
+  if [[ $query == "AccidentDetection" ]]; then
+    others=3
+  else
+    others=2
+  fi
+  adjust_config 12 ${nSpeedPublishers} $(($nRSUs + $nSpeedPublishers + $others)) ${gui_ip} "true" "true" # there are always 12 aps (not all have a rsu); gui is run same host as controller
   echo "Building jarfile..."
   pushd ${work_dir} && sbt assembly || exit 1
   popd
@@ -169,7 +174,9 @@ setup() {
   ssh $host [ ! -d ~/tcep ] && ssh $host 'mkdir ~/tcep'
   echo "checking python pip version..."
   ssh $host "pip --version" || ssh $host -tt "sudo apt-get update && sudo apt install -y python-pip && pip install APScheduler"
+
   setup_docker_remote $host
+  echo "setting up SUMO mobility simulation"
   setup_sumo $host
 
   ssh $host [ ! -d ~/tcep/mininet-wifi ] \
@@ -216,9 +223,11 @@ setup() {
 
 start_controller() {
   controller_host=$u@${controller_ip}
+  # TODO using older tag because of flow problems
   ssh ${controller_host} '[ -z $(docker ps -a -q --filter ancestor=onosproject/onos) ] &&
             echo "starting ONOS SDN controller on '$u@${controller_ip}'...." &&
-            docker run --rm -t -d -p 8181:8181 -p 8101:8101 -p 5005:5005 -p 830:830 -p 6653:6653 --name onos onosproject/onos && sleep 45'
+            docker run --rm -t -d -p 8181:8181 -p 8101:8101 -p 5005:5005 -p 830:830 -p 6653:6653 --name onos nieda2018/onos:stable && sleep 45'
+  # this should be equal to onos 2.2.1
   # calls to ONOS REST API after waiting for startup
   ssh ${controller_host} 'docker exec onos ./bin/onos-app -u karaf -p karaf 172.17.0.2 activate org.onosproject.workflow.ofoverlay' && \
     ssh ${controller_host} 'docker exec onos ./bin/onos-app -u karaf -p karaf 172.17.0.2 activate org.onosproject.fwd' && \
@@ -228,10 +237,11 @@ start_controller() {
 }
 
 start_gui() {
-   tcep_gui=$registry_user'/'$gui_image
+  tcep_gui=$registry_user'/'$gui_image
+  echo "starting GUI image $tcep_gui"
   ssh $host '[ ! -z $(docker ps -a -q --filter ancestor='${tcep_gui}') ] && docker rm -f tcep_gui'
-  ssh ${controller_host} 'mkdir -p ~/tcep/logs/gui; docker pull '${tcep_gui}
-  ssh ${controller_host} '[ -z $(docker ps -a -q --filter ancestor='${tcep_gui}') ] && \
+  ssh ${gui_host} 'mkdir -p ~/tcep/logs/gui; docker pull '${tcep_gui}
+  ssh ${gui_host} '[ -z $(docker ps -a -q --filter ancestor='${tcep_gui}') ] && \
                           docker run -d --ip 172.30.0.254 -p 3000:3000 --name tcep_gui --volume /home/'${u}'/tcep/logs/gui:/usr/src/app/log '${tcep_gui} &&
                           echo "started TCEP gui on ${gui_ip}"
   if [[ ${gui_ip} == "172.30.0.254" ]] && [[ -z $(docker network ls -q -f name=gui-network) ]]; then
@@ -239,6 +249,16 @@ start_gui() {
     docker network create --driver bridge --subnet 172.30.0.0/24 --gateway 172.30.0.1 gui-network && \
     docker network connect --ip ${gui_ip} gui-network tcep_gui
   fi
+}
+
+start_prediction_endpoint() {
+  tcep_prediction_endpoint=$registry_user'/tcep-prediction-endpoint'
+  echo "start prediction endpoint from image $tcep_prediction_endpoint"
+  ssh ${gui_host} 'docker rm -f tcep_prediction_endpoint'
+  ssh ${gui_host} 'docker pull '${tcep_prediction_endpoint}
+  ssh ${gui_host} 'docker run -d -p 9091:9091 --name tcep_prediction_endpoint '${tcep_prediction_endpoint} &&
+                          echo "started TCEP prediction endpoint on ${gui_ip}"
+#TODO make this work similar to gui when running on localhost
 }
 
 run() {
@@ -276,6 +296,7 @@ all() {
   setup && \
   start_controller && \
   start_gui && \
+  start_prediction_endpoint && \
   run
 }
 

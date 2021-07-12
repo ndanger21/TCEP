@@ -8,6 +8,7 @@ import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.Coordinates
+import tcep.graph.qos.OperatorQosMonitor.SampleUpdate
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetOperatorTreeDepth, MonitoringDataUpdate}
 import tcep.graph.transition.mapek.contrast.FmNames._
@@ -74,7 +75,7 @@ class ContrastMonitor(mapek: MAPEK, consumer: ActorRef, fixedSimulationPropertie
   }
 
   override def receive: Receive = super.receive orElse {
-
+    case SampleUpdate(_, _) =>
     case MemberJoined(member) =>
       log.info(s"new member joined $member")
       nodeChanges = System.currentTimeMillis() :: nodeChanges

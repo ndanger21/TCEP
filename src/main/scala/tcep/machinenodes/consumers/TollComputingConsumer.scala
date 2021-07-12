@@ -1,14 +1,15 @@
 package tcep.machinenodes.consumers
 
-import com.typesafe.config.ConfigFactory
 import tcep.data.Queries
 import tcep.data.Queries._
 import tcep.dsl.Dsl._
-import tcep.simulation.tcep.{LinearRoadDataNew, MobilityData}
+import tcep.machinenodes.consumers.TollComputingConsumer.tollComputingQuery
+import tcep.simulation.tcep.{LinearRoadDataNew, StreamDataType}
 
 class TollComputingConsumer extends Consumer {
 
   val windowSize: Int = 60*3
+  val requirement = latency < timespan(800.milliseconds) otherwise None
 
   override def preStart(): Unit = {
     super.preStart()
@@ -17,9 +18,12 @@ class TollComputingConsumer extends Consumer {
 
   override def receive: Receive = super.receive
 
-  override def queryFunction(): Queries.Query = {
-    val streams = this.eventStreams(0).asInstanceOf[Vector[Stream1[LinearRoadDataNew]]]
-    val requirement = latency < timespan(800.milliseconds) otherwise None
+  override def queryFunction(): Queries.Query = tollComputingQuery(this.eventStreams, Set(requirement))
+}
+
+object TollComputingConsumer {
+  def tollComputingQuery(eventStreams: Seq[Vector[Stream1[_ <: StreamDataType]]], requirements: Set[Requirement]): Query = {
+    val streams = eventStreams(0).asInstanceOf[Vector[Stream1[LinearRoadDataNew]]]
     val and01 = streams(0).and(streams(1))
     val and23 = streams(2).and(streams(3))
     val and45 = streams(4).and(streams(5))
@@ -31,7 +35,7 @@ class TollComputingConsumer extends Consumer {
     })
     val observer = ObserveChange6(and012345)
     val avg01 = sectionAvgSpeeds(0).and(sectionAvgSpeeds(1))
-    val join = avg01.join(observer, slidingWindow(1.seconds), slidingWindow(1.seconds), requirement)
+    val join = avg01.join(observer, slidingWindow(1.seconds), slidingWindow(1.seconds), requirements.toSeq :_*)
     join
 
     /* OLD QUERY

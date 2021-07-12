@@ -11,8 +11,8 @@ import tcep.data.Structures.MachineLoad
 import tcep.dsl.Dsl._
 import tcep.graph.QueryGraph
 import tcep.graph.nodes.traits.{TransitionConfig, TransitionExecutionModes, TransitionModeNames}
-import tcep.machinenodes.consumers.AnalysisConsumer
 import tcep.machinenodes.consumers.Consumer.SetStreams
+import tcep.machinenodes.consumers.{AnalysisConsumer, TollComputingConsumer}
 import tcep.machinenodes.helper.actors._
 import tcep.placement.manets.StarksAlgorithm
 import tcep.placement.mop.RizouAlgorithm
@@ -51,7 +51,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   // publisher naming convention: P:hostname:port, e.g. "P:p1:2502", or "P:localhost:2501" (for local testing)
   var publishers: Map[String, ActorRef] = Map.empty[String, ActorRef]
   implicit var publisherEventRates: Map[String, Throughput] = Map()
-  val publisherPorts: Set[Int] = if(Mode.YAHOO_STREAMING == mode) speedPublisherNodePorts.toSet  else densityPublisherNodePort :: speedPublisherNodePorts.toList toSet
+  val publisherPorts: Set[Int] = if(Mode.YAHOO_STREAMING == mode || queryString == "LinearRoad") speedPublisherNodePorts.toSet  else densityPublisherNodePort :: speedPublisherNodePorts.toList toSet
   var consumers: Set[ActorRef] = Set()
   var taskManagerActorRefs: Map[Member, ActorRef] = Map()
   var coordinatesEstablished: Set[Address] = Set()
@@ -146,10 +146,10 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
         Seq(this.speedStreams(streamOperatorCount), dense.toVector)
 
       case Mode.LINEAR_ROAD =>
-        val linearRoadPublishers = publishers.toVector
-        //linearRoadPublishers.map(p => Stream1[LinearRoadData](p._1, Set())).sortBy(_.publisherName)
-        val publisherVector: Vector[Stream1[LinearRoadDataNew]] = linearRoadPublishers.map(p => Stream1[LinearRoadDataNew](p._1, Set())).sortBy(_.publisherName)
-        Seq(publisherVector)
+        val pubVector: Vector[Stream1[LinearRoadDataNew]] = if(publishers.size < streamOperatorCount)
+          (0 until streamOperatorCount).map(i => Stream1[LinearRoadDataNew](publishers.toVector(i % publishers.size)._1, Set())).toVector
+        else publishers.map(p => Stream1[LinearRoadDataNew](p._1, Set())).toVector
+        Seq(pubVector.sortBy(_.publisherName))
 
       case Mode.YAHOO_STREAMING =>
         val pubVector: Vector[Stream1[YahooDataNew]] = if(publishers.size < streamOperatorCount)
@@ -402,7 +402,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   def runSimulation(i: Int, placementStrategy: String, transitionConfig: TransitionConfig, finishedCallback: () => Any,
                     initialRequirements: Set[Requirement], requirementChanges: Option[Set[Requirement]] = None,
                     splcDataCollection: Boolean = false): Unit = {
-
+      log.info("run simulation entered")
       val query = queryString match {
       case "Stream" => stream[MobilityData](speedPublishers(0)._1, initialRequirements.toSeq: _*)
       case "Filter" => stream[MobilityData](speedPublishers(0)._1, initialRequirements.toSeq: _*).where(_ => true)
@@ -412,8 +412,9 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       case "SelfJoin" => stream[MobilityData](speedPublishers(0)._1).selfJoin(slidingWindow(1.seconds), slidingWindow(1.seconds), initialRequirements.toSeq: _*)
       case "AccidentDetection" => accidentQuery(initialRequirements.toSeq: _*)
       case "AdAnalysis" => AnalysisConsumer.adAnalysisQuery(getStreams(8), AnalysisConsumer.loadStorageDatabase()(log), initialRequirements)
+      case "LinearRoad" => TollComputingConsumer.tollComputingQuery(getStreams(6), initialRequirements)
     }
-
+    log.info("query received")
         //accidentQuery(initialRequirements.toSeq: _*)
       //val query = Average2(speedStreams(0).and(speedStreams(1)), initialRequirements)
       //val query = averageSpeedQuery(initialRequirements.toSeq: _*)
@@ -438,7 +439,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
 
     val percentage: Double = (i + 1 / loadTestMax.toDouble) * 100.0
     log.info(s"starting $transitionMode ${placementStrategy} algorithm simulation number $i (progress: $percentage) \n with requirements \n $initialRequirements \n and with requirementChanges \n $requirementChanges \n mapek $mapek and query $query")
-    val graph = Await.result(sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback), FiniteDuration(15, TimeUnit.SECONDS)) // (start simulation time, interval, end time (s))
+    val graph = Await.result(sim.startSimulation(queryString, startDelay, samplingInterval, totalDuration)(finishedCallback), FiniteDuration(120, TimeUnit.SECONDS)) // (start simulation time, interval, end time (s))
     graphs = graphs.+(i -> graph)
     context.system.scheduler.scheduleOnce(totalDuration)(this.shutdown())
     val firstDelay = requirementChangeDelay

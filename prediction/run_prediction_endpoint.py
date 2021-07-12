@@ -9,7 +9,6 @@ from river import linear_model, tree, neural_net, ensemble, stream, metrics, pre
 from river.neural_net import activations
 
 app = Flask(__name__)
-# expert.SuccessiveHalvingRegressor # ~ online hyper parameter tuning
 
 
 @app.route('/updateOnline', methods=['POST'])
