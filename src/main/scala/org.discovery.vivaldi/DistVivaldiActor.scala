@@ -1,7 +1,5 @@
 package org.discovery.vivaldi
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{ActorLogging, ActorRef, ActorSelection, ActorSystem, Address, Props}
 import akka.cluster.ClusterEvent.{CurrentClusterState, MemberEvent, MemberUp}
 import akka.cluster.{Cluster, Member, MemberStatus}
@@ -13,6 +11,7 @@ import tcep.ClusterActor
 import tcep.machinenodes.helper.actors._
 import tcep.utils.{SpecialStats, TCEPUtils}
 
+import java.util.concurrent.TimeUnit
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
@@ -108,9 +107,9 @@ class DistVivaldiActor extends ClusterActor with ActorLogging {
                 delivery <- TCEPUtils.guaranteedDelivery(context, simulator, VivaldiCoordinatesEstablished()).mapTo[ACK]
               } yield coordsInitialized = true
             }
-            //val vivaldiDistance = DistVivaldiActor.localPos.coordinates.distance(pong.receiverPosition.coordinates)
+            val vivaldiDistance = DistVivaldiActor.localPos.coordinates.distance(pong.receiverPosition.coordinates)
             //SpecialStats.log(s"${this.self}", "DistVivaldi", s"updated coordinates to ${DistVivaldiActor.localPos.coordinates}" +
-            //  s"; ${s.path.address} : pos: ${pong.receiverPosition.coordinates} latency ${latency}ms | vivaldi distance: ${vivaldiDistance} -> absolute error ${math.abs(vivaldiDistance - latency)} relative error ${(vivaldiDistance - latency) / latency}")
+            //  s";${s.path.address};: pos: ${pong.receiverPosition.coordinates};latency;${latency}ms;vivaldi distance;${vivaldiDistance};absolute error;${math.abs(vivaldiDistance - latency)};relative error;${(vivaldiDistance - latency) / latency}")
           }
         } catch {
           case e: Throwable =>

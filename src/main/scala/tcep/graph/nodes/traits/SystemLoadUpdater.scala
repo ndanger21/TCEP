@@ -27,13 +27,14 @@ class SystemLoadUpdater extends Actor with Timers with ActorLogging {
 
   override def receive: Receive = {
     case CPULoadUpdateTick =>
+      log.debug("received CPULoadUpdateTick")
       implicit val ec = blockingIoDispatcher
       val update = Future {
         val start = System.nanoTime()
-        val update = CPULoadUpdate(SystemLoad.getSystemLoad(samplingInterval))
+        val load = CPULoadUpdate(SystemLoad.getSystemLoad(samplingInterval)(self))
         val now = System.nanoTime()
-        log.debug("currentLoad update took {}ns", now - start)
-        update
+        log.debug("currentLoad update took {}ms", (now - start) / 1e6)
+        load
       }
       update.pipeTo(self)
 

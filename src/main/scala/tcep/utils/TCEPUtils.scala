@@ -9,7 +9,7 @@ import com.typesafe.config.ConfigFactory
 import org.discovery.vivaldi.{Coordinates, DistVivaldiActor}
 import org.slf4j.LoggerFactory
 import tcep.machinenodes.helper.actors._
-import tcep.machinenodes.qos.BrokerQoSMonitor.GetCPULoad
+import tcep.machinenodes.qos.BrokerQoSMonitor.{CPULoad, GetCPULoad}
 import tcep.prediction.PredictionHelper.Throughput
 
 import java.util.UUID
@@ -75,8 +75,8 @@ object TCEPUtils {
   def getLoadOfMember(cluster: Cluster, node: Member)(implicit ec: ExecutionContext): Future[Double] = {
     for {
       taskManagerActor <- this.getTaskManagerOfMember(cluster, node)
-      request <- trySendWithRetry(taskManagerActor, GetCPULoad, retryTimeout, retries).mapTo[Double]
-    } yield request
+      request <- trySendWithRetry(taskManagerActor, GetCPULoad, retryTimeout, retries).mapTo[CPULoad]
+    } yield request.load
   }
 
   def getBandwidthBetweenNodes(cluster: Cluster, source: Member, target: Member)(implicit ec: ExecutionContext): Future[Double] = {
