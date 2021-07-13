@@ -40,7 +40,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
                      )(implicit val directory: Option[File], val combinedPIM: Boolean, fixedSimulationProperties: Map[Symbol, Int] = Map()
 ) extends VivaldiCoordinates with ActorLogging {
 
-  val transitionTesting = true
+  val transitionTesting: Boolean = ConfigFactory.load().getBoolean("constants.transition-testing")
   val nSpeedPublishers = ConfigFactory.load().getInt("constants.number-of-speed-publisher-nodes")
   val nSections = ConfigFactory.load().getInt("constants.number-of-road-sections")
   val minNumberOfMembers = ConfigFactory.load().getInt("akka.cluster.min-nr-of-members")

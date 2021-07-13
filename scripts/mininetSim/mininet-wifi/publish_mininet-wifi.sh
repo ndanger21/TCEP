@@ -251,14 +251,9 @@ start_gui() {
   fi
 }
 
-start_prediction_endpoint() {
-  tcep_prediction_endpoint=$registry_user'/tcep-prediction-endpoint'
-  echo "start prediction endpoint from image $tcep_prediction_endpoint"
-  ssh ${gui_host} 'docker rm -f tcep_prediction_endpoint'
-  ssh ${gui_host} 'docker pull '${tcep_prediction_endpoint}
-  ssh ${gui_host} 'docker run -d -p 9091:9091 --name tcep_prediction_endpoint '${tcep_prediction_endpoint} &&
-                          echo "started TCEP prediction endpoint on ${gui_ip}"
-#TODO make this work similar to gui when running on localhost
+setup_prediction_endpoint() {
+  echo "directly installing python dependencies for prediction server"
+  ssh $host "pip3 install pandas flask joblib river h2o scikit-learn==0.24.0 scipy>=0.14.1"
 }
 
 run() {
@@ -287,16 +282,16 @@ run() {
   #ssh $host -t 'sudo pkill -f tcep -9'
    ssh $host -t 'echo '\
   ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip}''
-  ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
-  ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip}''
+  #ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
+  #${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip}''
 }
 
 all() {
   compile && \
   setup && \
   start_controller && \
-  start_gui && \
-  start_prediction_endpoint && \
+  #start_gui && \
+  setup_prediction_endpoint && \
   run
 }
 

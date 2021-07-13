@@ -2,7 +2,7 @@ package tcep.graph.transition.mapek
 
 import akka.actor.{ActorContext, ActorLogging, ActorRef, Address, Props, Timers}
 import akka.cluster.Cluster
-import akka.pattern.{ask, pipe}
+import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
 import org.cardygan.config.Config
@@ -49,10 +49,10 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
 
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
   val shiftTarget: Boolean = false
-  val algorithmNames = ConfigFactory.load().getStringList("benchmark.general.algorithms").asScala
   var headersInit: Map[ActorRef, Boolean] = Map()
   val sampleFileHeader: String = algorithmNames.mkString(";") + ";" + DynamicCFMNames.ALL_FEATURES.mkString(";") + ";" + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
   val transitionsEnabled: Boolean = ConfigFactory.load().getBoolean("constants.mapek.transitions-enabled") // mapek planner enabled with prediction endpoint interaction
+  val transitionTesting: Boolean = ConfigFactory.load().getBoolean("constants.transition-testing")
 
 
   override def preStart(): Unit = {
@@ -64,6 +64,11 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
       logSample(sender(), lastSamples)
       mapek.knowledge.forward(s)
 
+      if(transitionTesting || transitionsEnabled) {
+        updateOnlineModel(getShiftedSample(lastSamples), currentPlacementStrategy)
+        getMetricPredictions(query, getShiftedSample(lastSamples), currentPlacementStrategy) // logs to stats-offline_predictions.csv
+      }
+    /* old pull-based implementation
     case GetSamplingDataTick => mapek.knowledge ! GetOperators // response below
     case CurrentOperators(placement) =>
       log.debug("received placement {}", placement.mkString("\n"))
@@ -77,8 +82,11 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
         }))
         mostRecentSamples.pipeTo(mapek.knowledge)
       }
+     */
     case _ =>
   }
+
+  def getShiftedSample(samples: Samples): Sample = if (shiftTarget) samples.last else samples.head
 
   def logSample(op: ActorRef, samples: Samples): Unit = {
     // only log if any events arrived
@@ -89,24 +97,16 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
         headersInit = headersInit.updated(op, true)
       }
 
-      def getShiftedSample: Sample = if (shiftTarget) samples.last else samples.head
 
       if (!shiftTarget || shiftTarget && samples.size > 1) {
-        if(transitionsEnabled) updateOnlineModel(getShiftedSample)
         SpecialStats.log(logFileString, logFileString,
-					currentPlacementStrategyToOneHot + ";" +
+					ExchangeablePerformanceModelMAPEK.currentPlacementStrategyToOneHot(algorithmNames, currentPlacementStrategy) + ";" +
 					DynamicCFMNames.ALL_FEATURES.map(f => getFeatureValue(samples.head, f)).mkString(";") + ";" +
-            DynamicCFMNames.ALL_TARGET_METRICS.map(m => getTargetMetricValue(getShiftedSample, m)).mkString(";"))
+            DynamicCFMNames.ALL_TARGET_METRICS.map(m => getTargetMetricValue(getShiftedSample(samples), m)).mkString(";"))
       }
     }
   }
 
-	def currentPlacementStrategyToOneHot: String = {
-		algorithmNames.map {
-      case name if name == currentPlacementStrategy => 1
-      case _ => 0
-    }.mkString(";")
-	}
 
   private object GetSamplingDataTick
   private object GetSamplingDataKey
@@ -149,6 +149,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
       }
 
     case RunPlanner(cfm: CFM, contextConfig: Config, currentLatency: Double, qosRequirements: Set[Requirement]) =>
+      log.info("received RunPlanner with requirements {}", qosRequirements)
       for {
         currentPlacement: Option[Map[Query, ActorRef]] <- (mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
         publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
@@ -164,7 +165,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
             _ <- p.initialize()(ec, cluster, Some(publisherEventRates))
             placement: Map[Query, Address] <- p.initialVirtualOperatorPlacement(rootOperator, publishers)(ec, cluster, queryDependencyMap).map(_.map(e => e._1 -> e._2.member.address))
             _ = log.info("{} virtual placement calculation complete after {}ms", p.name, System.currentTimeMillis() - s)
-            pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample))).mapTo[MetricPredictions]
+            pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample), p.name)).mapTo[MetricPredictions]
           } yield p.name -> (pred, placement)
         }).map(p => {
           log.info("received predictions \n{}", p.map(e => e._1 -> e._2._1).mkString("\n"))
@@ -243,5 +244,11 @@ class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, query: Query, transiti
 object ExchangeablePerformanceModelMAPEK {
   case class MonitorSamples(sampleMap: Map[(Query, ActorRef), Samples])
   case object GetContextSample
+  def currentPlacementStrategyToOneHot(algorithmNames: Iterable[String], current: String): String = {
+    algorithmNames.map {
+      case name if name == current => 1
+      case _ => 0
+    }.mkString(";")
+  }
 }
 

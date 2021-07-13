@@ -5,17 +5,23 @@ import time
 import joblib
 import pandas as pd
 from flask import Flask, jsonify, request, make_response
-from river import linear_model, tree, neural_net, ensemble, stream, metrics, preprocessing
-from river.neural_net import activations
+from river import linear_model, tree, ensemble, stream, metrics, preprocessing
 
 app = Flask(__name__)
 
+selected_features_throughput = ["Relaxation", "Rizou", "ProducerConsumer", "Random", "GlobalOptimalBDP", "MDCEP",
+                                "operatorSelectivity", "eventRateIn", "processingLatencyMean", "processingLatencyStdDev"]
+selected_features_processing_latency = ["Relaxation", "Rizou", "ProducerConsumer", "Random", "GlobalOptimalBDP", "MDCEP",
+                                        "eventSizeInKB", "operatorSelectivity", "interArrivalMean", "interArrivalStdDev",
+                                        "brokerCPULoad", "eventRateOut"]
+
+selected_dict = { "eventRateOut" : selected_features_throughput, "processingLatencyMean" : selected_features_processing_latency}
 
 @app.route('/updateOnline', methods=['POST'])
 def update_online():
     if request.is_json:
         json_dict = request.get_json()
-        sample = pd.DataFrame({feature: [val] for (feature, val) in json_dict.items()})
+        sample = pd.DataFrame({feature: [val] for (feature, val) in json_dict})
         for target in targets:
             X = sample.drop(targets, axis=1)
             #X = X[online_features_throughput] if target == 'eventRateOut' else X # TODO
@@ -26,7 +32,7 @@ def update_online():
                     # train on current sample
                     x_i_scaled = scaler.learn_one(x_i).transform_one(x_i)
                     model.learn_one(x_i_scaled, y_i)
-                    logger.debug("%s - time taken train: %5.4fs", model, float(time.time() - s))
+                    logger.info("%s - time taken train: %5.4fs", model, float(time.time() - s))
         return {}, 202
     else:
         logger.error("expected json but got ", request)
@@ -37,16 +43,17 @@ def predict():
     start = time.time()
     if request.is_json:
         json_dict = request.get_json()
-        # logger.info('=======\nreceived prediction request \n%s', json_dict)
-        sample = pd.DataFrame({feature: [val] for (feature, val) in json_dict.items()})
-
+        logger.debug('=======\nreceived prediction request \n%s', json_dict)
+        sample = pd.DataFrame({feature: [val] for (feature, val) in json_dict})
         online_predictions = predict_online_models(sample)
-
-        latency_prediction = trained_model_latency.predict(sample)[0]
-        throughput_prediction = trained_model_throughput.predict(sample)[0]
+        sample_latency = sample[selected_dict['processingLatencyMean']]
+        sample_throughput = sample[selected_dict['eventRateOut']]
+        latency_prediction = trained_model_latency.predict(sample_latency)[0]
+        throughput_prediction = trained_model_throughput.predict(sample_throughput)[0]
         # logger.info("prediction is %s", latency_prediction)
-        predictions = {'latency': latency_prediction, 'throughput': throughput_prediction}
-        logger.info("prediction took %4.3fs, reply is %s", float(time.time() - start), predictions)
+        predictions = {'offline': {'latency': latency_prediction, 'throughput': throughput_prediction},
+                       'online': online_predictions }
+        logger.debug("prediction took %4.3fs, reply is %s", float(time.time() - start), predictions)
         return make_response(jsonify(predictions), 200)
     else:
         logger.info("expected json but got ", request)
@@ -56,8 +63,7 @@ def predict():
 def predict_online_models(sample):
     predictions_dict = {target: {} for target in targets}
     for target in targets:
-        X = sample.copy().drop(targets, axis=1)
-        #X = X[online_features_throughput] if target == 'eventRateOut' else X # TODO
+        X = sample[selected_dict[target]]
         y = sample[target]
         for x_i, y_i in stream.iter_pandas(X, y):
             for model in online_models[target]:
@@ -87,17 +93,17 @@ if __name__ == '__main__':
         tree.HoeffdingTreeRegressor(),
         tree.HoeffdingAdaptiveTreeRegressor(),  # +ADWIN concept-drift detector
         ensemble.AdaptiveRandomForestRegressor(),
-        neural_net.MLPRegressor(
-          hidden_dims=(5,),
-          activations=(
-              activations.ReLU,
-              activations.ReLU,
-              activations.Identity
-          ))]
-    metric = metrics.MAE()
+        #neural_net.MLPRegressor(
+        #  hidden_dims=(5,),
+        #  activations=(
+        #      activations.ReLU,
+        #      activations.ReLU,
+        #      activations.Identity
+        #  ))
+        ]
+    metric = metrics.RMSE()
 
-    online_features_throughput = ['eventRateIn', 'operatorSelectivity']
-    targets = ['e2eLatencyMean', 'eventRateOut']
+    targets = ['processingLatencyMean', 'eventRateOut']
     online_models = {name: online_models_base.copy() for name in targets}
 
 

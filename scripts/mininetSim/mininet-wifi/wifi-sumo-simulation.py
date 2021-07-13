@@ -214,6 +214,12 @@ def topology(enable_tcep=True):
                     '-cp %s "tcep.machinenodes.ConsumerApp" %s > /dev/null &'
                     % (COMMON_CONFIG, LOG_PATH, LOG_PATH, 8484 + 200, 8484 + 200, JARFILE, ARGS))
 
+        if mapek == "ExchangeablePerformanceModel":
+            #TODO update model
+            sim_rsu.cmd("python3 run_prediction_endpoint.py "
+                        "-l autosklearn_trained_pipeline_8_yahoo_geni_5s_combined_samples.csv_processingLatencyMean.joblib "
+                        "-t autosklearn_trained_pipeline_8_yahoo_geni_5s_combined_samples.csv_eventRateOut.joblib &")
+
     #info("*** Running CLI\n")
     #CLI(net)
     time.sleep((duration + 1) * 60)
@@ -253,4 +259,5 @@ if __name__ == '__main__':
         base_port = int(re.compile(r'base-port = \d+').search(f.read()).group(0).split(' = ')[1])
 
     publisher_base_port = base_port + 1
+
     topology(enable_tcep=True)

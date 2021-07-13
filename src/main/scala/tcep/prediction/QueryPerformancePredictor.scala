@@ -27,7 +27,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
   val singleThreadDispatcher: ExecutionContext = scala.concurrent.ExecutionContext.fromExecutor(Executors.newSingleThreadExecutor())
 
   override def receive: Receive = {
-    case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates, contextFeatureSample) =>
+    case GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates, contextFeatureSample, newPlacementAlgorithmStr) =>
       implicit val ec = blockingIoDispatcher
       val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
       val publishers = TCEPUtils.getPublisherHosts(cluster)
@@ -102,7 +102,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
 
       val perQueryPredictions: Future[MetricPredictions] = samples flatMap ( s => {
         log.debug("retrieving predictions from endpoint {}", predictionEndPointAddress)
-        val pred = getPerOperatorPredictions(rootOperator, s, publisherEventRates) // avoid running prediction requests in parallel since online models are updated with them as well
+        val pred = getPerOperatorPredictions(rootOperator, s, publisherEventRates, newPlacementAlgorithmStr) // avoid running prediction requests in parallel since online models are updated with them as well
         pred.onComplete {
           case Success(value) => log.debug("per-operator predictions are \n{}", value.mkString("\n"))
           case Failure(exception) => log.error(exception, s"failed to retrieve predictions from endpoint $predictionEndPointAddress")
@@ -128,7 +128,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
     * @param publisherEventRates base event rates of all publishers
     * @return metric predictions for each operator (currently throughput and end-to-end latency)
     */
-  def getPerOperatorPredictions(rootOperator: Query, operatorSampleMap: Map[Query, Sample], publisherEventRates: Map[String, Throughput]): Future[Map[Query, MetricPredictions]] = {
+  def getPerOperatorPredictions(rootOperator: Query, operatorSampleMap: Map[Query, Sample], publisherEventRates: Map[String, Throughput], placementStr: String): Future[Map[Query, MetricPredictions]] = {
     implicit val ec = singleThreadDispatcher
     //TODO eval: update incomingEventrate with parent event rate predictions
 
@@ -137,16 +137,16 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
       curOp match {
         case b: BinaryQuery => for {
           parentPredictions <- getPerOperatorPredictionsRec(b.sq1).zip(getPerOperatorPredictionsRec(b.sq2)).map(f => f._1 ++ f._2)
-          predictions <- getMetricPredictions(curOp, operatorSampleMap(b))
+          predictions <- getMetricPredictions(curOp, operatorSampleMap(b), placementStr)
         } yield parentPredictions.updated(b, predictions)
 
         case u: UnaryQuery => for {
           parentPredictions <- getPerOperatorPredictionsRec(u.sq)
-          predictions <- getMetricPredictions(curOp, operatorSampleMap(u))
+          predictions <- getMetricPredictions(curOp, operatorSampleMap(u), placementStr)
         } yield parentPredictions.updated(u, predictions)
 
-        case s: StreamQuery => getMetricPredictions(curOp, operatorSampleMap(s)).map(f => Map(s -> f))
-        case s: SequenceQuery => getMetricPredictions(curOp, operatorSampleMap(s)).map(f => Map(s -> f))
+        case s: StreamQuery => getMetricPredictions(curOp, operatorSampleMap(s), placementStr).map(f => Map(s -> f))
+        case s: SequenceQuery => getMetricPredictions(curOp, operatorSampleMap(s), placementStr).map(f => Map(s -> f))
         case _ => throw new IllegalArgumentException(s"unknown operator type $curOp")
       }
     }
@@ -184,8 +184,11 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
 }
 
 object QueryPerformancePredictor {
-  case class GetPredictionForPlacement(query: Query, currentPlacement: Option[Map[Query, ActorRef]], newPlacement: Map[Query, Address], baseEventRates: Map[String, Throughput], sample: Option[Map[Query, Sample]])
+  case class GetPredictionForPlacement(query: Query, currentPlacement: Option[Map[Query, ActorRef]], newPlacement: Map[Query, Address], baseEventRates: Map[String, Throughput], sample: Option[Map[Query, Sample]], newPlacementAlgorithmStr: String)
   case class QosPredictions()
   private case class PlacementBrokerMonitors(brokerMonitors: List[ActorRef], predictionRequester: ActorRef)
-  case class PredictionResponse(latency: Double, throughput: Double)
+  //case class PredictionResponse(latency: Double, throughput: Double)
+  // offline = Map(latency -> 0.0, throughput -> 0.0)
+  // online = Map(latency -> Map(algo1 -> 0.0, algo2 -> ...), throughput -> Map(algo1 -> ...))
+  case class PredictionResponse(offline: Map[String, Double], online: Map[String, Map[String, Double]])
 }

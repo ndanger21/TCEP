@@ -1,7 +1,7 @@
 package tcep.graph.nodes
 
 import akka.actor.Cancellable
-import tcep.data.Events.{Event, Event1, Event6}
+import tcep.data.Events.{Event, Event1, Event6, MonitoringData}
 import tcep.data.Queries.SlidingWindowQuery
 import tcep.graph.nodes.traits.Node.NodeProperties
 import tcep.graph.nodes.traits.UnaryNode
@@ -15,7 +15,7 @@ import scala.concurrent.duration.FiniteDuration
 
 case class SlidingWindowNode(query: SlidingWindowQuery, hostInfo: HostInfo, np: NodeProperties) extends UnaryNode {
 
-  var storage: ListBuffer[(Double, Double)] = ListBuffer.empty[(Double, Double)]
+  var storage: ListBuffer[(Double, Double, MonitoringData)] = ListBuffer.empty
   var lastEmit: Double = System.currentTimeMillis().toDouble
   val rate = 2
   var avgEmitter: Cancellable = _
@@ -28,15 +28,16 @@ case class SlidingWindowNode(query: SlidingWindowQuery, hostInfo: HostInfo, np: 
 
   override def childNodeReceive: Receive = super.childNodeReceive orElse {
     case event: Event =>
+      event.updateArrivalTimestamp()
       val s = sender()
       if (np.parentActor.contains(s)) {
         event match {
           case Event6(e1, e2, e3, e4, e5, e6) =>
-            this.store(List(e1.asInstanceOf[LinearRoadDataNew], e2.asInstanceOf[LinearRoadDataNew], e3.asInstanceOf[LinearRoadDataNew], e4.asInstanceOf[LinearRoadDataNew], e5.asInstanceOf[LinearRoadDataNew], e6.asInstanceOf[LinearRoadDataNew]))
+            this.store(List(e1.asInstanceOf[LinearRoadDataNew], e2.asInstanceOf[LinearRoadDataNew], e3.asInstanceOf[LinearRoadDataNew], e4.asInstanceOf[LinearRoadDataNew], e5.asInstanceOf[LinearRoadDataNew], e6.asInstanceOf[LinearRoadDataNew]), event.monitoringData)
           case _ => ???
         }
         val eventData = if (this.storage.size > 0) {
-           LinearRoadDataNew(-1, this.query.sectionFilter.get, -1, -1, false, Some(this.getWindow()))
+           LinearRoadDataNew(-1, this.query.sectionFilter.get, -1, -1, false, Some(this.getWindow()._1))
         } else {
            LinearRoadDataNew(-1, this.query.sectionFilter.get, -1, -1, false, Some(List(0)))
         }
@@ -50,31 +51,33 @@ case class SlidingWindowNode(query: SlidingWindowQuery, hostInfo: HostInfo, np: 
 
   def emitAvg(): Unit = {
     if (this.storage.size > 0) {
-      val eventData = LinearRoadDataNew(-1, this.query.sectionFilter.get, -1, -1, false, Some(this.getWindow()))
+      val windowData = this.getWindow()
+      val eventData = LinearRoadDataNew(-1, this.query.sectionFilter.get, -1, -1, false, Some(windowData._1))
       val avgEvent = Event1(eventData)
       avgEvent.init()
-      //TODO how to include monitoringData from parent events?
+      avgEvent.copyMonitoringData(windowData._2)
       emitEvent(avgEvent, np.eventCallback)
     } else {
       val eventData = LinearRoadDataNew(-1, this.query.sectionFilter.get, -1, -1, false, Some(List(0)))
       val avgEvent = Event1(eventData)
       avgEvent.init()
+      avgEvent.updateArrivalTimestamp()
       emitEvent(avgEvent, np.eventCallback)
     }
   }
 
-  def store(dataList: List[LinearRoadDataNew]) = {
+  def store(dataList: List[LinearRoadDataNew], monitoringData: MonitoringData) = {
     val currentTime = System.currentTimeMillis() / 1000.0d
     if (this.query.sectionFilter.isDefined) {
       for (value <- dataList) {
         if (value.section == this.query.sectionFilter.get) {
-          this.storage += (currentTime -> value.speed)
+          this.storage += Tuple3(currentTime, value.speed, monitoringData)
         }
       }
     }
   }
 
-  def getWindow(): List[Double] = {
+  def getWindow(): (List[Double], MonitoringData) = {
     val currentTime = System.currentTimeMillis() / 1000.0d //seconds
     val removeThreshold = currentTime-this.query.windowSize
     while (this.storage.size > 0 && this.storage.head._1 < removeThreshold)
@@ -82,7 +85,7 @@ case class SlidingWindowNode(query: SlidingWindowQuery, hostInfo: HostInfo, np: 
     var out = ListBuffer.empty[Double]
     for (event <- this.storage)
       out += (event._2)
-    out.toList
+    (out.toList, this.storage.last._3)
   }
 
         /*def store(dataList: List[LinearRoadDataNew]): List[LinearRoadDataNew] = {

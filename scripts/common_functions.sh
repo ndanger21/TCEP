@@ -83,7 +83,7 @@ adjust_config() {
     perl -0777 -i -pe "s/tcep-gui\n\s+ports:\s+-\s[0-9]+:[0-9]+/tcep-gui\n    ports:\n      - ${gui_port}:${gui_port}/igs" ${work_dir}/${stack_file}
     if [[ $mininet == "true" ]]; then # mininet simulation
       sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://${gui_host}:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
-   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://${gui_host}:${prediction_port}/\"#" ${work_dir}/src/main/resources/application.conf
+   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://localhost:${prediction_port}/\"#" ${work_dir}/src/main/resources/application.conf
 
       if [[ $wifi == "true" ]]; then
         sed -i -r 's| #\"akka\.tcp://tcep@20\.0\.0\.15:\"\$\{\?constants\.base-port\}\"\"| \"akka.tcp://tcep@20.0.0.15:\"${?constants.base-port}\"\"|' ${work_dir}/src/main/resources/application.conf

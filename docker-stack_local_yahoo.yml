@@ -17,7 +17,7 @@ services:
     privileged: true
 
   gui:
-    image: localhost:5000/tcep-gui
+    image: nieda2018/tcep-gui
     ports:
       - 3000:3000
     networks:
@@ -34,7 +34,7 @@ services:
     image: localhost:5000/tcep
     environment:
       - MAIN=tcep.simulation.tcep.SimulationRunner
-      - ARGS=--dir ./logs --mode 15 --ip simulator --port 2500 --query AdAnalysis --mapek LearnOn --req throughput --transitionStrategy MFGS --transitionExecutionMode 0 --duration 720 --loadTestMax 1 --initialAlgorithm ProducerConsumer
+      - ARGS=--dir ./logs --mode 15 --ip simulator --port 2500 --query AdAnalysis --mapek ExchangeablePerformanceModel --req throughput --transitionStrategy MFGS --transitionExecutionMode 0 --duration 20 --loadTestMax 1 --initialAlgorithm ProducerConsumer
       - LOG_FILE_PATH=/app/logs
       - JMX_PORT=8484
     ports:
@@ -187,7 +187,7 @@ services:
     privileged: true
 
   predictionEndpoint:
-    image: localhost:5000/tcep-prediction-endpoint
+    image: nieda2018/tcep-prediction-endpoint
     volumes:
       - $HOME/logs:/app/logs
     depends_on:

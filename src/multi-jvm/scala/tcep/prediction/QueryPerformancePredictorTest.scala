@@ -58,7 +58,7 @@ abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
         )
         val queryPerformancePredictor = system.actorOf(Props(classOf[QueryPerformancePredictor], cluster))
         implicit val timeout: Timeout = Timeout(remaining)
-        val f = (queryPerformancePredictor ? GetPredictionForPlacement(filter, None, initialPlacement, baseEventRates, None)).mapTo[MetricPredictions]
+        val f = (queryPerformancePredictor ? GetPredictionForPlacement(filter, None, initialPlacement, baseEventRates, None, MobilityTolerantAlgorithm.name)).mapTo[MetricPredictions]
         ec
         f.onComplete {
           case Failure(exception) => exception.printStackTrace()
