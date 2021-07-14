@@ -84,9 +84,9 @@ abstract class ExecutorComponent(mapek: MAPEK) extends MAPEKComponent {
   }
 }
 
-abstract case class KnowledgeComponent(mapek: MAPEK, query: Query, var transitionConfig: TransitionConfig, var currentPlacementStrategy: String) extends MAPEKComponent {
+abstract case class KnowledgeComponent(mapek: MAPEK, rootOperator: Query, var transitionConfig: TransitionConfig, var currentPlacementStrategy: String) extends MAPEKComponent {
   var client: ActorRef = _
-  protected val requirements: scala.collection.mutable.Set[Requirement] = scala.collection.mutable.Set(pullRequirements(query, List()).toSeq: _*)
+  protected val requirements: scala.collection.mutable.Set[Requirement] = scala.collection.mutable.Set(pullRequirements(rootOperator, List()).toSeq: _*)
   var deploymentComplete: Boolean = false
   var lastTransitionEnd: Long = System.currentTimeMillis()
   var lastTransitionDuration: Long = 0

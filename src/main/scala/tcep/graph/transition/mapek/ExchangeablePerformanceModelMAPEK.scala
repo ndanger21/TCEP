@@ -13,11 +13,11 @@ import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos.OperatorQosMonitor._
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition._
-import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK.{GetContextSample, MonitorSamples}
+import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK.GetContextSample
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData, RunPlanner}
 import tcep.graph.transition.mapek.contrast._
 import tcep.placement.PlacementStrategy
-import tcep.prediction.PredictionHelper.{MetricPredictions, Throughput}
+import tcep.prediction.PredictionHelper.{EndToEndLatencyAndThroughputPrediction, OfflineAndOnlinePredictions, Throughput}
 import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
 import tcep.prediction.{PredictionHttpClient, QueryPerformancePredictor}
 import tcep.utils.{SpecialStats, TCEPUtils}
@@ -60,14 +60,18 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
   }
 
   override def receive: Receive = super.receive orElse {
-    case s@SampleUpdate(query, lastSamples) =>
-      logSample(sender(), lastSamples)
-      mapek.knowledge.forward(s)
-
-      if(transitionTesting || transitionsEnabled) {
-        updateOnlineModel(getShiftedSample(lastSamples), currentPlacementStrategy)
-        getMetricPredictions(query, getShiftedSample(lastSamples), currentPlacementStrategy) // logs to stats-offline_predictions.csv
+    case s@SampleUpdate(query, sample) =>
+      // only log if any events arrived
+    if(sample._1.ioMetrics.incomingEventRate.amount > 0) {
+      logSample(sender(), sample)
+      for {
+       samplePredictions <- getMetricPredictions (query, sample, currentPlacementStrategy) // logs to stats-*_predictions.csv
+      } yield {
+        mapek.knowledge ! SampleAndPredictionsUpdate(s, samplePredictions)
+        updateOnlineModel(sample, currentPlacementStrategy)
       }
+
+    }
     /* old pull-based implementation
     case GetSamplingDataTick => mapek.knowledge ! GetOperators // response below
     case CurrentOperators(placement) =>
@@ -88,23 +92,19 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
 
   def getShiftedSample(samples: Samples): Sample = if (shiftTarget) samples.last else samples.head
 
-  def logSample(op: ActorRef, samples: Samples): Unit = {
-    // only log if any events arrived
-    if(samples.nonEmpty && samples.head._1.ioMetrics.incomingEventRate.amount > 0) {
-      val logFileString: String = op.toString().split("-").head.split("/").last
-      if (!headersInit.contains(op)) {
-        SpecialStats.log(logFileString, logFileString, sampleFileHeader)
-        headersInit = headersInit.updated(op, true)
-      }
-
-
-      if (!shiftTarget || shiftTarget && samples.size > 1) {
-        SpecialStats.log(logFileString, logFileString,
-					ExchangeablePerformanceModelMAPEK.currentPlacementStrategyToOneHot(algorithmNames, currentPlacementStrategy) + ";" +
-					DynamicCFMNames.ALL_FEATURES.map(f => getFeatureValue(samples.head, f)).mkString(";") + ";" +
-            DynamicCFMNames.ALL_TARGET_METRICS.map(m => getTargetMetricValue(getShiftedSample(samples), m)).mkString(";"))
-      }
+  def logSample(op: ActorRef, sample: Sample): Unit = {
+    val logFileString: String = op.toString().split("-").head.split("/").last
+    if (!headersInit.contains(op)) {
+      SpecialStats.log(logFileString, logFileString, sampleFileHeader)
+      headersInit = headersInit.updated(op, true)
     }
+
+    SpecialStats.log(logFileString, logFileString,
+      ExchangeablePerformanceModelMAPEK.currentPlacementStrategyToOneHot(algorithmNames, currentPlacementStrategy) + ";" +
+      DynamicCFMNames.ALL_FEATURES.map(f => getFeatureValue(sample, f)).mkString(";") + ";" +
+        DynamicCFMNames.ALL_TARGET_METRICS.map(m => getTargetMetricValue(sample, m)).mkString(";"))
+
+
   }
 
 
@@ -115,8 +115,8 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
 class ExchangeablePerformanceModelAnalyzer(mapek: ExchangeablePerformanceModelMAPEK) extends ContrastAnalyzer(mapek) {
   override def getCurrentContextConfig(cfm: CFM): Future[Config] = {
     for {
-      contextData <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, Sample]]
-    } yield cfm.asInstanceOf[DynamicCFM].getCurrentContextConfigFromSamples(contextData)
+      contextData <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
+    } yield cfm.asInstanceOf[DynamicCFM].getCurrentContextConfigFromSamples(contextData.map(e => e._1 -> e._2._1.head))
   }
 }
 
@@ -125,7 +125,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
   lazy val allPlacementAlgorithms: List[PlacementStrategy] = ConfigFactory.load()
     .getStringList("benchmark.general.algorithms").asScala.toList
     .map(PlacementStrategy.getStrategyByName)
-  lazy val queryPerformancePredictor: ActorRef = context.actorOf(Props(classOf[QueryPerformancePredictor], cluster))
+  val queryPerformancePredictor: ActorRef = context.actorOf(Props(classOf[QueryPerformancePredictor], cluster))
 
   override def receive: Receive =  {
     case ManualTransition(algorithmName) =>
@@ -154,7 +154,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
         currentPlacement: Option[Map[Query, ActorRef]] <- (mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
         publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
         publishers: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
-        contextSample <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, Sample]]
+        contextSample <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
       } yield {
         log.info("received context sample and current placement")
         val rootOperator: Query = mapek.getQueryRoot
@@ -165,15 +165,15 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
             _ <- p.initialize()(ec, cluster, Some(publisherEventRates))
             placement: Map[Query, Address] <- p.initialVirtualOperatorPlacement(rootOperator, publishers)(ec, cluster, queryDependencyMap).map(_.map(e => e._1 -> e._2.member.address))
             _ = log.info("{} virtual placement calculation complete after {}ms", p.name, System.currentTimeMillis() - s)
-            pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample), p.name)).mapTo[MetricPredictions]
+            pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample), p.name)).mapTo[EndToEndLatencyAndThroughputPrediction]
           } yield p.name -> (pred, placement)
         }).map(p => {
           log.info("received predictions \n{}", p.map(e => e._1 -> e._2._1).mkString("\n"))
           // check each requirement
           val qosFulfillingPlacements = p.filter(placement => {
             qosRequirements.forall {
-              case LatencyRequirement(operator, latency, otherwise, name) => Queries.compareHelper(latency.toMillis, operator, placement._2._1.E2E_LATENCY.amount.toMillis)
-              case f: FrequencyRequirement => Queries.compareHelper(f.getEventsPerSec, f.operator, placement._2._1.THROUGHPUT.getEventsPerSec)
+              case LatencyRequirement(operator, latency, otherwise, name) => Queries.compareHelper(latency.toMillis, operator, placement._2._1.endToEndLatency.amount.toMillis)
+              case f: FrequencyRequirement => Queries.compareHelper(f.getEventsPerSec, f.operator, placement._2._1.throughput.getEventsPerSec)
               case r: Requirement => {
                 log.warning("ignoring requirement {} since there is no prediction model for it", r)
                 true
@@ -182,8 +182,8 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
           })
 
           if(qosFulfillingPlacements.nonEmpty) {
-            val transitionTarget = if (optimizationTarget == "latency") qosFulfillingPlacements.minBy(_._2._1.E2E_LATENCY.amount)
-            else if (optimizationTarget == "throughput") qosFulfillingPlacements.minBy(_._2._1.THROUGHPUT.getEventsPerSec)
+            val transitionTarget = if (optimizationTarget == "latency") qosFulfillingPlacements.minBy(_._2._1.endToEndLatency.amount)
+            else if (optimizationTarget == "throughput") qosFulfillingPlacements.minBy(_._2._1.throughput.getEventsPerSec)
             else throw new IllegalArgumentException(s"unknown optimization target metric $optimizationTarget")
 
             log.info("found requirement-fulfilling placement strategy {}:\n{}", transitionTarget._1, transitionTarget._2._1)
@@ -219,30 +219,31 @@ class ExchangeablePerformanceModelExecutor(mapek: ExchangeablePerformanceModelMA
   }
 }
 
-class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, query: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: String)
-  extends KnowledgeComponent(mapek, query, transitionConfig, startingPlacementStrategy) {
+class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: String)
+  extends KnowledgeComponent(mapek, rootOperator, transitionConfig, startingPlacementStrategy) {
 
-  var mostRecentSamples: Map[Query, Samples] = Map()
-  val cfm: DynamicCFM = new DynamicCFM(query)
+  var mostRecentSamplesAndPredictions: Map[Query, (Samples, List[OfflineAndOnlinePredictions])] = Map()
+  val cfm: DynamicCFM = new DynamicCFM(rootOperator)
+  val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
+  val onlineWarmUpPhase: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.exchangeable-model.online-model-warmup-phase"), TimeUnit.MINUTES)
+  val minOnlineSamples: Int = onlineWarmUpPhase.div(samplingInterval).toInt
 
   override def receive: Receive = super.receive orElse {
         // received from DecentralizedMonitor
-    case m: MonitorSamples =>
-      mostRecentSamples = m.sampleMap.map(e => e._1._1 -> e._2)
-      log.debug("received context sample update, {} operators,  {} samples each", mostRecentSamples.size, mostRecentSamples.head._2.size)
-
-    case s@SampleUpdate(query, lastSamples) =>
-      mostRecentSamples.updated(query, lastSamples)
+    case s@SampleAndPredictionsUpdate(sampleUpdate: SampleUpdate, predictions: OfflineAndOnlinePredictions) =>
+      val prevSamples = mostRecentSamplesAndPredictions.getOrElse(sampleUpdate.query, (List(), List()))._1.take(minOnlineSamples)
+      val prevPredictions = mostRecentSamplesAndPredictions.getOrElse(sampleUpdate.query, (List(), List()))._2.take(minOnlineSamples)
+      mostRecentSamplesAndPredictions = mostRecentSamplesAndPredictions.updated(sampleUpdate.query, (sampleUpdate.lastSample :: prevSamples, predictions :: prevPredictions))
+      log.debug("received new sample {},\n most recent sample count: {} of {}", sampleUpdate.query, mostRecentSamplesAndPredictions(sampleUpdate.query)._1.size, minOnlineSamples)
 
     case GetCFM => sender() ! this.cfm
-    case GetContextSample => sender() ! mostRecentSamples.map(e => e._1 -> e._2.head)
+    case GetContextSample => sender() ! mostRecentSamplesAndPredictions
     case GetContextData => sender() ! Map()
     case msg => log.error(s"received unhandled msg $msg")
   }
 }
 
 object ExchangeablePerformanceModelMAPEK {
-  case class MonitorSamples(sampleMap: Map[(Query, ActorRef), Samples])
   case object GetContextSample
   def currentPlacementStrategyToOneHot(algorithmNames: Iterable[String], current: String): String = {
     algorithmNames.map {

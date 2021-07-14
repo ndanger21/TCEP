@@ -6,13 +6,13 @@ import com.typesafe.config.ConfigFactory
 import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics}
 import tcep.machinenodes.qos.BrokerQoSMonitor.{BrokerQosMetrics, GetBrokerMetrics}
 import tcep.prediction.OperatorPerformancePredictor._
-import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Throughput, Timestamp}
+import tcep.prediction.PredictionHelper.{MetricPredictions, ProcessingLatency, Throughput, Timestamp}
 
 import java.util.concurrent.TimeUnit
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.{FiniteDuration, MICROSECONDS, MILLISECONDS, NANOSECONDS, SECONDS}
-
+// unused, was intended for time series prediction
 class OperatorPerformancePredictor(operator: Option[ActorRef], brokerMonitor: ActorRef, defaultOperatorQosMetrics: Option[OperatorQoSMetrics] = None) extends Actor with ActorLogging with Timers {
 
   assert(operator.isDefined && defaultOperatorQosMetrics.isEmpty || operator.isEmpty && defaultOperatorQosMetrics.isDefined,
@@ -78,7 +78,7 @@ class OperatorPerformancePredictor(operator: Option[ActorRef], brokerMonitor: Ac
   }
 
   def featureTimeSeriesPrediction() = ???
-  def predictLatency(): EndToEndLatency = ??? //TODO
+  def predictLatency(): ProcessingLatency = ??? //TODO
   def predictThroughput(): Throughput = ??? //TODO
 
 }
@@ -106,6 +106,11 @@ object PredictionHelper {
     def metricHeader: String
   }
 
+  case class ProcessingLatency(amount: FiniteDuration) extends PerformanceMetric {
+    override def toString: String = f"${amount.toUnit(MILLISECONDS)}%2.6f"
+    def +(that: ProcessingLatency): ProcessingLatency = ProcessingLatency(this.amount + that.amount)
+    def metricHeader: String = "processing latency [ms]"
+  }
   case class EndToEndLatency(amount: FiniteDuration) extends PerformanceMetric {
     override def toString: String = f"${amount.toUnit(MILLISECONDS)}%2.3f"
     def +(that: EndToEndLatency): EndToEndLatency = EndToEndLatency(this.amount + that.amount)
@@ -129,13 +134,23 @@ object PredictionHelper {
     def +(that: Throughput): Throughput = Throughput(this.getEventsPerSec + that.getEventsPerSec, FiniteDuration(1, TimeUnit.SECONDS))
   }
 
-  case class MetricPredictions(E2E_LATENCY: EndToEndLatency, THROUGHPUT: Throughput) {
+  case class MetricPredictions(processingLatency: ProcessingLatency, throughput: Throughput) {
     def +(parentPrediction: MetricPredictions): MetricPredictions = {
       MetricPredictions(
-        E2E_LATENCY + parentPrediction.E2E_LATENCY,
-        THROUGHPUT // always keep the child output rate since we want the output at the root operator
+        processingLatency + parentPrediction.processingLatency,
+        throughput // always keep the child output rate since we want the output at the root operator
       )
     }
   }
+  case class EndToEndLatencyAndThroughputPrediction(endToEndLatency: EndToEndLatency, throughput: Throughput) {
+    def +(parentPrediction: EndToEndLatencyAndThroughputPrediction): EndToEndLatencyAndThroughputPrediction = {
+      EndToEndLatencyAndThroughputPrediction(
+        endToEndLatency + parentPrediction.endToEndLatency,
+        throughput // always keep the child output rate since we want the output at the root operator TODO could change this to be average based on parent throughput and child selectivity
+      )
+    }
+  }
+  case class OfflineAndOnlinePredictions(offline: MetricPredictions, onlineLatency: Map[String, ProcessingLatency], onlineThroughput: Map[String, Throughput])
+
 
 }

@@ -83,6 +83,16 @@ case $key in
     shift
     shift
     ;;
+    --throughputModel)
+    throughput_model="$2"
+    shift
+    shift
+    ;;
+    --latencyModel)
+    latency_model="$2"
+    shift
+    shift
+    ;;
     --default)
     DEFAULT=YES
     shift # past argument
@@ -138,6 +148,14 @@ fi
 if [ -z "$eventrate" ]; then
   eventrate="30"
 fi
+#TODO update models
+if [ -z "$throughput_model" ]; then
+  throughput_model="autosklearn_trained_pipeline_8_mininet_accident_1s_combined_samples.csv_eventRateOut.joblib"
+fi
+if [ -z "$latency_model" ]; then
+  latency_model="tpot_trained_pipeline_8_mininet_accident_1s_combined_samples.csv_processingLatencyMean.joblib"
+fi
+
 host=${u}@${machine}
 #if [[ ${controller_ip} == "localhost" ]] || [[ ${controller_ip} == "127.0.0.1" ]]; then
 #  gui_ip="20.0.0.15"
@@ -173,7 +191,8 @@ compile() {
 setup() {
   ssh $host [ ! -d ~/tcep ] && ssh $host 'mkdir ~/tcep'
   echo "checking python pip version..."
-  ssh $host "pip --version" || ssh $host -tt "sudo apt-get update && sudo apt install -y python-pip && pip install APScheduler"
+  ssh $host "pip --version" || ssh $host -tt "sudo apt-get update && sudo apt install -y python-pip swig python-pip3 && pip install APScheduler && echo 'directly installing python dependencies for prediction server' && \
+            pip3 install cmake pandas flask joblib river h2o auto-sklearn tpot Cython>=0.28.5 scikit-learn==0.24.2"
 
   setup_docker_remote $host
   echo "setting up SUMO mobility simulation"
@@ -252,8 +271,9 @@ start_gui() {
 }
 
 setup_prediction_endpoint() {
-  echo "directly installing python dependencies for prediction server"
-  ssh $host "pip3 install pandas flask joblib river h2o scikit-learn==0.24.0 scipy>=0.14.1"
+  scp ${work_dir}/prediction/${latency_model} ${host}:~/tcep/mininet-wifi/
+  scp ${work_dir}/prediction/${throughput_model} ${host}:~/tcep/mininet-wifi/
+  scp ${work_dir}/prediction/run_prediction_endpoint.py ${host}:~/tcep/mininet-wifi
 }
 
 run() {
@@ -281,9 +301,9 @@ run() {
   #ssh $host -t 'pgrep NetworkManager && echo "killing NetworkManager" && sudo pkill -f NetworkManager'
   #ssh $host -t 'sudo pkill -f tcep -9'
    ssh $host -t 'echo '\
-  ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip}''
-  #ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
-  #${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip}''
+  ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
+  ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
+  ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
 }
 
 all() {

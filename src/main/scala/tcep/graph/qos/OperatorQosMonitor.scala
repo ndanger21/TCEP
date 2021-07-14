@@ -10,7 +10,7 @@ import tcep.graph.qos.OperatorQosMonitor._
 import tcep.graph.transition.mapek.DynamicCFMNames._
 import tcep.machinenodes.qos.BrokerQoSMonitor.BandwidthUnit.{BytePerSec, KBytePerSec}
 import tcep.machinenodes.qos.BrokerQoSMonitor._
-import tcep.prediction.PredictionHelper.Throughput
+import tcep.prediction.PredictionHelper.{OfflineAndOnlinePredictions, Throughput}
 import tcep.utils.SizeEstimator
 
 import java.util.concurrent.TimeUnit
@@ -89,7 +89,7 @@ class OperatorQosMonitor(query: Query, operator: ActorRef, monitorCentral: Actor
       val currentValues = getCurrentMetrics
       operator ! CPULoadUpdate(b.cpuLoad)
       lastSamples = List(Some((currentValues, b)),  lastSamples.headOption).flatten
-      monitorCentral ! SampleUpdate(query, lastSamples)
+      monitorCentral ! SampleUpdate(query, lastSamples.head)
       log.debug("received broker samples, last sample is now {}", lastSamples.head)
 
     case GetIOMetrics =>
@@ -111,7 +111,8 @@ class OperatorQosMonitor(query: Query, operator: ActorRef, monitorCentral: Actor
 }
 
 object OperatorQosMonitor {
-  case class SampleUpdate(query: Query, lastSamples: Samples)
+  case class SampleUpdate(query: Query, lastSample: Sample)
+  case class SampleAndPredictionsUpdate(sampleUpdate: SampleUpdate, predictions: OfflineAndOnlinePredictions)
   case object GetSamples
   type Sample = (OperatorQoSMetrics, BrokerQosMetrics)
   type Samples = List[Sample]
@@ -136,11 +137,13 @@ object OperatorQosMonitor {
       }
     } else throw new IllegalArgumentException(s"can't retrieve feature value $feature, must be one of ${ALL_FEATURES}")
   }
-  def getTargetMetricValue(sample: Sample, metric: String): AnyVal = {
+  def getTargetMetricValue(sample: Sample, metric: String): Double = {
     metric match {
+      case PROCESSING_LATENCY_MEAN_MS => sample._1.processingLatency.mean
       case EVENTRATE_OUT => sample._1.ioMetrics.outgoingEventRate.amount
       case END_TO_END_LATENCY_MEAN_MS => sample._1.endToEndLatency.mean
       case END_TO_END_LATENCY_STD_MS => sample._1.endToEndLatency.stdDev
+      case _ => throw new IllegalArgumentException(s"can't retrieve metric value $metric, must be one of ${ALL_TARGET_METRICS}")
     }
 
   }

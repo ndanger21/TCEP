@@ -8,7 +8,7 @@ import tcep.data.Queries.{Query, Query2}
 import tcep.dsl.Dsl.{query1ToQuery1Helper, query2ToQuery2Helper, stream}
 import tcep.machinenodes.qos.BrokerQoSMonitor.{BrokerQosMetrics, GetBrokerMetrics}
 import tcep.placement.MobilityTolerantAlgorithm
-import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Throughput}
+import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, ProcessingLatency, Throughput}
 import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
 import tcep.{MultiJVMTestSetup, TCEPMultiNodeConfig}
 
@@ -35,15 +35,21 @@ abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
       runOn(client) {
         val baseEventRates = Map(pNames(0) -> Throughput(5, 1 second), pNames(1) -> Throughput(8, 1 second))
         val perOperatorPredictions = Map(
-          streamA -> MetricPredictions(EndToEndLatency(5 milliseconds), Throughput(5, 1 second)),
-          streamB -> MetricPredictions(EndToEndLatency(1 seconds), Throughput(5, 1 second)),
-          conjunction -> MetricPredictions(EndToEndLatency(8 milliseconds), Throughput(10, 1 second)),
-          filter -> MetricPredictions(EndToEndLatency(5 milliseconds), Throughput(10, 1 second))
+          streamA -> MetricPredictions(ProcessingLatency(5 milliseconds), Throughput(5, 1 second)),
+          streamB -> MetricPredictions(ProcessingLatency(1 seconds), Throughput(5, 1 second)),
+          conjunction -> MetricPredictions(ProcessingLatency(8 milliseconds), Throughput(10, 1 second)),
+          filter -> MetricPredictions(ProcessingLatency(5 milliseconds), Throughput(10, 1 second))
+        )
+        val networkLatencies = Map(
+          streamA -> (100 milliseconds),
+          streamB -> (200 milliseconds),
+          conjunction -> (300 milliseconds),
+          filter -> (50 milliseconds)
         )
         val queryPredictor: TestActorRef[QueryPerformancePredictor] = TestActorRef.create(system, Props(classOf[QueryPerformancePredictor], cluster))
-        val perQueryPredictions = queryPredictor.underlyingActor.combinePerOperatorPredictions(filter, perOperatorPredictions)
-        assert(perQueryPredictions.E2E_LATENCY == EndToEndLatency(1013 milliseconds), "predicted end-to-end latency must equal longest path among all parents")
-        assert(perQueryPredictions.THROUGHPUT == Throughput(10, 1 second), "query throughput must equal root operator throughput")
+        val perQueryPredictions = queryPredictor.underlyingActor.combinePerOperatorPredictions(filter, perOperatorPredictions, networkLatencies)
+        assert(perQueryPredictions.endToEndLatency == EndToEndLatency(1563 milliseconds), "predicted end-to-end latency must equal longest path among all parents")
+        assert(perQueryPredictions.throughput == Throughput(10, 1 second), "query throughput must equal root operator throughput")
       }
       testConductor.enter("test passed")
     }
@@ -67,8 +73,8 @@ abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
         val res = Await.result(f, remaining)
         //queryPerformancePredictor ! GetPredictionForPlacement(filter, None, initialPlacement, baseEventRates)
         //val res = expectMsgClass(classOf[MetricPredictions])
-        assert(res.E2E_LATENCY == EndToEndLatency(3 milliseconds))
-        assert(res.THROUGHPUT == Throughput(1, 1 second))
+        assert(res.processingLatency == ProcessingLatency(3 milliseconds))
+        assert(res.throughput == Throughput(1, 1 second))
         println(s"initial placement per-query prediction: $res")
       }
       testConductor.enter("test passed")

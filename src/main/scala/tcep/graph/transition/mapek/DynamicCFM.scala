@@ -170,8 +170,13 @@ object DynamicCFMNames {
 
 
   val ALL_TARGET_METRICS = List(
-    END_TO_END_LATENCY_MEAN_MS,
+    END_TO_END_LATENCY_MEAN_MS, // actually not a target metric anymore, but keep this to not break collected data format vs new samples
     //END_TO_END_LATENCY_STD_MS,
+    EVENTRATE_OUT
+  )
+
+  val NEW_TARGET_METRICS = List(
+    PROCESSING_LATENCY_MEAN_MS,
     EVENTRATE_OUT
   )
 

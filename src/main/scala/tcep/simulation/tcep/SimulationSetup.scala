@@ -51,7 +51,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   // publisher naming convention: P:hostname:port, e.g. "P:p1:2502", or "P:localhost:2501" (for local testing)
   var publishers: Map[String, ActorRef] = Map.empty[String, ActorRef]
   implicit var publisherEventRates: Map[String, Throughput] = Map()
-  val publisherPorts: Set[Int] = if(Mode.YAHOO_STREAMING == mode || queryString == "LinearRoad") speedPublisherNodePorts.toSet  else densityPublisherNodePort :: speedPublisherNodePorts.toList toSet
+  val publisherPorts: Set[Int] = if(queryString == "AccidentDetection") densityPublisherNodePort :: speedPublisherNodePorts.toList toSet else speedPublisherNodePorts.toSet
   var consumers: Set[ActorRef] = Set()
   var taskManagerActorRefs: Map[Member, ActorRef] = Map()
   var coordinatesEstablished: Set[Address] = Set()
@@ -158,10 +158,14 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
         Seq(pubVector.sortBy(_.publisherName))
 
       case _ =>
-        val dense = 0 to nSections-1 map (section => {
-          this.singlePublisherNodeDensityStream(section)
-        })
-        Seq(this.speedStreams(streamOperatorCount), dense.toVector)
+        if(queryString == "AccidentDetection") {
+          val dense = 0 to nSections - 1 map (section => {
+            this.singlePublisherNodeDensityStream(section)
+          })
+          Seq(this.speedStreams(streamOperatorCount), dense.toVector)
+        } else {
+          Seq(this.speedStreams(streamOperatorCount))
+        }
     }
     log.info(s"Streams are: ${streams}")
     streams

@@ -13,7 +13,6 @@ import re
 import subprocess
 import sys
 import time
-
 from mininet.link import TCULink
 from mininet.log import setLogLevel, info
 from mininet.node import RemoteController
@@ -54,6 +53,14 @@ def topology(enable_tcep=True):
         rsu = net.addHost('rsu%i' % (i+1), position='0.0,0.0,0.0')
         rsus.append(rsu)
 
+    prediction_server = None
+    if mapek == "ExchangeablePerformanceModel":
+        prediction_server = net.addHost('h1', ip='20.0.0.250')
+        #some_cmd > some_file 2>&1 &
+        prediction_server.cmd("python3 run_prediction_endpoint.py -l %s -t %s > ../logs/predictionServerConsole.log 2>&1 &" %
+                              (latency_model, throughput_model))
+        info("started prediction endpoint on 20.0.0.250")
+
     c1 = net.addController(name='onos', controller=RemoteController, ip=controller_ip, port=6653)
     #c1 = net.addController()
     # manually stop network-manager since it interferes with wpa_cli association
@@ -80,6 +87,8 @@ def topology(enable_tcep=True):
 
     net.addLink(aps[10], aps[4], cls=TCULink, delay=latency)
     net.addLink(aps[4], aps[11], cls=TCULink, delay=latency)
+    if prediction_server is not None:
+        net.addLink(aps[4], prediction_server, cls=TCULink)
 
     for i in range(0, len(rsus)):
         info('connecting %s to %s\n' % (rsus[i], aps[i]))
@@ -214,11 +223,6 @@ def topology(enable_tcep=True):
                     '-cp %s "tcep.machinenodes.ConsumerApp" %s > /dev/null &'
                     % (COMMON_CONFIG, LOG_PATH, LOG_PATH, 8484 + 200, 8484 + 200, JARFILE, ARGS))
 
-        if mapek == "ExchangeablePerformanceModel":
-            #TODO update model
-            sim_rsu.cmd("python3 run_prediction_endpoint.py "
-                        "-l autosklearn_trained_pipeline_8_yahoo_geni_5s_combined_samples.csv_processingLatencyMean.joblib "
-                        "-t autosklearn_trained_pipeline_8_yahoo_geni_5s_combined_samples.csv_eventRateOut.joblib &")
 
     #info("*** Running CLI\n")
     #CLI(net)
@@ -253,6 +257,8 @@ if __name__ == '__main__':
     transitionExecutionMode = int(sys.argv[13]) if len(sys.argv) > 13 else 1
     eventrate = sys.argv[14] if len(sys.argv) > 14 else "100"
     gui_ip = sys.argv[15] if len(sys.argv) > 15 else "172.30.0.254"
+    latency_model = sys.argv[16] if len(sys.argv) > 16 else "tpot_trained_pipeline_8_mininet_accident_1s_combined_samples.csv_processingLatencyMean.joblib"
+    throughput_model = sys.argv[17] if len(sys.argv) > 17 else "autosklearn_trained_pipeline_8_mininet_accident_1s_combined_samples.csv_eventRateOut.joblib"
     homedir = '/home/' + user
     JARFILE = homedir + '/tcep/tcep_2.12-0.0.1-SNAPSHOT-one-jar.jar'
     with open(homedir + "/tcep/application.conf") as f:

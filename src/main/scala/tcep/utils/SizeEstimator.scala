@@ -85,7 +85,7 @@ object SizeEstimator {
 
         if(est >= 5000) {
           val timetaken = (System.nanoTime() - s) / 1e6
-          log.warn(s"took ${timetaken}ms estimating size of object $obj, result may not be reliable: $est")
+          log.debug(s"took ${timetaken}ms estimating size of object $obj, result may not be reliable: $est")
         }
         est
     }

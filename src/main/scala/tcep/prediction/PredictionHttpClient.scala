@@ -12,8 +12,8 @@ import com.typesafe.config.ConfigFactory
 import scalaj.http.HttpStatusException
 import tcep.data.Queries.Query
 import tcep.graph.qos.OperatorQosMonitor.{Sample, getFeatureValue, getTargetMetricValue}
-import tcep.graph.transition.mapek.DynamicCFMNames
-import tcep.prediction.PredictionHelper.{EndToEndLatency, MetricPredictions, Throughput}
+import tcep.graph.transition.mapek.DynamicCFMNames._
+import tcep.prediction.PredictionHelper.{MetricPredictions, OfflineAndOnlinePredictions, ProcessingLatency, Throughput}
 import tcep.prediction.QueryPerformancePredictor.PredictionResponse
 import tcep.utils.SpecialStats
 
@@ -35,8 +35,8 @@ trait PredictionHttpClient extends Actor with ActorLogging {
     val sampleMap = algorithmNames.map {
       case name if name == placementStr => name -> 1
       case n => n -> 0
-    } ++ DynamicCFMNames.ALL_FEATURES.map(f => f -> getFeatureValue(sample, f)).toMap ++
-      DynamicCFMNames.ALL_TARGET_METRICS.map(m => m -> getTargetMetricValue(sample, m))
+    } ++ ALL_FEATURES.map(f => f -> getFeatureValue(sample, f)).toMap ++
+      ALL_TARGET_METRICS.map(m => m -> getTargetMetricValue(sample, m))
     val out = new StringWriter()
     jsonMapper.writeValue(out, sampleMap)
     val sampleJson = out.toString
@@ -64,7 +64,7 @@ trait PredictionHttpClient extends Actor with ActorLogging {
     }
   }
 
-  def getMetricPredictions(operator: Query, sample: Sample, placementStr: String)(implicit ec: ExecutionContext): Future[MetricPredictions] = {
+  def getMetricPredictions(operator: Query, sample: Sample, placementStr: String)(implicit ec: ExecutionContext): Future[OfflineAndOnlinePredictions] = {
     val request = sendRequestToPredictionEndpoint(predictionEndPointAddress.withPath(Path("/predict")), getSampleAsJsonStr(sample, placementStr))
     request.onComplete {
       case Failure(exception) => log.error(exception, "failed to complete prediction request for {}", operator)
@@ -76,20 +76,24 @@ trait PredictionHttpClient extends Actor with ActorLogging {
         entity.dataBytes.runFold(ByteString(""))(_ ++ _).map(bytes => bytes.toArray)(ec)
           .map(bytes => {
             val predictions = jsonMapper.readValue(bytes, classOf[PredictionResponse])
-            val predictedLatency = EndToEndLatency(FiniteDuration(predictions.offline("latency").toLong, TimeUnit.MILLISECONDS))
+            val predictedLatency = ProcessingLatency(FiniteDuration((predictions.offline("latency") * 1e6).toLong, TimeUnit.NANOSECONDS))
             val predictedThroughput = Throughput(predictions.offline("throughput"), samplingInterval)
             SpecialStats.log(this.toString, "offline_predictions", s"latency;truth;${sample._1.processingLatency.mean};predicted;${predictedLatency};throughput;truth;${sample._1.ioMetrics.outgoingEventRate};predicted;$predictedThroughput; for operator $operator")
-            val onlinePredictionsLatency = predictions.online.get("processingLatencyMean")
-            val onlinePredictionsThroughput = predictions.online.get("eventRateOut")
+            val onlinePredictionsLatency = predictions.online.get(PROCESSING_LATENCY_MEAN_MS)
+            val onlinePredictionsThroughput = predictions.online.get(EVENTRATE_OUT)
             //SpecialStats.log(this.toString, "predictions_raw", s"${predictions.online}")
             if(onlinePredictionsLatency.isDefined) {
-              SpecialStats.log(this.toString, "online_predictions_latency", s"latency;truth;${sample._1.processingLatency.mean};predictions;${onlinePredictionsLatency.get.mkString(";")}")
+              SpecialStats.log(this.toString, "online_predictions_latency", s"latency;truth;${sample._1.processingLatency.mean};predictions;${onlinePredictionsLatency.get.map(e => s"${e._1};${e._2}").mkString(";")}")
             }
             if(onlinePredictionsThroughput.isDefined) {
-              SpecialStats.log(this.toString, "online_predictions_throughput", s"throughput;truth;${sample._1.ioMetrics.outgoingEventRate};predictions;${onlinePredictionsThroughput.get.mkString(";")}")
+              SpecialStats.log(this.toString, "online_predictions_throughput", s"throughput;truth;${sample._1.ioMetrics.outgoingEventRate};predictions;${onlinePredictionsThroughput.get.map(e => s"${e._1};${e._2}").mkString(";")}")
             }
+            OfflineAndOnlinePredictions(
+              offline = MetricPredictions(predictedLatency, predictedThroughput),
+              onlineLatency = onlinePredictionsLatency.get.map(l => l._1 -> ProcessingLatency(FiniteDuration((l._2 * 1e6).toLong, TimeUnit.NANOSECONDS))),
+              onlineThroughput = onlinePredictionsThroughput.get.map(t => t._1 -> Throughput(t._2, samplingInterval))
+            )
 
-            MetricPredictions(predictedLatency, predictedThroughput)
           })(ec)
       case response@HttpResponse(code, _, _, _) =>
         response.discardEntityBytes(context.system)

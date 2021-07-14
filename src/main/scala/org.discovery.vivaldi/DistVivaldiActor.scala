@@ -107,7 +107,7 @@ class DistVivaldiActor extends ClusterActor with ActorLogging {
                 delivery <- TCEPUtils.guaranteedDelivery(context, simulator, VivaldiCoordinatesEstablished()).mapTo[ACK]
               } yield coordsInitialized = true
             }
-            val vivaldiDistance = DistVivaldiActor.localPos.coordinates.distance(pong.receiverPosition.coordinates)
+            //val vivaldiDistance = DistVivaldiActor.localPos.coordinates.distance(pong.receiverPosition.coordinates)
             //SpecialStats.log(s"${this.self}", "DistVivaldi", s"updated coordinates to ${DistVivaldiActor.localPos.coordinates}" +
             //  s";${s.path.address};: pos: ${pong.receiverPosition.coordinates};latency;${latency}ms;vivaldi distance;${vivaldiDistance};absolute error;${math.abs(vivaldiDistance - latency)};relative error;${(vivaldiDistance - latency) / latency}")
           }

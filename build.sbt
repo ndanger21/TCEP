@@ -3,7 +3,7 @@ name := "tcep"
 version := "0.0.1-SNAPSHOT"
 
 scalaVersion := "2.12.1"
-val akkaVersion = "2.6.8"
+val akkaVersion = "2.6.8" // 2.6.8, newer version causes problem with AkkaHttp;
 val akkaHttpVersion = "10.2.4"
 libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-cluster" % akkaVersion,
