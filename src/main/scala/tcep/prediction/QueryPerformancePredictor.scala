@@ -17,15 +17,15 @@ import tcep.prediction.PredictionHelper._
 import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
 import tcep.utils.{SpecialStats, TCEPUtils}
 
-import java.util.concurrent.{Executors, TimeUnit}
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
 class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
   implicit val askTimeout: Timeout = Timeout(FiniteDuration(ConfigFactory.load().getInt("constants.default-request-timeout"), TimeUnit.SECONDS))
-  val blockingIoDispatcher: ExecutionContext = cluster.system.dispatchers.lookup("blocking-io-dispatcher")
-  val singleThreadDispatcher: ExecutionContext = scala.concurrent.ExecutionContext.fromExecutor(Executors.newSingleThreadExecutor())
+  lazy val predictionDispatcher: ExecutionContext = context.system.dispatchers.lookup("prediction-dispatcher")
+  //val singleThreadDispatcher: ExecutionContext = scala.concurrent.ExecutionContext.fromExecutor(Executors.newSingleThreadExecutor())
   //var leadingOnlineModels: Map[String, Option[String]] = ALL_TARGET_METRICS.map(_ -> None).toMap // make this per-operator?
   val useOnlinePredictions: Boolean = ConfigFactory.load().getBoolean("constants.mapek.exchangeable-model.use-online-model-weighting")
   val onlineWarmUpPhase: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.exchangeable-model.online-model-warmup-phase"), TimeUnit.MINUTES)
@@ -36,8 +36,8 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
     case pr@GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates, lastContextFeatureSamplesAndPredictions, newPlacementAlgorithmStr) =>
       log.info("received query performance prediction request for placement {}", pr.newPlacementAlgorithmStr)
       val sampleSizes = lastContextFeatureSamplesAndPredictions.getOrElse(Map()).map(e => e._1 -> e._2._1.size)
-      log.info("last samples sizes: \n{}", sampleSizes.mkString("\n"))
-      implicit val ec = blockingIoDispatcher
+      log.debug("last samples sizes: \n{}", sampleSizes.mkString("\n"))
+      implicit val ec = predictionDispatcher
       val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
       val publishers = TCEPUtils.getPublisherHosts(cluster)
 
@@ -109,16 +109,20 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
       }).map(_.toMap) }
 
       val perQueryPredictions: Future[EndToEndLatencyAndThroughputPrediction] = currentSample flatMap ( s => {
-        log.debug("retrieving predictions from endpoint {}", predictionEndPointAddress)
-        val pred = getPerOperatorPredictions(rootOperator, s, publisherEventRates, newPlacementAlgorithmStr) // avoid running prediction requests in parallel since online models are updated with them as well
-        pred.onComplete {
-          case Success(value) => log.debug("per-operator predictions are \n{}", value.mkString("\n"))
+        val currentOperatorPred: Future[Map[Query, OfflineAndOnlinePredictions]] =
+          if(lastContextFeatureSamplesAndPredictions.isDefined) Future(lastContextFeatureSamplesAndPredictions.get.map(s => s._1 -> s._2._2.head)) // use prediction previously obtained by monitor
+          else {
+            log.warning("no sample predictions supplied, retrieving predictions from endpoint {}", predictionEndPointAddress)
+            getPerOperatorPredictions(rootOperator, s, publisherEventRates, newPlacementAlgorithmStr) // avoid running prediction requests in parallel since online models are updated with them as well
+          }
+        currentOperatorPred.onComplete {
+          case Success(value) => log.debug("per-operator predictions are (count: {} of {} \n{}", value.size, Queries.getOperators(rootOperator).size, value.mkString("\n"))
           case Failure(exception) => log.error(exception, s"failed to retrieve predictions from endpoint $predictionEndPointAddress")
         }
-        pred
-      }) flatMap { perOperatorPredictions =>
-        val usedOperatorPredictions = perOperatorPredictions.map(p => p._1 -> {
-          log.info("lastSamples min size: {} vs minOnlineSamples {}", sampleSizes.minBy(_._2), minOnlineSamples)
+        currentOperatorPred
+      }) flatMap { currentOperatorPredictions =>
+        val usedOperatorPredictions = currentOperatorPredictions.map(p => p._1 -> {
+          log.debug("lastSamples min size: {} vs minOnlineSamples {}", sampleSizes.minBy(_._2)._2, minOnlineSamples)
           if(lastContextFeatureSamplesAndPredictions.isDefined && sampleSizes.minBy(_._2)._2 >= minOnlineSamples) {
             val opLastNSamples = lastContextFeatureSamplesAndPredictions.get(p._1)._1.take(minOnlineSamples)
             val opLastNPred = lastContextFeatureSamplesAndPredictions.get(p._1)._2.take(minOnlineSamples)
@@ -144,7 +148,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
       }
       perQueryPredictions.onComplete {
         case Failure(exception) => log.error(exception, s"failed to calculate per-query prediction for $newPlacementAlgorithmStr")
-        case Success(value) => log.info("per-query performance prediction for {} is {}", newPlacementAlgorithmStr, value)
+        case Success(value) => log.debug("per-query performance prediction for {} is {}", newPlacementAlgorithmStr, value)
       }
       pipe(perQueryPredictions) to sender()
 
@@ -153,14 +157,14 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
 
 
   /**
-    * traverses the query tree from publishers towards root and predicts metrics for each operator. Predicted Throughput of parent serves as input event rate of child
+    * traverses the query tree from publishers towards root and predicts metrics for each operator.
     * @param rootOperator root operator of the query
     * @param operatorSampleMap current values of context features
     * @param publisherEventRates base event rates of all publishers
     * @return metric predictions for each operator (currently throughput and end-to-end latency)
     */
   def getPerOperatorPredictions(rootOperator: Query, operatorSampleMap: Map[Query, Sample], publisherEventRates: Map[String, Throughput], placementStr: String): Future[Map[Query, OfflineAndOnlinePredictions]] = {
-    implicit val ec = singleThreadDispatcher
+    implicit val ec = predictionDispatcher
 
     // start predictions at publishers
     def getPerOperatorPredictionsRec(curOp: Query): Future[Map[Query, OfflineAndOnlinePredictions]] = {
@@ -235,7 +239,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
     */
   def weightedAveragePrediction(lastNSamples: Samples, lastNPredictions: List[OfflineAndOnlinePredictions], currentPrediction: OfflineAndOnlinePredictions): MetricPredictions = {
     val start = System.nanoTime()
-    log.info("lastNSamples {} lastNPredictions {} minOnlineSamples {}", lastNSamples.size, lastNPredictions.size, minOnlineSamples)
+    log.debug("lastNSamples {} lastNPredictions {} minOnlineSamples {}", lastNSamples.size, lastNPredictions.size, minOnlineSamples)
     assert(lastNSamples.size == lastNPredictions.size && lastNSamples.size == minOnlineSamples,
       s"can calculate weighted average only with at least $minOnlineSamples samples and predictions, currently: ${lastNSamples.size} and ${lastNPredictions.size}")
     val metricPredictions = NEW_TARGET_METRICS.map(m => m -> {

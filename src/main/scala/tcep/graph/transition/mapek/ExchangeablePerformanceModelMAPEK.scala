@@ -53,6 +53,7 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
   val sampleFileHeader: String = algorithmNames.mkString(";") + ";" + DynamicCFMNames.ALL_FEATURES.mkString(";") + ";" + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
   val transitionsEnabled: Boolean = ConfigFactory.load().getBoolean("constants.mapek.transitions-enabled") // mapek planner enabled with prediction endpoint interaction
   val transitionTesting: Boolean = ConfigFactory.load().getBoolean("constants.transition-testing")
+  lazy val predictionDispatcher: ExecutionContext = context.system.dispatchers.lookup("prediction-dispatcher")
 
 
   override def preStart(): Unit = {
@@ -65,10 +66,10 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
     if(sample._1.ioMetrics.incomingEventRate.amount > 0) {
       logSample(sender(), sample)
       for {
-       samplePredictions <- getMetricPredictions (query, sample, currentPlacementStrategy) // logs to stats-*_predictions.csv
+        samplePredictions <- getMetricPredictions (query, sample, currentPlacementStrategy)(predictionDispatcher) // logs to stats-*_predictions.csv
       } yield {
         mapek.knowledge ! SampleAndPredictionsUpdate(s, samplePredictions)
-        updateOnlineModel(sample, currentPlacementStrategy)
+        updateOnlineModel(sample, currentPlacementStrategy)(predictionDispatcher)
       }
 
     }
@@ -125,9 +126,12 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
   lazy val allPlacementAlgorithms: List[PlacementStrategy] = ConfigFactory.load()
     .getStringList("benchmark.general.algorithms").asScala.toList
     .map(PlacementStrategy.getStrategyByName)
-  val queryPerformancePredictor: ActorRef = context.actorOf(Props(classOf[QueryPerformancePredictor], cluster))
+  val queryPerformancePredictor: ActorRef = context.actorOf(Props(classOf[QueryPerformancePredictor], cluster), "queryPerformancePredictor")
+  val transitionsEnabled: Boolean = ConfigFactory.load().getBoolean("constants.mapek.transitions-enabled")
+  val transitionTesting: Boolean = ConfigFactory.load().getBoolean("constants.transition-testing")
 
   override def receive: Receive =  {
+
     case ManualTransition(algorithmName) =>
       log.info("received ManualTransition request to {}", algorithmName)
       val s = System.currentTimeMillis()
@@ -149,49 +153,51 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
       }
 
     case RunPlanner(cfm: CFM, contextConfig: Config, currentLatency: Double, qosRequirements: Set[Requirement]) =>
-      log.info("received RunPlanner with requirements {}", qosRequirements)
-      for {
-        currentPlacement: Option[Map[Query, ActorRef]] <- (mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
-        publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
-        publishers: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
-        contextSample <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
-      } yield {
-        log.info("received context sample and current placement")
-        val rootOperator: Query = mapek.getQueryRoot
-        val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
-        Future.traverse(allPlacementAlgorithms)(p => {
-          val s = System.currentTimeMillis()
-          for {
-            _ <- p.initialize()(ec, cluster, Some(publisherEventRates))
-            placement: Map[Query, Address] <- p.initialVirtualOperatorPlacement(rootOperator, publishers)(ec, cluster, queryDependencyMap).map(_.map(e => e._1 -> e._2.member.address))
-            _ = log.info("{} virtual placement calculation complete after {}ms", p.name, System.currentTimeMillis() - s)
-            pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample), p.name)).mapTo[EndToEndLatencyAndThroughputPrediction]
-          } yield p.name -> (pred, placement)
-        }).map(p => {
-          log.info("received predictions \n{}", p.map(e => e._1 -> e._2._1).mkString("\n"))
-          // check each requirement
-          val qosFulfillingPlacements = p.filter(placement => {
-            qosRequirements.forall {
-              case LatencyRequirement(operator, latency, otherwise, name) => Queries.compareHelper(latency.toMillis, operator, placement._2._1.endToEndLatency.amount.toMillis)
-              case f: FrequencyRequirement => Queries.compareHelper(f.getEventsPerSec, f.operator, placement._2._1.throughput.getEventsPerSec)
-              case r: Requirement => {
-                log.warning("ignoring requirement {} since there is no prediction model for it", r)
-                true
+      log.info("received RunPlanner with requirements {}, transitions enabled: {}, transitionsTesting:", qosRequirements, transitionsEnabled, transitionTesting)
+      if(transitionsEnabled && !transitionTesting) {
+        for {
+          currentPlacement: Option[Map[Query, ActorRef]] <- (mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
+          publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
+          publishers: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
+          contextSample <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
+        } yield {
+          log.info("received context sample and current placement")
+          val rootOperator: Query = mapek.getQueryRoot
+          val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
+          Future.traverse(allPlacementAlgorithms)(p => {
+            val s = System.currentTimeMillis()
+            for {
+              _ <- p.initialize()(ec, cluster, Some(publisherEventRates))
+              placement: Map[Query, Address] <- p.initialVirtualOperatorPlacement(rootOperator, publishers)(ec, cluster, queryDependencyMap).map(_.map(e => e._1 -> e._2.member.address))
+              _ = log.info("{} virtual placement calculation complete after {}ms", p.name, System.currentTimeMillis() - s)
+              pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample), p.name)).mapTo[EndToEndLatencyAndThroughputPrediction]
+            } yield p.name -> (pred, placement)
+          }).map(p => {
+            log.info("received predictions \n{}", p.map(e => e._1 -> e._2._1).mkString("\n"))
+            // check each requirement
+            val qosFulfillingPlacements = p.filter(placement => {
+              qosRequirements.forall {
+                case LatencyRequirement(operator, latency, otherwise, name) => Queries.compareHelper(latency.toMillis, operator, placement._2._1.endToEndLatency.amount.toMillis)
+                case f: FrequencyRequirement => Queries.compareHelper(f.getEventsPerSec, f.operator, placement._2._1.throughput.getEventsPerSec)
+                case r: Requirement => {
+                  log.warning("ignoring requirement {} since there is no prediction model for it", r)
+                  true
+                }
               }
+            })
+
+            if (qosFulfillingPlacements.nonEmpty) {
+              val transitionTarget = if (optimizationTarget == "latency") qosFulfillingPlacements.minBy(_._2._1.endToEndLatency.amount)
+              else if (optimizationTarget == "throughput") qosFulfillingPlacements.minBy(_._2._1.throughput.getEventsPerSec)
+              else throw new IllegalArgumentException(s"unknown optimization target metric $optimizationTarget")
+
+              log.info("found requirement-fulfilling placement strategy {}:\n{}", transitionTarget._1, transitionTarget._2._1)
+              mapek.executor ! ExecuteTransitionWithPlacement(transitionTarget._1, transitionTarget._2._2)
+            } else {
+              log.error("no placement strategy with sufficient predicted performance for the following requirements could be found: \n{}\n placement predictions were \n{}", qosRequirements.mkString("\n"), p.map(e => e._2._1).mkString("\n"))
             }
           })
-
-          if(qosFulfillingPlacements.nonEmpty) {
-            val transitionTarget = if (optimizationTarget == "latency") qosFulfillingPlacements.minBy(_._2._1.endToEndLatency.amount)
-            else if (optimizationTarget == "throughput") qosFulfillingPlacements.minBy(_._2._1.throughput.getEventsPerSec)
-            else throw new IllegalArgumentException(s"unknown optimization target metric $optimizationTarget")
-
-            log.info("found requirement-fulfilling placement strategy {}:\n{}", transitionTarget._1, transitionTarget._2._1)
-            mapek.executor ! ExecuteTransitionWithPlacement(transitionTarget._1, transitionTarget._2._2)
-          } else {
-            log.error("no placement strategy with sufficient predicted performance for the following requirements could be found: \n{}\n placement predictions were \n{}", qosRequirements.mkString("\n"), p.map(e => e._2._1).mkString("\n"))
-          }
-        })
+        }
       }
 
     case msg => log.error(s"received unhandled msg $msg")

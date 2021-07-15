@@ -244,7 +244,7 @@ publish_no_build() {
     printf "\nPulling image from registry\n"
     ssh -T -p $port $user@$manager "docker pull $registry_user/$tcep_image"
     ssh -T -p $port $user@$manager "docker pull $registry_user/$gui_image"
-    ssh -T -p $port $user@$manager "docker pull $registry_user/tcep-prediction-endpoint"
+    ssh -T -p $port $user@$manager "docker pull $registry_user/tcep-prediction-endpoint:latest"
 
     # stop already existing services
     #ssh $user@$manager 'docker service rm $(docker service ls -q)'

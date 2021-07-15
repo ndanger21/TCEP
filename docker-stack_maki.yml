@@ -180,7 +180,7 @@ services:
               - spread: node.hostname
     privileged: true
 
-  predictionEndpoint:
+  predictionendpoint:
     image: nieda2018/tcep-prediction-endpoint
     volumes:
       - $HOME/logs:/app/logs

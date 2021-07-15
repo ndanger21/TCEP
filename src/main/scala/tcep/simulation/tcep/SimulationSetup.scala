@@ -463,7 +463,8 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       val repetitions: Double = (totalDuration.div(requirementChangeDelay)) / allAlgorithms.size
       for (repeat <- 0 until repetitions.toInt) {
         allAlgorithms.foreach(a => {
-          val t = requirementChangeDelay.mul(mult)
+          val t = if(repeat == 0 && a == allAlgorithms.head) FiniteDuration(1, TimeUnit.MINUTES).plus(requirementChangeDelay)
+          else requirementChangeDelay.mul(mult)
           context.system.scheduler.scheduleOnce(t)(explicitlyChangeAlgorithmTask(i, a))
           mult += 1
           log.info(s"scheduling manual algorithm change to $a after $t ")

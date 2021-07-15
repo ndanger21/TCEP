@@ -6,9 +6,13 @@ import akka.cluster.Cluster
 import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
+import tcep.data.Queries
 import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.transition.MAPEK.{GetAverageLatency, GetPlacementStrategyName, GetTransitionStatus, IsDeploymentComplete}
+import tcep.graph.qos.OperatorQosMonitor.Samples
+import tcep.graph.transition.MAPEK._
+import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK
+import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK.GetContextSample
 import tcep.graph.transition.mapek.contrast.CFM
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData}
 import tcep.graph.transition.mapek.contrast.FmNames._
@@ -17,7 +21,9 @@ import tcep.graph.transition.mapek.learnon.LearnOnMessages.GetLearnOnLogData
 import tcep.graph.transition.mapek.learnon.LightweightMessages.GetLightweightLogData
 import tcep.graph.transition.mapek.learnon.ModelRLMessages.GetModelRLLogData
 import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
-import tcep.prediction.PredictionHelper.Throughput
+import tcep.prediction.PredictionHelper.{EndToEndLatencyAndThroughputPrediction, OfflineAndOnlinePredictions, Throughput}
+import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
+import tcep.utils.TCEPUtils
 
 import java.io.{File, PrintStream}
 import scala.collection.mutable
@@ -52,6 +58,7 @@ class SPLCDataCollectionSimulation(
 
   val learningModel = if(mapekType == "LearnOn") ConfigFactory.load().getString("constants.mapek.learning-model").toLowerCase else ""
   var cfm: Option[CFM] = None
+  var querySize: Option[Int] = None
 
   def splcHeader: String = (cfmFeatures ++ fixedCFMAttributes ++ variableCFMAttributes ++ metricElements).mkString(";")
   /*def logHeader: String = s"Time \t Algorithm" +
@@ -86,6 +93,14 @@ class SPLCDataCollectionSimulation(
         s"\t eventPublishRate \t eventArrivalRate " +
         s"\t TransitionStatus" +
         s"\t CurrentQVals \t QTableUpdateTime "
+    } else if(this.mapekType == "ExchangeablePerformanceModel") {
+      s"Time\tAlgorithm" +
+        s"\tlatency" +
+        s"\tcpuUsage" +
+        s"\teventArrivalRate" +
+        s"\tTransitionStatus" +
+        s"\tQueryEndToEndLatencyPrediction" +
+        s"\tQueryThroughputPrediction"
     } else {
       s"Time \t Algorithm" +
         s"\t latency" +
@@ -99,6 +114,7 @@ class SPLCDataCollectionSimulation(
   override def startSimulationLog(algoName: String, startTime: FiniteDuration, interval: FiniteDuration, totalTime: FiniteDuration, callback: () => Any): Any = {
 
     var time = 0L
+    var exchangeableTime = 0L
     log.info(s"starting splcData simulation log, asking ${queryGraph.mapek.knowledge} for cfm")
     val cfmInit = if(this.learningModel.equals("learnon"))
       for { res <- (queryGraph.mapek.knowledge ? GetCFM).mapTo[CFM] } yield {
@@ -111,7 +127,7 @@ class SPLCDataCollectionSimulation(
       splcOut.println()
       out.append(logHeader)
       out.println()
-      simulation = context.system.scheduler.schedule(startTime, interval)(createCSVEntry())
+      simulation = context.system.scheduler.scheduleAtFixedRate(startTime, interval)(() => createCSVEntry())
       if (totalTime.toSeconds > 0)
         context.system.scheduler.scheduleOnce(totalTime)(stopSimulation())
 
@@ -229,6 +245,38 @@ class SPLCDataCollectionSimulation(
                 log.info("RL data added!")
                 out.println()
               }
+            } else if(this.mapekType == "ExchangeablePerformanceModel") {
+
+              val start = System.nanoTime()
+              val rootOperator: Query = queryGraph.mapek.asInstanceOf[ExchangeablePerformanceModelMAPEK].getQueryRoot
+              val qSize = if(querySize.isDefined) querySize.get else {
+                querySize = Some(Queries.getOperators(rootOperator).size)
+                querySize.get
+              }
+              val queryPerformancePredictor = cluster.system.actorSelection(queryGraph.mapek.planner.path.child("queryPerformancePredictor"))
+              for {
+                publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
+                currentPlacement: Option[Map[Query, ActorRef]] <- (queryGraph.mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
+                contextSample <- (queryGraph.mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
+                if contextSample.size >= qSize // only start logging after all operators have sent samples
+                currentPlacementStr <- (queryGraph.mapek.knowledge ? GetPlacementStrategyName).mapTo[String]
+                queryPred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, currentPlacement.get.map(e => e._1 -> e._2.path.address), publisherEventRates, Some(contextSample), currentPlacementStr)).mapTo[EndToEndLatencyAndThroughputPrediction]
+              } yield {
+                val end = System.nanoTime()
+                out.append(
+                  s"$exchangeableTime" +
+                    s"\t$strategyName" +
+                    s"\t${avgLatency}" +
+                    s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
+                    s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
+                    s"\t$transitionStatus" +
+                    s"\t${queryPred.endToEndLatency.amount.toNanos.toDouble / 1e6}" +
+                    s"\t${queryPred.throughput.amount}"
+                )
+                exchangeableTime += interval.toSeconds
+                out.println()
+              }
+
             } else {
               out.append(
                 s"$time" +

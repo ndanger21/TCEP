@@ -9,6 +9,7 @@ import tcep.utils.SizeEstimator
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.FiniteDuration
+import scala.util.Random
 
 
 case class UnregularPublisher(waitTime: Long, createEventFromId: Integer => (Event, Double), waitTillStart: Option[Long] = None) extends Publisher with Timers {
@@ -41,6 +42,7 @@ case class UnregularPublisher(waitTime: Long, createEventFromId: Integer => (Eve
     event.updateDepartureTimestamp(eventSizeOut, eventRateOut)
     //log.info(s"Emitting event: $event and waiting for ${waittime.toLong}ms")
     subscribers.keys.foreach(_ ! event)
-    emitEventTask = sched.schedule(publishEvent(), (tup._2 * 1000).toLong, TimeUnit.MILLISECONDS)
+    val delayToNext = tup._2 + 0.4 * (Random.nextDouble() - 0.5) * tup._2 // add random noise to delay: up to +-20% of original value
+    emitEventTask = sched.schedule(publishEvent(), (delayToNext * 1000).toLong, TimeUnit.MILLISECONDS)
   }
 }

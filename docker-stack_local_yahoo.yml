@@ -186,8 +186,8 @@ services:
           - spread: node.hostname
     privileged: true
 
-  predictionEndpoint:
-    image: nieda2018/tcep-prediction-endpoint
+  predictionendpoint:
+    image: localhost:5000/tcep-prediction-endpoint
     volumes:
       - $HOME/logs:/app/logs
     depends_on:

@@ -192,7 +192,7 @@ setup() {
   ssh $host [ ! -d ~/tcep ] && ssh $host 'mkdir ~/tcep'
   echo "checking python pip version..."
   ssh $host "pip --version" || ssh $host -tt "sudo apt-get update && sudo apt install -y python-pip swig python-pip3 && pip install APScheduler && echo 'directly installing python dependencies for prediction server' && \
-            pip3 install cmake pandas flask joblib river h2o auto-sklearn tpot Cython>=0.28.5 scikit-learn==0.24.2"
+            pip3 install cmake pandas flask joblib river auto-sklearn tpot Cython>=0.28.5 scikit-learn==0.24.2 h2o==3.32.1.3"
 
   setup_docker_remote $host
   echo "setting up SUMO mobility simulation"

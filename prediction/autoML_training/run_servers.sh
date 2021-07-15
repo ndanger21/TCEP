@@ -4,8 +4,8 @@ source "$work_dir/docker-swarm_maki.cfg"
 CMD=$1
 target_framework=$2
 workers+=($manager)
-workers=("10.2.1.40" "10.2.1.64" "10.2.1.72" "10.2.1.74" "10.2.1.84" "10.2.1.92" "10.0.30.15")
-
+#workers=("10.2.1.40" "10.2.1.64" "10.2.1.72" "10.2.1.74" "10.2.1.84" "10.2.1.92" "10.0.30.15")
+workers=("10.2.1.64" "10.2.1.72" "10.2.1.74" "10.2.1.84" "10.2.1.92" "10.0.30.15")
 
 build_and_start() {
   for i in "${workers[@]}"
@@ -22,8 +22,8 @@ copy_files() {
   for i in "${workers[@]}"
   do
     ssh ${user}@${i} "mkdir ~/automl"
-    scp ../tpot*.ipynb ../h2o*.ipynb ../autosklearn*.ipynb ${user}@${i}:~/automl/
-    scp ../mininet_accident_5s_combined_samples.csv ${user}@${i}:~/automl/
+    #scp ../tpot*.ipynb ../h2o*.ipynb ../autosklearn*.ipynb ${user}@${i}:~/automl/
+    scp ../yahoo_geni_1s_combined_samples.csv ${user}@${i}:~/automl/
   done
 
 }

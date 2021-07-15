@@ -34,7 +34,7 @@ services:
     image: nieda2018/tcep
     environment:
       - MAIN=tcep.simulation.tcep.SimulationRunner
-      - ARGS=--dir ./logs --mode 15 --ip simulator --port 2500 --query AdAnalysis --mapek ExchangeablePerformanceModel --req latency --transitionStrategy MFGS --transitionExecutionMode 0 --duration 151 --loadTestMax 1 --initialAlgorithm Relaxation
+      - ARGS=--dir ./logs --mode 15 --ip simulator --port 2500 --query AdAnalysis --mapek ExchangeablePerformanceModel --req latency --transitionStrategy MFGS --transitionExecutionMode 0 --duration 151 --loadTestMax 1 --initialAlgorithm MDCEP
       - LOG_FILE_PATH=/app/logs
       - JMX_PORT=8484
     ports:
@@ -186,7 +186,7 @@ services:
               - spread: node.hostname
     privileged: true
 
-  predictionEndpoint:
+  predictionendpoint:
     image: nieda2018/tcep-prediction-endpoint
     volumes:
       - $HOME/logs:/app/logs

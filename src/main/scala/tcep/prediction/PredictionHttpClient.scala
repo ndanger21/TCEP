@@ -54,9 +54,11 @@ trait PredictionHttpClient extends Actor with ActorLogging {
   }
 
   def updateOnlineModel(sample: Sample, placementStr: String)(implicit executionContext: ExecutionContext): Unit = {
+    val start = System.nanoTime()
     sendRequestToPredictionEndpoint(predictionEndPointAddress.withPath(Path("/updateOnline")), getSampleAsJsonStr(sample, placementStr)) map {
       case response@HttpResponse(StatusCodes.Accepted, _, _, _) =>
         response.discardEntityBytes(context.system)
+        log.info("onlinemodel update took {}ms", (System.nanoTime() - start) / 1e6)
       case response@HttpResponse(code, _, _, _) =>
         response.discardEntityBytes(context.system)
         log.error("failed to update online model with sample, response: {}", response)
@@ -65,6 +67,7 @@ trait PredictionHttpClient extends Actor with ActorLogging {
   }
 
   def getMetricPredictions(operator: Query, sample: Sample, placementStr: String)(implicit ec: ExecutionContext): Future[OfflineAndOnlinePredictions] = {
+    val start = System.nanoTime()
     val request = sendRequestToPredictionEndpoint(predictionEndPointAddress.withPath(Path("/predict")), getSampleAsJsonStr(sample, placementStr))
     request.onComplete {
       case Failure(exception) => log.error(exception, "failed to complete prediction request for {}", operator)
@@ -88,6 +91,7 @@ trait PredictionHttpClient extends Actor with ActorLogging {
             if(onlinePredictionsThroughput.isDefined) {
               SpecialStats.log(this.toString, "online_predictions_throughput", s"throughput;truth;${sample._1.ioMetrics.outgoingEventRate};predictions;${onlinePredictionsThroughput.get.map(e => s"${e._1};${e._2}").mkString(";")}")
             }
+            log.info("prediction request took {}ms", (System.nanoTime() - start) / 1e6)
             OfflineAndOnlinePredictions(
               offline = MetricPredictions(predictedLatency, predictedThroughput),
               onlineLatency = onlinePredictionsLatency.get.map(l => l._1 -> ProcessingLatency(FiniteDuration((l._2 * 1e6).toLong, TimeUnit.NANOSECONDS))),

@@ -192,7 +192,7 @@ services:
               - spread: node.hostname
     privileged: true
 
-  predictionEndpoint:
+  predictionendpoint:
     image: localhost:5000/tcep-prediction-endpoint
     volumes:
       - $HOME/logs:/app/logs

@@ -102,7 +102,7 @@ adjust_config() {
       sed -i -r "s#const INTERACTIVE_SIMULATION_ENABLED = (.*?)#const INTERACTIVE_SIMULATION_ENABLED = true#" ${work_dir}/gui/src/graph.js
       sed -i -r "s#const INTERACTIVE_SIMULATION_ENABLED = (.*?)#const INTERACTIVE_SIMULATION_ENABLED = true#" ${work_dir}/gui/constants.js
    	  sed -i -r "s#gui-endpoint = \"(.*?)\"#gui-endpoint = \"http://gui:${gui_port}\"#" ${work_dir}/src/main/resources/application.conf
-   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://predictionEndpoint:${prediction_port}/\"#" ${work_dir}/src/main/resources/application.conf
+   	  sed -i -r "s#prediction-endpoint = \"(.*?)\"#prediction-endpoint = \"http://predictionendpoint:${prediction_port}/\"#" ${work_dir}/src/main/resources/application.conf
    	  if [[ $manager == "localhost" ]]; then
    	    sed -i -r "s#isLocalSwarm = .*#isLocalSwarm = true#" ${work_dir}/src/main/resources/application.conf
    	  fi

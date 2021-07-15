@@ -1,4 +1,4 @@
-predictionEndpoint:
+predictionendpoint:
   image: {{image_user}}/tcep-prediction-endpoint
   ports:
     - {{inport}}:{{outport}}
