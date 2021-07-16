@@ -3,6 +3,7 @@ package tcep.prediction
 import akka.actor.{Actor, ActorLogging, ActorRef, Timers}
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
+import tcep.data.Queries.Query
 import tcep.graph.qos.OperatorQosMonitor.{GetOperatorQoSMetrics, OperatorQoSMetrics}
 import tcep.machinenodes.qos.BrokerQoSMonitor.{BrokerQosMetrics, GetBrokerMetrics}
 import tcep.prediction.OperatorPerformancePredictor._
@@ -151,6 +152,6 @@ object PredictionHelper {
     }
   }
   case class OfflineAndOnlinePredictions(offline: MetricPredictions, onlineLatency: Map[String, ProcessingLatency], onlineThroughput: Map[String, Throughput])
-
+  case class BatchOfflineAndOnlinePredictions(offline: Map[Query, MetricPredictions], onlineLatency: Map[String, Map[Query, ProcessingLatency]], onlineThroughput: Map[String, Map[Query, Throughput]])
 
 }

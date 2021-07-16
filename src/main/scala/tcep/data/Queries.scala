@@ -99,7 +99,7 @@ object Queries {
       this match {
         case bq: BinaryQuery => s"${ bq.getClass.getSimpleName }(${bq.sq1}, ${bq.sq2})"
         case uq: UnaryQuery => s"${ uq.getClass.getSimpleName }(${uq.sq})"
-        case sq: StreamQuery => s"${ sq.getClass.getSimpleName }(${ sq.publisherName })"
+        case sq: StreamQuery => s"${ sq.getClass.getSimpleName }(${ sq.publisherName }, ${sq.id})"
         case seq: SequenceQuery => s"${ seq.getClass.getSimpleName }(${ seq.s1.publisherName } -> ${ seq.s2.publisherName })"
         case dummyQuery: PublisherDummyQuery => s"${ dummyQuery.getClass.getSimpleName }(${dummyQuery.p})"
         case dummyQuery: ClientDummyQuery => s"${ dummyQuery.getClass.getSimpleName }"
@@ -253,7 +253,7 @@ object Queries {
   sealed trait LeafQuery   extends Query
   sealed trait UnaryQuery  extends Query { val sq: Query }
   sealed trait BinaryQuery extends Query { val sq1: Query; val sq2: Query }
-  sealed trait StreamQuery      extends LeafQuery   { val publisherName: String }
+  sealed trait StreamQuery      extends LeafQuery   { val publisherName: String; val id: UUID }
   sealed trait SequenceQuery    extends LeafQuery   { val s1: NStream; val s2: NStream }
   sealed trait FilterQuery      extends UnaryQuery  { val cond: Event => Boolean }
   sealed trait DropElemQuery    extends UnaryQuery

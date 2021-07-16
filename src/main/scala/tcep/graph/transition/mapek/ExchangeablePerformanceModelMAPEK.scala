@@ -53,25 +53,14 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
   val sampleFileHeader: String = algorithmNames.mkString(";") + ";" + DynamicCFMNames.ALL_FEATURES.mkString(";") + ";" + DynamicCFMNames.ALL_TARGET_METRICS.mkString(";")
   val transitionsEnabled: Boolean = ConfigFactory.load().getBoolean("constants.mapek.transitions-enabled") // mapek planner enabled with prediction endpoint interaction
   val transitionTesting: Boolean = ConfigFactory.load().getBoolean("constants.transition-testing")
-  lazy val predictionDispatcher: ExecutionContext = context.system.dispatchers.lookup("prediction-dispatcher")
 
-
-  override def preStart(): Unit = {
-    //timers.startTimerAtFixedRate(GetSamplingDataKey, GetSamplingDataTick, samplingInterval)
-  }
 
   override def receive: Receive = super.receive orElse {
     case s@SampleUpdate(query, sample) =>
       // only log if any events arrived
     if(sample._1.ioMetrics.incomingEventRate.amount > 0) {
       logSample(sender(), sample)
-      for {
-        samplePredictions <- getMetricPredictions (query, sample, currentPlacementStrategy)(predictionDispatcher) // logs to stats-*_predictions.csv
-      } yield {
-        mapek.knowledge ! SampleAndPredictionsUpdate(s, samplePredictions)
-        updateOnlineModel(sample, currentPlacementStrategy)(predictionDispatcher)
-      }
-
+      mapek.knowledge ! s
     }
     /* old pull-based implementation
     case GetSamplingDataTick => mapek.knowledge ! GetOperators // response below
@@ -108,9 +97,6 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
 
   }
 
-
-  private object GetSamplingDataTick
-  private object GetSamplingDataKey
 }
 
 class ExchangeablePerformanceModelAnalyzer(mapek: ExchangeablePerformanceModelMAPEK) extends ContrastAnalyzer(mapek) {
@@ -226,21 +212,46 @@ class ExchangeablePerformanceModelExecutor(mapek: ExchangeablePerformanceModelMA
 }
 
 class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, transitionConfig: TransitionConfig, startingPlacementStrategy: String)
-  extends KnowledgeComponent(mapek, rootOperator, transitionConfig, startingPlacementStrategy) {
+  extends KnowledgeComponent(mapek, rootOperator, transitionConfig, startingPlacementStrategy) with Timers with PredictionHttpClient {
 
   var mostRecentSamplesAndPredictions: Map[Query, (Samples, List[OfflineAndOnlinePredictions])] = Map()
+  var mostRecentSamples: Map[Query, Samples] = Map()
   val cfm: DynamicCFM = new DynamicCFM(rootOperator)
-  val samplingInterval: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
   val onlineWarmUpPhase: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.exchangeable-model.online-model-warmup-phase"), TimeUnit.MINUTES)
   val minOnlineSamples: Int = onlineWarmUpPhase.div(samplingInterval).toInt
+  private case object GetBatchPredictionTickKey
+  private case object GetBatchPredictionTick
+  lazy val predictionDispatcher: ExecutionContext = context.system.dispatchers.lookup("prediction-dispatcher")
+
+  override def preStart(): Unit = {
+    super.preStart()
+    timers.startTimerWithFixedDelay(GetBatchPredictionTickKey, GetBatchPredictionTick, samplingInterval)
+  }
 
   override def receive: Receive = super.receive orElse {
-        // received from DecentralizedMonitor
-    case s@SampleAndPredictionsUpdate(sampleUpdate: SampleUpdate, predictions: OfflineAndOnlinePredictions) =>
-      val prevSamples = mostRecentSamplesAndPredictions.getOrElse(sampleUpdate.query, (List(), List()))._1.take(minOnlineSamples)
-      val prevPredictions = mostRecentSamplesAndPredictions.getOrElse(sampleUpdate.query, (List(), List()))._2.take(minOnlineSamples)
-      mostRecentSamplesAndPredictions = mostRecentSamplesAndPredictions.updated(sampleUpdate.query, (sampleUpdate.lastSample :: prevSamples, predictions :: prevPredictions))
-      log.debug("received new sample {},\n most recent sample count: {} of {}", sampleUpdate.query, mostRecentSamplesAndPredictions(sampleUpdate.query)._1.size, minOnlineSamples)
+
+    case SampleUpdate(operator, sample) =>
+      val prevSamples = mostRecentSamples.getOrElse(operator, List()).take(minOnlineSamples)
+      mostRecentSamples = mostRecentSamples.updated(operator, sample :: prevSamples)
+      log.info("received new sample {},\n most recent sample count: {} of {}", sample, mostRecentSamples(operator).size, minOnlineSamples)
+
+    case GetBatchPredictionTick =>
+      if(mostRecentSamples.size >= operators.size) {
+        val lastSamples = mostRecentSamples.map(s => s._1 -> s._2.head)
+        for {
+          samplePredictions <- getBatchMetricPredictions(lastSamples, currentPlacementStrategy)(predictionDispatcher)// logs to stats-*_predictions.csv
+        } yield {
+          mostRecentSamplesAndPredictions = lastSamples.map(e => e._1 -> {
+            val prevSamples = mostRecentSamplesAndPredictions.getOrElse(e._1, (List(), List()))._1.take(minOnlineSamples)
+            val prevPredictions = mostRecentSamplesAndPredictions.getOrElse(e._1, (List(), List()))._2.take(minOnlineSamples)
+            (e._2 :: prevSamples, samplePredictions(e._1) :: prevPredictions)
+          })
+          log.info("received predictions, now {} operators with {} predictions in first", mostRecentSamplesAndPredictions.size, if(mostRecentSamplesAndPredictions.headOption.isDefined) mostRecentSamplesAndPredictions.head._2._2.size else 0)
+          updateBatchOnlineModel(lastSamples, currentPlacementStrategy)(predictionDispatcher)
+        }
+      }
+
+
 
     case GetCFM => sender() ! this.cfm
     case GetContextSample => sender() ! mostRecentSamplesAndPredictions

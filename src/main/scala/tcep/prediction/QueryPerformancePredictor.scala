@@ -252,7 +252,6 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
         case EVENTRATE_OUT => e.offline.throughput.amount
         case PROCESSING_LATENCY_MEAN_MS => e.offline.processingLatency.amount.toNanos.toDouble
       })
-      //TODO update leading online model here by calculating RAE for each model
       val onlinePredictions: List[Map[String, Double]] = (currentPrediction :: lastNPredictions).map(e => m match {
         case EVENTRATE_OUT => e.onlineThroughput.map(model => model._1 -> model._2.amount)
         case PROCESSING_LATENCY_MEAN_MS => e.onlineLatency.map(model => model._1 -> model._2.amount.toNanos.toDouble)
@@ -287,7 +286,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
 
         val weightOffline = 1 - normalizedOfflineRAE
         val weightOnline = 1 - normalizedOnlineRAE
-        assert(weightOnline + weightOnline - 1 <= 1e-3, s"weights must add up to 1, but are $weightOnline, $weightOffline")
+        //assert(weightOnline + weightOnline - 1 <= 1e-3, s"weights must add up to 1, but are $weightOnline, $weightOffline")
         val weightedPred = weightOffline * allOfflinePredictions.head + weightOnline * onlinePredictions.head(bestOnlineModel.get._1)
 
         SpecialStats.log(this.toString, "weightedAveragePredictions", s"${m};truth;${lastMetricTruths.head};weightedPred;${weightedPred};" +
@@ -324,4 +323,7 @@ object QueryPerformancePredictor {
   // offline = Map(latency -> 0.0, throughput -> 0.0)
   // online = Map(latency -> Map(algo1 -> 0.0, algo2 -> ...), throughput -> Map(algo1 -> ...))
   case class PredictionResponse(offline: Map[String, Double], online: Map[String, Map[String, Double]])
+  // offline: Map(latency -> Map(op1 -> 0.0, op2 ->), throughput -> Map(...))
+  // online: metric -> algo -> ops -> values
+  case class BatchPredictionResponse(offline: Map[String, Map[String, Double]], online: Map[String, Map[String, Map[String, Double]]])
 }
