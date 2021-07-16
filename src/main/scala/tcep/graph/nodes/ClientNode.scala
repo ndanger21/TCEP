@@ -1,6 +1,6 @@
 package tcep.graph.nodes
 
-import akka.actor.{ActorLogging, ActorRef, PoisonPill, Props, Timers}
+import akka.actor.{ActorLogging, ActorRef, PoisonPill, Timers}
 import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
@@ -11,7 +11,6 @@ import tcep.data.Events._
 import tcep.data.Queries.ClientDummyQuery
 import tcep.graph.nodes.traits.Node.{OperatorMigrationNotice, Subscribe}
 import tcep.graph.nodes.traits.{TransitionConfig, TransitionModeNames}
-import tcep.graph.qos.OperatorQosMonitor
 import tcep.graph.qos.OperatorQosMonitor.UpdateEventRateOut
 import tcep.graph.transition.MAPEK.{SetLastTransitionStats, SetTransitionStatus, UpdateLatency}
 import tcep.graph.transition.{MAPEK, SuccessorStart, TransferredState, TransitionRequest}
@@ -41,7 +40,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
   implicit val timeout = Timeout(5 seconds)
   var eventRateOut: Throughput = Throughput(0, FiniteDuration(1, TimeUnit.SECONDS))
   var eventSizeOut: Long = 0
-  val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], ClientDummyQuery(), self, mapek.monitor), "operatorQosMonitor")
+  //val operatorQoSMonitor: ActorRef = context.actorOf(Props(classOf[OperatorQosMonitor], ClientDummyQuery(), self, mapek.monitor), "operatorQosMonitor")
   var currentCPULoad = 0.0d
 
   override def receive: Receive = {
@@ -104,7 +103,7 @@ class ClientNode(var rootOperator: ActorRef, mapek: MAPEK, var consumer: ActorRe
       Events.updateMonitoringData(log, event, hostInfo, currentCPULoad, eventRateOut, eventSizeOut)
 
       consumer ! event
-      operatorQoSMonitor ! event
+      //operatorQoSMonitor ! event
       //monitors.foreach(monitor => monitor.onEventEmit(event, transitionStatus))
       //val now = System.nanoTime()
       mapek.knowledge ! UpdateLatency(e2eLatency)

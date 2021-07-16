@@ -173,6 +173,7 @@ class QueryGraph(query: Query,
           }
       }
     } map { opAndHostInfo =>
+      log.info("initial deployment of {} complete, notifying knowledge", opAndHostInfo._1)
       mapek.knowledge ! AddOperator((opAndHostInfo._2.operator, opAndHostInfo._1))
       deployedOperators += operator -> opAndHostInfo._1
       GUIConnector.sendInitialOperator(opAndHostInfo._2.member.address, placementStrategy.name,

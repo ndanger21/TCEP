@@ -8,7 +8,7 @@ import com.typesafe.config.ConfigFactory
 import org.cardygan.config.Config
 import org.slf4j.LoggerFactory
 import tcep.data.Queries
-import tcep.data.Queries.{FrequencyRequirement, LatencyRequirement, Query, Requirement}
+import tcep.data.Queries._
 import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos.OperatorQosMonitor._
 import tcep.graph.transition.MAPEK._
@@ -60,7 +60,7 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
       // only log if any events arrived
     if(sample._1.ioMetrics.incomingEventRate.amount > 0) {
       logSample(sender(), sample)
-      mapek.knowledge ! s
+      mapek.knowledge.forward(s)
     }
     /* old pull-based implementation
     case GetSamplingDataTick => mapek.knowledge ! GetOperators // response below
@@ -231,9 +231,33 @@ class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, t
   override def receive: Receive = super.receive orElse {
 
     case SampleUpdate(operator, sample) =>
-      val prevSamples = mostRecentSamples.getOrElse(operator, List()).take(minOnlineSamples)
-      mostRecentSamples = mostRecentSamples.updated(operator, sample :: prevSamples)
-      log.info("received new sample {},\n most recent sample count: {} of {}", sample, mostRecentSamples(operator).size, minOnlineSamples)
+      val prevSamples = mostRecentSamples.getOrElse(operator, List()).take(minOnlineSamples) // keep only most recent
+
+      if(prevSamples.isEmpty) {
+        // check if there exists another entry for the same operator;
+        //  bug related to default hashing caused these two operator types to be not considered equal after a transition, resulting in two map entries where there should only be one, and the new operator starting without the samples of the old one (messing up the model predictions and weighting)
+        val prevOtherEntry = operator match { // TODO this is a temporary workaround; will remove other operators if there are multiple of these operators in a query
+          case _: ShrinkingFilterQuery => mostRecentSamples.find(e => e._1.isInstanceOf[ShrinkingFilterQuery])
+          case _: WindowStatisticQuery => mostRecentSamples.find(e => e._1.isInstanceOf[WindowStatisticQuery] )
+          case _ => None
+        }
+        log.info("received first sample from {}, operator entry exists: {}, other entries of same type: {}", sender(), prevSamples.nonEmpty, prevOtherEntry.size)
+        if(prevOtherEntry.isDefined) {
+          // this should not occur anymore
+          log.warning("current op id is \n{} other entry is \n{} \nwith class {}", operator.id, prevOtherEntry.get._1.id, prevOtherEntry.get._1)
+          log.warning("operator entries are equal: {} {} \n ", prevOtherEntry.get._1.equals(operator), prevOtherEntry.get._1 == operator)
+          val othersSamples = mostRecentSamples(prevOtherEntry.get._1).take(minOnlineSamples)
+          mostRecentSamples = mostRecentSamples.-(prevOtherEntry.get._1)
+          mostRecentSamples = mostRecentSamples.updated(operator, sample :: othersSamples)
+          val othersSamplesAndPredictions = mostRecentSamplesAndPredictions(prevOtherEntry.get._1)
+          mostRecentSamplesAndPredictions = mostRecentSamplesAndPredictions.-(prevOtherEntry.get._1)
+          mostRecentSamplesAndPredictions = mostRecentSamplesAndPredictions.updated(operator, othersSamplesAndPredictions)
+
+        } else mostRecentSamples = mostRecentSamples.updated(operator, sample :: List())
+      } else {
+        mostRecentSamples = mostRecentSamples.updated(operator, sample :: prevSamples)
+        log.debug("received new sample {},\n most recent sample count: {} of {}", sample, mostRecentSamples(operator).size, minOnlineSamples)
+      }
 
     case GetBatchPredictionTick =>
       if(mostRecentSamples.size >= operators.size) {
@@ -246,7 +270,8 @@ class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, t
             val prevPredictions = mostRecentSamplesAndPredictions.getOrElse(e._1, (List(), List()))._2.take(minOnlineSamples)
             (e._2 :: prevSamples, samplePredictions(e._1) :: prevPredictions)
           })
-          log.info("received predictions, now {} operators with {} predictions in first", mostRecentSamplesAndPredictions.size, if(mostRecentSamplesAndPredictions.headOption.isDefined) mostRecentSamplesAndPredictions.head._2._2.size else 0)
+          log.debug("received predictions, now {} operators mostRecentSamplesAndPredictions: \n{}", mostRecentSamplesAndPredictions.size, mostRecentSamplesAndPredictions.toList.map(e => e._1.getClass.getSimpleName -> (e._2._1.size, e._2._2.size)).mkString("\n"))
+          log.debug("current mostRecentSamples: {}\n{}", mostRecentSamples.size, mostRecentSamples.toList.map(e => e._1.getClass.getSimpleName -> e._2.size).mkString("\n"))
           updateBatchOnlineModel(lastSamples, currentPlacementStrategy)(predictionDispatcher)
         }
       }

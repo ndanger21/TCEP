@@ -113,7 +113,7 @@ if [ -z "$machine" ]; then
    machine="localhost"
 fi
 if [ -z "$duration" ]; then
-   duration=151
+   duration=300
 fi
 if [ -z "$mapek" ]; then
     mapek='ExchangeablePerformanceModel'
@@ -150,10 +150,10 @@ if [ -z "$eventrate" ]; then
 fi
 #TODO update models
 if [ -z "$throughput_model" ]; then
-  throughput_model="autosklearn_trained_pipeline_8_mininet_accident_1s_combined_samples.csv_eventRateOut.joblib"
+  throughput_model="h2o_StackedEnsemble_BestOfFamily_AutoML_20210714_182448_accident_5s_throughput"
 fi
 if [ -z "$latency_model" ]; then
-  latency_model="tpot_trained_pipeline_8_mininet_accident_1s_combined_samples.csv_processingLatencyMean.joblib"
+  latency_model="tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_processingLatencyMean.joblib"
 fi
 
 host=${u}@${machine}
@@ -302,8 +302,8 @@ run() {
   #ssh $host -t 'sudo pkill -f tcep -9'
    ssh $host -t 'echo '\
   ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
-  ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
-  ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
+  #ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
+  #${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
 }
 
 all() {

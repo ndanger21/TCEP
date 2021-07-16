@@ -1,7 +1,7 @@
 
 package tcep.simulation.tcep
 
-import akka.actor.{ActorContext, ActorRef}
+import akka.actor.{ActorContext, ActorRef, Address}
 import akka.cluster.Cluster
 import akka.pattern.ask
 import akka.util.Timeout
@@ -258,8 +258,12 @@ class SPLCDataCollectionSimulation(
                 publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
                 currentPlacement: Option[Map[Query, ActorRef]] <- (queryGraph.mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
                 contextSample <- (queryGraph.mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
-                if contextSample.size >= qSize // only start logging after all operators have sent samples
+                _ <- Future {
+                  val missing = contextSample.keySet.diff(currentPlacement.getOrElse(Map[Query, Address]()).keySet).toString()
+                  log.debug("logging sim data, context samples from {} operators and placements from {} operators received ({} ops in query),missing placements from {}", contextSample.size.toString, currentPlacement.getOrElse(Map.empty).size.toString, qSize.toString, missing)
+                }
                 currentPlacementStr <- (queryGraph.mapek.knowledge ? GetPlacementStrategyName).mapTo[String]
+                if contextSample.size >= qSize // only start logging after all operators have sent samples
                 queryPred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, currentPlacement.get.map(e => e._1 -> e._2.path.address), publisherEventRates, Some(contextSample), currentPlacementStr)).mapTo[EndToEndLatencyAndThroughputPrediction]
               } yield {
                 val end = System.nanoTime()

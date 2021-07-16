@@ -34,7 +34,7 @@ services:
     image: localhost:5000/tcep
     environment:
       - MAIN=tcep.simulation.tcep.SimulationRunner
-      - ARGS=--dir ./logs --mode 15 --ip simulator --port 2500 --query AdAnalysis --mapek ExchangeablePerformanceModel --req throughput --transitionStrategy MFGS --transitionExecutionMode 0 --duration 20 --loadTestMax 1 --initialAlgorithm ProducerConsumer
+      - ARGS=--dir ./logs --mode 15 --ip simulator --port 2500 --query AdAnalysis --mapek ExchangeablePerformanceModel --req throughput --transitionStrategy MFGS --transitionExecutionMode 0 --duration 20 --loadTestMax 1 --initialAlgorithm Relaxation
       - LOG_FILE_PATH=/app/logs
       - JMX_PORT=8484
     ports:

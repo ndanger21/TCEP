@@ -109,15 +109,13 @@ trait PlacementStrategy {
   protected def updateOperatorToParentBDP(operator: Query, host: Member, parents: Map[Query, Address],
                                           outputDataRateEstimates: Map[Query, Double])
                                          (implicit ec: ExecutionContext, cluster: Cluster): Future[Map[Address, Double]] = {
-    // deep queries cause lookup failures when used as key, use string representation instead
-    val outputDataRateEstimatesStr = outputDataRateEstimates.map(e => e._1.toString() -> e._2)
     val bdpToParents: Future[Map[Address, Double]] = for {
       opToParentBDP: Map[Address, EventBandwidthEstimate] <- makeMapFuture(parents.map(p => {
         val bdp = for {
           hostCoords <- getCoordinatesOfNode(host, None) // omit operator since message overhead from this is not placement-related
           parentCoords <- getCoordinatesFromAddress(p._2, None)
-          bw = outputDataRateEstimatesStr.getOrElse(p._1.toString(),
-                                      throw new RuntimeException(s"missing ${p._2} \n among \n ${ outputDataRateEstimates.mkString("\n")}")) * 0.001  // dist in [ms], data rate in [Bytes / s]
+          bw = outputDataRateEstimates.getOrElse(p._1,
+                                      throw new RuntimeException(s"missing ${p._1} | ${p._1.id} \n among \n ${ outputDataRateEstimates.mkString("\n")}")) * 0.001  // dist in [ms], data rate in [Bytes / s]
         } yield parentCoords.distance(hostCoords) * bw
         p._2 -> bdp
       }))

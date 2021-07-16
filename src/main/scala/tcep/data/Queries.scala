@@ -90,10 +90,21 @@ object Queries {
   }
 
   sealed trait Query extends MySerializable {
+    val id: UUID = UUID.randomUUID()
     val types: Vector[String]
     val requirements: Set[Requirement]
     def estimateEventSize: Long
     @transient implicit val dummyAddr: Address = Address("tcp", "tcep", "dummy", 2000)
+
+    override def equals(obj: Any): Boolean = {
+      obj match {
+        case query: Query => this.id == query.id
+        case _ => super.equals(obj)
+      }
+    }
+    override def hashCode(): Int = {
+      id.hashCode()
+    }
 
     override def toString(): String = {
       this match {
@@ -253,7 +264,7 @@ object Queries {
   sealed trait LeafQuery   extends Query
   sealed trait UnaryQuery  extends Query { val sq: Query }
   sealed trait BinaryQuery extends Query { val sq1: Query; val sq2: Query }
-  sealed trait StreamQuery      extends LeafQuery   { val publisherName: String; val id: UUID }
+  sealed trait StreamQuery      extends LeafQuery   { val publisherName: String }
   sealed trait SequenceQuery    extends LeafQuery   { val s1: NStream; val s2: NStream }
   sealed trait FilterQuery      extends UnaryQuery  { val cond: Event => Boolean }
   sealed trait DropElemQuery    extends UnaryQuery
@@ -299,12 +310,12 @@ object Queries {
     def estimateEventSize: Long = SizeEstimator.estimate(Event6(getSampleValue(types(0)), getSampleValue(types(1)), getSampleValue(types(2)), getSampleValue(types(3)), getSampleValue(types(4)), getSampleValue(types(5))))
   }
 
-  case class Stream1[A]                (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A]) extends Query1[A] with StreamQuery
-  case class Stream2[A, B]             (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B]) extends Query2[A, B]             with StreamQuery
-  case class Stream3[A, B, C]          (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C]) extends Query3[A, B, C]          with StreamQuery
-  case class Stream4[A, B, C, D]       (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D]) extends Query4[A, B, C, D]       with StreamQuery
-  case class Stream5[A, B, C, D, E]    (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E]) extends Query5[A, B, C, D, E]    with StreamQuery
-  case class Stream6[A, B, C, D, E, F] (publisherName: String, requirements: Set[Requirement], id: UUID = UUID.randomUUID)(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E], tagF: TypeTag[F]) extends Query6[A, B, C, D, E, F] with StreamQuery
+  case class Stream1[A]                (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A]) extends Query1[A] with StreamQuery
+  case class Stream2[A, B]             (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B]) extends Query2[A, B]             with StreamQuery
+  case class Stream3[A, B, C]          (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C]) extends Query3[A, B, C]          with StreamQuery
+  case class Stream4[A, B, C, D]       (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D]) extends Query4[A, B, C, D]       with StreamQuery
+  case class Stream5[A, B, C, D, E]    (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E]) extends Query5[A, B, C, D, E]    with StreamQuery
+  case class Stream6[A, B, C, D, E, F] (publisherName: String, requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C], tagD: TypeTag[D], tagE: TypeTag[E], tagF: TypeTag[F]) extends Query6[A, B, C, D, E, F] with StreamQuery
 
   case class Sequence11[A, B]             (s1: NStream1[A],             s2: NStream1[B],             requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B]) extends Query2[A, B]             with SequenceQuery
   case class Sequence12[A, B, C]          (s1: NStream1[A],             s2: NStream2[B, C],          requirements: Set[Requirement])(implicit tagA: TypeTag[A], tagB: TypeTag[B], tagC: TypeTag[C]) extends Query3[A, B, C]          with SequenceQuery
@@ -478,7 +489,16 @@ object Queries {
   // a join of six unary queries
   //case class SenaryJoin[A, B, C, D, E, F] (sq1: Query1[A], sq2: Query1[B], sq3: Query1[C], sq4: Query1[D], sq5: Query1[E], sq6: Query1[F], w1: Window, w2: Window, w3: Window, w4: Window, w5: Window, w6: Window, requirements: Set[Requirement]) extends Query6[A, B, C, D, E, F] with SenaryJoinQuery
   // only to be used in PlacementStrategy
-  case class PublisherDummyQuery(p: String, requirements: Set[Requirement] = Set()) extends LeafQuery { def estimateEventSize: Long = 0; val types = Vector() }
+  case class PublisherDummyQuery(p: String, requirements: Set[Requirement] = Set()) extends LeafQuery { def estimateEventSize: Long = 0; val types = Vector();
+    // override equals so that when re-using the same publisher multiple times, the publisher dummys that are generated for them can be used in Maps
+    override def equals(obj: Any): Boolean = obj match {
+      case pd: PublisherDummyQuery => this.p == pd.p
+      case _ => super.equals(obj)
+    }
+    override def hashCode(): Int = p.hashCode()
+
+    override def toString(): String = s"PublisherDummyQuery(${p} | $id"
+  }
   case class ClientDummyQuery(requirements: Set[Requirement] = Set()) extends LeafQuery { def estimateEventSize: Long = 0; val types = Vector() }
 
 

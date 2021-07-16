@@ -114,10 +114,10 @@ trait PredictionHttpClient extends Actor with ActorLogging {
               val offThroughput = Throughput(offlineThroughput(q._2.toString), samplingInterval)
               val onLatency = onlineLatency.map(m => m._1 -> ProcessingLatency(FiniteDuration((m._2(q._2.toString) * 1e6).toLong, TimeUnit.NANOSECONDS)))
               val onThroughput = onlineThroughput.map(m => m._1 -> Throughput(m._2(q._2.toString), samplingInterval))
-              SpecialStats.log(this.toString, "offline_predictions_throughput", s";truth;${lastSamples(q._1)._1.ioMetrics.outgoingEventRate.amount};predicted;${offThroughput};for operator; ${q._1}")
-              SpecialStats.log(this.toString, "offline_predictions_latency", s";truth;${lastSamples(q._1)._1.processingLatency.mean};predicted;${offlineLatency};for operator; ${q._1}")
-              SpecialStats.log(this.toString, "online_predictions_latency", s"latency;truth;${lastSamples(q._1)._1.processingLatency.mean};predictions;${onLatency};for operator;${q._1}")
-              SpecialStats.log(this.toString, "online_predictions_throughput", s"throughput;truth;${lastSamples(q._1)._1.ioMetrics.outgoingEventRate.amount};predictions;${onThroughput};for operator;${q._1}")
+              SpecialStats.log(this.getClass.getSimpleName, "offline_predictions_throughput", s";truth;${lastSamples(q._1)._1.ioMetrics.outgoingEventRate.amount};predicted;${offThroughput.amount};for operator; ${q._1}")
+              SpecialStats.log(this.getClass.getSimpleName, "offline_predictions_latency", s";truth;${lastSamples(q._1)._1.processingLatency.mean};predicted;${offProcessingLatency.amount.toNanos / 1e6};for operator; ${q._1}")
+              SpecialStats.log(this.getClass.getSimpleName, "online_predictions_latency", s"latency;truth;${lastSamples(q._1)._1.processingLatency.mean};predictions;${onLatency.mkString(";").replace("\n", "|")};for operator;${q._1}")
+              SpecialStats.log(this.getClass.getSimpleName, "online_predictions_throughput", s"throughput;truth;${lastSamples(q._1)._1.ioMetrics.outgoingEventRate.amount};predictions;${onThroughput.mkString(";").replace("\n", "|")};for operator;${q._1}")
               OfflineAndOnlinePredictions(
                 offline = MetricPredictions(offProcessingLatency, offThroughput),
                 onLatency, onThroughput

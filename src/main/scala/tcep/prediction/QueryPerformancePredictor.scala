@@ -34,9 +34,9 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
 
   override def receive: Receive = {
     case pr@GetPredictionForPlacement(rootOperator, currentPlacement, newPlacement, publisherEventRates, lastContextFeatureSamplesAndPredictions, newPlacementAlgorithmStr) =>
-      log.info("received query performance prediction request for placement {}", pr.newPlacementAlgorithmStr)
+      log.debug("received query performance prediction request for placement {} {}\n{}", pr.newPlacementAlgorithmStr, newPlacement.size, newPlacement.toList.map(e => e._1.getClass.getSimpleName -> e._2).mkString("\n"))
       val sampleSizes = lastContextFeatureSamplesAndPredictions.getOrElse(Map()).map(e => e._1 -> e._2._1.size)
-      log.debug("last samples sizes: \n{}", sampleSizes.mkString("\n"))
+      log.debug("last samples ({}) sizes: \n{}", sampleSizes.size, sampleSizes.toList.map(e => e._1.getClass.getSimpleName -> e._2).mkString("\n"))
       implicit val ec = predictionDispatcher
       val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)(publisherEventRates)
       val publishers = TCEPUtils.getPublisherHosts(cluster)
@@ -121,8 +121,9 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
         }
         currentOperatorPred
       }) flatMap { currentOperatorPredictions =>
+        log.debug("currentPredictions are {}", currentOperatorPredictions.size)
+
         val usedOperatorPredictions = currentOperatorPredictions.map(p => p._1 -> {
-          log.debug("lastSamples min size: {} vs minOnlineSamples {}", sampleSizes.minBy(_._2)._2, minOnlineSamples)
           if(lastContextFeatureSamplesAndPredictions.isDefined && sampleSizes.minBy(_._2)._2 >= minOnlineSamples) {
             val opLastNSamples = lastContextFeatureSamplesAndPredictions.get(p._1)._1.take(minOnlineSamples)
             val opLastNPred = lastContextFeatureSamplesAndPredictions.get(p._1)._2.take(minOnlineSamples)
@@ -132,14 +133,27 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
           } else p._2.offline
         })
         // store most recent prediction per operator, at most minOnlineSamples
-        val publisherDummys = publishers.map(p => PublisherDummyQuery(p._1) -> p._2.address)
+        val publisherDummys: Map[Query, Address] = queryDependencyMap.filterKeys(_.isInstanceOf[PublisherDummyQuery])
+          .map(p => p._1 -> publishers.find(_._1 == p._1.asInstanceOf[PublisherDummyQuery].p).get._2.address).toMap
         for {
           nodeCoords <- TCEPUtils.makeMapFuture((publisherDummys ++ newPlacement).map(n => n._1 -> TCEPUtils.getCoordinatesOfNode(cluster, n._2)))
         } yield {
+          log.debug("node coords are {}\n{}", nodeCoords.size, nodeCoords.toList.map(e => e._1.getClass.getSimpleName -> e._2).mkString("\n"))
+          log.debug("querydependencies are {}\n{}", queryDependencyMap.size, queryDependencyMap.toList.map(e => e._1.getClass.getSimpleName -> e._2._1.parents.getOrElse(List()).size))
+
           val networkLatencyToParents: Map[Query, FiniteDuration] = newPlacement.map(op => op._1 -> {
-            val vivDistancesToParents = queryDependencyMap(op._1)._1.parents.get.map(p => FiniteDuration(nodeCoords(p).distance(nodeCoords(op._1)).toLong, TimeUnit.MILLISECONDS)) // check if this works
-            //log.info(s"viv distances to parents of $op are $vivDistancesToParents")
-            vivDistancesToParents.max // use the largest network latency to parent since we want the critical path
+            try {
+              val vivDistancesToParents = queryDependencyMap(op._1)
+                ._1.parents.get.map(p => FiniteDuration(nodeCoords(p)
+                .distance(nodeCoords(op._1)).toLong, TimeUnit.MILLISECONDS)) // check if this works
+              //log.info(s"viv distances to parents of $op are $vivDistancesToParents")
+              vivDistancesToParents.max // use the largest network latency to parent since we want the critical path
+            } catch {
+              case e: Throwable =>
+                log.error(s" parent: ${queryDependencyMap(op._1)._1.parents.map(_.map(p => p.getClass.getSimpleName + " | " + p.id))}")
+                log.error(e, s"current op was ${op._1.getClass.getSimpleName}\n ${op._1.id}\n, networkCoords was (${nodeCoords.size}) \n ${nodeCoords.keys.map(e => (if(e.isInstanceOf[PublisherDummyQuery]) e.toString() else e.getClass.getSimpleName) + " | " + e.id).mkString("\n")} \n contains: ${nodeCoords.get(op._1)}")
+                throw e
+            }
           })
           val combinedPrediction = combinePerOperatorPredictions(rootOperator, usedOperatorPredictions, networkLatencyToParents)
           log.info("per-query prediction is {}", combinedPrediction)
@@ -215,11 +229,19 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
         )
           // this operators throughput depends on how + is defined (see EndToEndLatencyAndThroughputPrediction)
 
-        case u: UnaryQuery => EndToEndLatencyAndThroughputPrediction(
-          EndToEndLatency(predictionsPerOperator(u).processingLatency.amount + networkLatencyToParents(u)),
+        case u: UnaryQuery =>
+          try {
+          EndToEndLatencyAndThroughputPrediction(
+          EndToEndLatency(predictionsPerOperator(u).processingLatency.amount
+            + networkLatencyToParents(u)),
           predictionsPerOperator(u).throughput
         ) + combinePerOperatorPredictionsRec(u.sq)
-
+          } catch {
+            case e: Throwable =>
+              log.error(s"networkLatencyToParents contains op: ${networkLatencyToParents.get(u)}")
+              log.error(e, s"current op was ${u.getClass.getSimpleName}\n ${u.id}\n, predictionsPerOperator was (${predictionsPerOperator.size}) \n ${predictionsPerOperator.keys.map(e => e.getClass.getSimpleName + " | " + e.id).mkString("\n")} \n contains: ${predictionsPerOperator.get(u)}")
+              throw e
+          }
         case s: LeafQuery => EndToEndLatencyAndThroughputPrediction(
           EndToEndLatency(predictionsPerOperator(s).processingLatency.amount + networkLatencyToParents(s)),
           predictionsPerOperator(s).throughput)
@@ -274,7 +296,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
       // no best online model because not enough samples -> use only offline model
       val offlineRAE = relativeAbsoluteError(lastMetricTruths, allOfflinePredictions.tail) // without current prediction since there is no truth for it yet
 
-      val prediction = if(bestOnlineModel.isDefined) {
+      val prediction = if(bestOnlineModel.isDefined && bestOnlineModel.get._2 >= 0 && bestOnlineModel.get._2 != Double.PositiveInfinity && onlinePredictions.head(bestOnlineModel.get._1) >= 0.0d) {
         // unnormalized RAE: weight = (1 - RAE) / (2 - RAE - RAE_other)
         // both have minimum error (0) -> each has weight 0.5
         // online error is ~0.5, offline ~0.1 -> weightOffline = 0.64, weightOnline = 0.36
@@ -290,7 +312,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
         val weightedPred = weightOffline * allOfflinePredictions.head + weightOnline * onlinePredictions.head(bestOnlineModel.get._1)
 
         SpecialStats.log(this.toString, "weightedAveragePredictions", s"${m};truth;${lastMetricTruths.head};weightedPred;${weightedPred};" +
-          s"offline;${allOfflinePredictions.head};online;${onlinePredictions.head(bestOnlineModel.get._1)};weight_offline_online;${weightOffline};${weightOnline};RAE_offline_online;${offlineRAE};${onlineRAE};online_model_name;${bestOnlineModel.get._1};calculation took ${(System.nanoTime() - start) / 1e6}ms")
+          s"offline;${allOfflinePredictions.head};online;${onlinePredictions.head(bestOnlineModel.get._1)};weight_offline_online;${weightOffline};${weightOnline};RAE_offline_online;${offlineRAE};${onlineRAE};online_model_name;${bestOnlineModel.get._1.replace("\n", "|")};calculation took ${(System.nanoTime() - start) / 1e6}ms")
 
         weightedPred
       } else {
