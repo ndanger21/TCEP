@@ -56,47 +56,52 @@ object GlobalOptimalBDPAlgorithm extends SpringRelaxationLike {
     */
   def applyGlobalOptimalBDPAlgorithm(operator: Query, rootOperator: Query, dependencies: Dependencies)
                                     (implicit ec: ExecutionContext, cluster: Cluster): Future[(HostInfo, Double)] = {
-    val res = for {
-      _ <- this.initialize()
-    } yield {
-      val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)
-      val outputBandwidthEstimates = queryDependencyMap.map(e => e._1 -> e._2._4).toMap
-      if (this.singleNodePlacement.isDefined) {
-        log.info(s"already placed one operator on ${singleNodePlacement.get.host}, reusing ost for current op $operator")
-        for {
-          bdpUpdate <- this.updateOperatorToParentBDP(operator, this.singleNodePlacement.get.host, parentAddressTransform(dependencies), outputBandwidthEstimates)
-        } yield (HostInfo(this.singleNodePlacement.get.host, operator, this.getPlacementMetrics(operator)), this.singleNodePlacement.get.minBDP)
-      } else {
-        cluster.system.scheduler.scheduleOnce(5 seconds)(() => this.singleNodePlacement = None) // reset
-        for {
-          allCoordinates <- getCoordinatesOfMembers(cluster.state.members, Some(operator))
-          // get publishers that appear in the ENTIRE query
-          allPublisherActors: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
-          allQueryPublishers = Queries.getPublishers(rootOperator)
-          allQueryPublisherMembers: Map[PublisherDummyQuery, Member] = allPublisherActors
-            .filter(p => allQueryPublishers.contains(p._1))
-            .map(e => PublisherDummyQuery(e._1) -> cluster.state.members.find(_.address.equals(e._2.path.address)).getOrElse(cluster.selfMember))
+    try {
+      val res = for {
+        _ <- this.initialize()
+      } yield {
+        val queryDependencyMap = Queries.extractOperatorsAndThroughputEstimates(rootOperator)
+        val outputBandwidthEstimates = queryDependencyMap.map(e => e._1 -> e._2._4).toMap
+        if (this.singleNodePlacement.isDefined) {
+          log.info(s"already placed one operator on ${singleNodePlacement.get.host}, reusing ost for current op $operator")
+          for {
+            bdpUpdate <- this.updateOperatorToParentBDP(operator, this.singleNodePlacement.get.host, parentAddressTransform(dependencies), outputBandwidthEstimates)
+          } yield (HostInfo(this.singleNodePlacement.get.host, operator, this.getPlacementMetrics(operator)), this.singleNodePlacement.get.minBDP)
+        } else {
+          cluster.system.scheduler.scheduleOnce(5 seconds)(() => this.singleNodePlacement = None) // reset
+          for {
+            allCoordinates <- getCoordinatesOfMembers(cluster.state.members, Some(operator))
+            // get publishers that appear in the ENTIRE query
+            allPublisherActors: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
+            allQueryPublishers = Queries.getPublishers(rootOperator)
+            allQueryPublisherMembers: Map[PublisherDummyQuery, Member] = allPublisherActors
+              .filter(p => allQueryPublishers.contains(p._1))
+              .map(e => PublisherDummyQuery(e._1) -> cluster.state.members.find(_.address.equals(e._2.path.address)).getOrElse(cluster.selfMember))
 
             subscriber = {
               val subscriber = cluster.state.members.find(_.hasRole("Subscriber"))
               assert(allQueryPublisherMembers.nonEmpty && subscriber.nonEmpty, "could not find publisher and client members!")
-              log.debug(s"no operator placed before $operator, \n publishersInQuery are: $allQueryPublisherMembers \n publisherActors are $allPublisherActors")
+              log.info(s"no operator placed before $operator, \n publishersInQuery are: $allQueryPublisherMembers \n publisherActors are $allPublisherActors")
               subscriber
             }
 
-          minBDPCandidate = allCoordinates.filter(_._1.hasRole("Candidate"))
-                                          .map(c => calculateSingleHostPlacementBDP(c._1, subscriber.get, allQueryPublisherMembers, allCoordinates, outputBandwidthEstimates)).minBy(_._2)
-          bdpUpdate <- this.updateOperatorToParentBDP(operator, minBDPCandidate._1, parentAddressTransform(dependencies), outputBandwidthEstimates)
-        } yield {
-          val hostInfo = HostInfo(minBDPCandidate._1, operator, this.getPlacementMetrics(operator))
-          placementMetrics.remove(operator) // placement of operator complete, clear entry
-          this.singleNodePlacement = Some(SingleNodePlacement(minBDPCandidate._1, minBDPCandidate._2)) // cache publisher event rate lookup for next operator
-          (hostInfo, minBDPCandidate._2)
-        }
+            minBDPCandidate = allCoordinates.filter(_._1.hasRole("Candidate"))
+              .map(c => calculateSingleHostPlacementBDP(c._1, subscriber.get, allQueryPublisherMembers, allCoordinates, outputBandwidthEstimates)).minBy(_._2)
+            bdpUpdate <- this.updateOperatorToParentBDP(operator, minBDPCandidate._1, parentAddressTransform(dependencies), outputBandwidthEstimates)
+          } yield {
+            val hostInfo = HostInfo(minBDPCandidate._1, operator, this.getPlacementMetrics(operator))
+            placementMetrics.remove(operator) // placement of operator complete, clear entry
+            this.singleNodePlacement = Some(SingleNodePlacement(minBDPCandidate._1, minBDPCandidate._2)) // cache publisher event rate lookup for next operator
+            (hostInfo, minBDPCandidate._2)
+          }
 
+        }
       }
+      res.flatten
+    } catch {
+      case e: Throwable => log.error("failed to run GlobalOptimalPlacement", e)
+        throw e
     }
-    res.flatten
   }
 
   def calculateSingleHostPlacementBDP(candidate: Member,

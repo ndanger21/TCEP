@@ -66,7 +66,7 @@ trait PredictionHttpClient extends Actor with ActorLogging {
     sendRequestToPredictionEndpoint(predictionEndPointAddress.withPath(Path("/updateOnlineBatch")), jsonMap) map {
       case response@HttpResponse(StatusCodes.Accepted, _, _, _) =>
         response.discardEntityBytes(context.system)
-        log.info("onlinemodel update took {}ms", (System.nanoTime() - start) / 1e6)
+        log.debug("onlinemodel update took {}ms", (System.nanoTime() - start) / 1e6)
       case response@HttpResponse(code, _, _, _) =>
         response.discardEntityBytes(context.system)
         log.error("failed to update online model with sample, response: {}", response)

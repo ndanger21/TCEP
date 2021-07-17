@@ -150,7 +150,8 @@ if [ -z "$eventrate" ]; then
 fi
 #TODO update models
 if [ -z "$throughput_model" ]; then
-  throughput_model="h2o_StackedEnsemble_BestOfFamily_AutoML_20210714_182448_accident_5s_throughput"
+  #throughput_model="h2o_StackedEnsemble_BestOfFamily_AutoML_20210714_182448_accident_5s_throughput"
+  throughput_model="tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_eventRateOut.joblib"
 fi
 if [ -z "$latency_model" ]; then
   latency_model="tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_processingLatencyMean.joblib"
@@ -191,7 +192,7 @@ compile() {
 setup() {
   ssh $host [ ! -d ~/tcep ] && ssh $host 'mkdir ~/tcep'
   echo "checking python pip version..."
-  ssh $host "pip --version" || ssh $host -tt "sudo apt-get update && sudo apt install -y python-pip swig python-pip3 && pip install APScheduler && echo 'directly installing python dependencies for prediction server' && \
+  ssh $host "pip --version" || ssh $host -tt "sudo apt-get update && sudo apt install -y openjdk-8-jdk python-pip swig python3-pip && pip3 install --upgrade pip && pip install APScheduler && echo 'directly installing python dependencies for prediction server' && \
             pip3 install cmake pandas flask joblib river auto-sklearn tpot Cython>=0.28.5 scikit-learn==0.24.2 h2o==3.32.1.3"
 
   setup_docker_remote $host
@@ -226,13 +227,13 @@ setup() {
 
   ssh $host 'touch ~/tcep/handovers.csv && chmod a+w ~/tcep/handovers.csv && truncate -s 0 ~/tcep/handovers.csv'
   # only re-transmit jarfile if build has changed
-  if [ ${isBuildUnchanged} == 0 ]; then
-    echo "build unchanged, not copying jarfile to ${host}"
-  else
+  #if [ ${isBuildUnchanged} == 0 ]; then
+  #  echo "build unchanged, not copying jarfile to ${host}"
+  #else
     echo "build has changed, copying jar to ${host}..." && \
     scp ${work_dir}/src/main/resources/application.conf ${work_dir}/target/scala-2.12/tcep_2.12-0.0.1-SNAPSHOT-one-jar.jar \
       ${host}:~/tcep/
-  fi
+  #fi
 
   #ssh $host '[ -z $(docker ps -a -q --filter ancestor=cloudwattfr/ntpserver) ] &&
   #          echo "starting ntp container" &&
@@ -302,8 +303,8 @@ run() {
   #ssh $host -t 'sudo pkill -f tcep -9'
    ssh $host -t 'echo '\
   ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
-  #ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
-  #${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
+  ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
+  ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
 }
 
 all() {

@@ -1,6 +1,6 @@
 package tcep.graph.transition.mapek
 
-import akka.actor.{ActorContext, ActorLogging, ActorRef, Address, Props, Timers}
+import akka.actor.{ActorContext, ActorLogging, ActorRef, ActorSelection, Address, Props, Timers}
 import akka.cluster.Cluster
 import akka.pattern.ask
 import akka.util.Timeout
@@ -13,7 +13,7 @@ import tcep.graph.nodes.traits.TransitionConfig
 import tcep.graph.qos.OperatorQosMonitor._
 import tcep.graph.transition.MAPEK._
 import tcep.graph.transition._
-import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK.GetContextSample
+import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK.{GetContextSample, GetQueryPerformancePrediction}
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData, RunPlanner}
 import tcep.graph.transition.mapek.contrast._
 import tcep.placement.PlacementStrategy
@@ -141,6 +141,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
     case RunPlanner(cfm: CFM, contextConfig: Config, currentLatency: Double, qosRequirements: Set[Requirement]) =>
       log.info("received RunPlanner with requirements {}, transitions enabled: {}, transitionsTesting:", qosRequirements, transitionsEnabled, transitionTesting)
       if(transitionsEnabled && !transitionTesting) {
+        val start = System.nanoTime()
         for {
           currentPlacement: Option[Map[Query, ActorRef]] <- (mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
           publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
@@ -159,6 +160,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
               pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample), p.name)).mapTo[EndToEndLatencyAndThroughputPrediction]
             } yield p.name -> (pred, placement)
           }).map(p => {
+            SpecialStats.log(this.toString, "placement_performance_predictions", s"${p.map(e => s"${e._1};${e._2._1.endToEndLatency.amount.toNanos / 1e6};${e._2._1.throughput.amount})}").mkString(";")};took ${(System.nanoTime() - start) / 1e6}ms")
             log.info("received predictions \n{}", p.map(e => e._1 -> e._2._1).mkString("\n"))
             // check each requirement
             val qosFulfillingPlacements = p.filter(placement => {
@@ -174,7 +176,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
 
             if (qosFulfillingPlacements.nonEmpty) {
               val transitionTarget = if (optimizationTarget == "latency") qosFulfillingPlacements.minBy(_._2._1.endToEndLatency.amount)
-              else if (optimizationTarget == "throughput") qosFulfillingPlacements.minBy(_._2._1.throughput.getEventsPerSec)
+              else if (optimizationTarget == "throughput") qosFulfillingPlacements.maxBy(_._2._1.throughput.getEventsPerSec)
               else throw new IllegalArgumentException(s"unknown optimization target metric $optimizationTarget")
 
               log.info("found requirement-fulfilling placement strategy {}:\n{}", transitionTarget._1, transitionTarget._2._1)
@@ -217,11 +219,14 @@ class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, t
   var mostRecentSamplesAndPredictions: Map[Query, (Samples, List[OfflineAndOnlinePredictions])] = Map()
   var mostRecentSamples: Map[Query, Samples] = Map()
   val cfm: DynamicCFM = new DynamicCFM(rootOperator)
-  val onlineWarmUpPhase: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.exchangeable-model.online-model-warmup-phase"), TimeUnit.MINUTES)
-  val minOnlineSamples: Int = onlineWarmUpPhase.div(samplingInterval).toInt
+  val minOnlineSamples: Int = ConfigFactory.load().getInt("constants.mapek.exchangeable-model.online-model-warmup-phase")
+
   private case object GetBatchPredictionTickKey
   private case object GetBatchPredictionTick
   lazy val predictionDispatcher: ExecutionContext = context.system.dispatchers.lookup("prediction-dispatcher")
+  val qSize: Int = Queries.getOperators(mapek.asInstanceOf[ExchangeablePerformanceModelMAPEK].getQueryRoot).size
+  var mostRecentQueryPerformancePrediction: Option[EndToEndLatencyAndThroughputPrediction] = None
+  val queryPerformancePredictor: ActorSelection = cluster.system.actorSelection(mapek.planner.path.child("queryPerformancePredictor"))
 
   override def preStart(): Unit = {
     super.preStart()
@@ -260,7 +265,7 @@ class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, t
       }
 
     case GetBatchPredictionTick =>
-      if(mostRecentSamples.size >= operators.size) {
+      if(mostRecentSamples.size >= operators.size && mostRecentSamples.size >= qSize ) {
         val lastSamples = mostRecentSamples.map(s => s._1 -> s._2.head)
         for {
           samplePredictions <- getBatchMetricPredictions(lastSamples, currentPlacementStrategy)(predictionDispatcher)// logs to stats-*_predictions.csv
@@ -273,11 +278,15 @@ class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, t
           log.debug("received predictions, now {} operators mostRecentSamplesAndPredictions: \n{}", mostRecentSamplesAndPredictions.size, mostRecentSamplesAndPredictions.toList.map(e => e._1.getClass.getSimpleName -> (e._2._1.size, e._2._2.size)).mkString("\n"))
           log.debug("current mostRecentSamples: {}\n{}", mostRecentSamples.size, mostRecentSamples.toList.map(e => e._1.getClass.getSimpleName -> e._2.size).mkString("\n"))
           updateBatchOnlineModel(lastSamples, currentPlacementStrategy)(predictionDispatcher)
+          for {
+            publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()(cluster, predictionDispatcher)
+            queryPred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, Some(operators), operators.map(e => e._1 -> e._2.path.address), publisherEventRates, Some(mostRecentSamplesAndPredictions), currentPlacementStrategy)).mapTo[EndToEndLatencyAndThroughputPrediction]
+          } yield mostRecentQueryPerformancePrediction = Some(queryPred)
         }
       }
 
 
-
+    case GetQueryPerformancePrediction => sender() ! mostRecentQueryPerformancePrediction
     case GetCFM => sender() ! this.cfm
     case GetContextSample => sender() ! mostRecentSamplesAndPredictions
     case GetContextData => sender() ! Map()
@@ -287,6 +296,7 @@ class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, t
 
 object ExchangeablePerformanceModelMAPEK {
   case object GetContextSample
+  case object GetQueryPerformancePrediction
   def currentPlacementStrategyToOneHot(algorithmNames: Iterable[String], current: String): String = {
     algorithmNames.map {
       case name if name == current => 1

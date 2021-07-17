@@ -52,8 +52,8 @@ object StarksAlgorithm extends PlacementStrategy {
           candidateCoordinates <- candidateCoordRequest
           parentCoordinates <- parentCoordRequest
           hostInfo <- {
-            log.info(s"the number of available candidates are: ${candidates.size}, candidates: ${candidates.toList}")
-            log.info(s"applyStarksAlgorithm() - dependencyCoords:\n ${parentCoordinates.map(d => d._1.path.address.toString + " -> " + d._2.toString)}")
+            log.debug(s"the number of available candidates are: ${candidates.size}, candidates: ${candidates.toList}")
+            log.debug(s"applyStarksAlgorithm() - dependencyCoords:\n ${parentCoordinates.map(d => d._1.path.address.toString + " -> " + d._2.toString)}")
             placementMetrics += operator -> askerInfo.operatorMetrics // add message overhead from callers (who forwarded to this node); if this is the first caller, these should be zero
             //SpecialStats.debug(s"$this", s"applying starks on ${cluster.selfAddress} to $operator")
             applyStarksAlgorithm(parentCoordinates, candidateCoordinates, askerInfo, operator, askerInfo.visitedMembers, dependencies)
@@ -71,7 +71,7 @@ object StarksAlgorithm extends PlacementStrategy {
         hostRequest.onComplete {
           case Success(host) =>
             val latencyInMillis = System.currentTimeMillis() - startTime
-            log.info(s"$this", s"found host ${host.member}, after $latencyInMillis ms")
+            log.debug(s"$this", s"found host ${host.member}, after $latencyInMillis ms")
             //SpecialStats.log(this.name, "Placement", s"TotalMessageOverhead:${placementMetrics.getOrElse(operator, OperatorMetrics().accPlacementMsgOverhead)}, placement time: $latencyInMillis")
             //SpecialStats.log(this.name, "Placement", s"PlacementTime:${System.currentTimeMillis() - startTime} millis")
           case Failure(exception) =>
@@ -114,7 +114,7 @@ object StarksAlgorithm extends PlacementStrategy {
       .sortWith(_._2 < _._2)
     val closestNeighbourDist: Double = if(neighbourDistances.nonEmpty) neighbourDistances.head._2 else Double.MaxValue
 
-    log.info(s"applyStarksAlgorithm(): " +
+    log.debug(s"applyStarksAlgorithm(): " +
       s"\n my distance to parents: $mydist " +
       s"\n neighbours sorted by distance to parents:" +
       s" ${neighbourDistances.map(e => s"\n${e._1._1.address.toString} : ${e._2}")}")
@@ -142,16 +142,16 @@ object StarksAlgorithm extends PlacementStrategy {
 
         val relayNodeDist = if(relayNodeCandidates.nonEmpty) relayNodeCandidates.head._2 else Double.MaxValue
 
-        log.info(s"\n distances of all candidates to dependencies: " +
+        log.debug(s"\n distances of all candidates to dependencies: " +
           s"\n ${relayNodeCandidates.map(e => s"\n ${e._1} : ${e._2}")}" +
           s"\n self: ${cluster.selfAddress.host} : $mydist")
 
         if (allParentsOnSameHost && mydist <= relayNodeDist) { // self is not included in neighbours
-          log.info(s"all parents on same host, deploying operator on self: ${cluster.selfAddress.toString}")
+          log.debug(s"all parents on same host, deploying operator on self: ${cluster.selfAddress.toString}")
           Future { HostInfo(cluster.selfMember, operator, askerInfo.operatorMetrics) }
 
         } else if (allParentsOnSameHost && relayNodeDist <= mydist) {
-          log.info(s"all parents on same host, forwarding operator to neighbour: ${neighbourDistances.head._1._1.address.toString}")
+          log.debug(s"all parents on same host, forwarding operator to neighbour: ${neighbourDistances.head._1._1.address.toString}")
           val updatedAskerInfo = HostInfo(cluster.selfMember, operator, askerInfo.operatorMetrics)
           forwardToNeighbour(relayNodeCandidates.take(k).map(_._1._1), updatedAskerInfo, operator, visitedMembers, dependencies)
 
@@ -161,12 +161,12 @@ object StarksAlgorithm extends PlacementStrategy {
             .sortWith(_._2 < _._2)
           // forward to a neighbour that lies between self and dependencies that is not a publisher and not one of the parents
           if (relayNodeCandidatesFiltered.nonEmpty && relayNodeCandidatesFiltered.head._2 <= mydist) {
-            log.info(s"parents not on same host, deploying operator on closest non-parent neighbour")
+            log.debug(s"parents not on same host, deploying operator on closest non-parent neighbour")
             val updatedAskerInfo = HostInfo(cluster.selfMember, operator, askerInfo.operatorMetrics)
             forwardToNeighbour(relayNodeCandidatesFiltered.take(k).map(_._1._1), updatedAskerInfo, operator, visitedMembers, dependencies)
 
           } else {
-            log.info(s"dependencies not on same host, deploying operator on self")
+            log.debug(s"dependencies not on same host, deploying operator on self")
             Future { HostInfo(cluster.selfMember, operator, askerInfo.operatorMetrics) }
           }
         }
@@ -174,11 +174,11 @@ object StarksAlgorithm extends PlacementStrategy {
       case _ => { // deploying an unary or leaf operator
         // deploy on this host if it is closer to dependency than all candidates
         if (mydist <= closestNeighbourDist) {
-          log.info(s"deploying stream operator on self: ${cluster.selfAddress.toString}, mydist: $mydist, neighbourDist: $closestNeighbourDist")
+          log.debug(s"deploying stream operator on self: ${cluster.selfAddress.toString}, mydist: $mydist, neighbourDist: $closestNeighbourDist")
           Future { HostInfo(cluster.selfMember, operator, askerInfo.operatorMetrics) }
 
         } else {
-          log.info(s"forwarding operator $operator to neighbour: ${neighbourDistances.head._1._1.address.toString}," +
+          log.debug(s"forwarding operator $operator to neighbour: ${neighbourDistances.head._1._1.address.toString}," +
             s" neighbourDist: $closestNeighbourDist, mydist: $mydist")
           val updatedAskerInfo = HostInfo(cluster.selfMember, operator, askerInfo.operatorMetrics)
           forwardToNeighbour(neighbourDistances.take(k).map(_._1._1), updatedAskerInfo, operator, visitedMembers, dependencies)
@@ -208,7 +208,7 @@ object StarksAlgorithm extends PlacementStrategy {
 
       request.onComplete {
         case Success(taskManager) =>
-          log.info(s"${cluster.selfMember} asking taskManager ${taskManager} to host $operator")
+          log.debug(s"${cluster.selfMember} asking taskManager ${taskManager} to host $operator")
           SpecialStats.log(this.name, "placement", s"Starks asking $taskManager to host $operator")
         case scala.util.Failure(exception) =>
           log.error(s"no candidate taskManager among ($orderedCandidates) and self could be contacted")
@@ -228,7 +228,7 @@ object StarksAlgorithm extends PlacementStrategy {
       hostInfo.onComplete { // logging callback
         case scala.util.Success(hostInfo) =>
           SpecialStats.log(this.name, "placement",s"deploying $operator on ${hostInfo.asInstanceOf[StarksTaskReply].hostInfo}")
-          log.info(s"forwardToNeighbour - received answer, deploying operator on ${hostInfo.asInstanceOf[StarksTaskReply].hostInfo}")
+          log.debug(s"forwardToNeighbour - received answer, deploying operator on ${hostInfo.asInstanceOf[StarksTaskReply].hostInfo}")
         case scala.util.Failure(exception) =>
           SpecialStats.log(this.name, "placement", s"could not deploy operator $operator, cause: $exception")
           log.error(s"no neighbour among $orderedCandidates or self could host operator $operator", exception)
@@ -351,7 +351,7 @@ object StarksAlgorithm extends PlacementStrategy {
 
     // get 1 relay node for each parent
     val curRelayNodes: Map[Query, Address] = getRelayNodes(subQuery)
-    log.info(s"relayNodes for ${subQuery}; are (${curRelayNodes.size} of ${Queries.getOperators(subQuery).size}) :\n${curRelayNodes.mkString("\n")}")
+    //log.debug(s"relayNodes for ${subQuery}; are (${curRelayNodes.size} of ${Queries.getOperators(subQuery).size}) :\n${curRelayNodes.mkString("\n")}")
     try {
       subQuery match {
         case s: StreamQuery =>

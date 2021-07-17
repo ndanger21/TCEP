@@ -1,18 +1,15 @@
 
 package tcep.simulation.tcep
 
-import akka.actor.{ActorContext, ActorRef, Address}
+import akka.actor.{ActorContext, ActorRef}
 import akka.cluster.Cluster
 import akka.pattern.ask
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
-import tcep.data.Queries
 import tcep.data.Queries.Query
 import tcep.graph.nodes.traits.TransitionConfig
-import tcep.graph.qos.OperatorQosMonitor.Samples
 import tcep.graph.transition.MAPEK._
-import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK
-import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK.GetContextSample
+import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK.GetQueryPerformancePrediction
 import tcep.graph.transition.mapek.contrast.CFM
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData}
 import tcep.graph.transition.mapek.contrast.FmNames._
@@ -21,9 +18,7 @@ import tcep.graph.transition.mapek.learnon.LearnOnMessages.GetLearnOnLogData
 import tcep.graph.transition.mapek.learnon.LightweightMessages.GetLightweightLogData
 import tcep.graph.transition.mapek.learnon.ModelRLMessages.GetModelRLLogData
 import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
-import tcep.prediction.PredictionHelper.{EndToEndLatencyAndThroughputPrediction, OfflineAndOnlinePredictions, Throughput}
-import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
-import tcep.utils.TCEPUtils
+import tcep.prediction.PredictionHelper.{EndToEndLatencyAndThroughputPrediction, Throughput}
 
 import java.io.{File, PrintStream}
 import scala.collection.mutable
@@ -246,39 +241,23 @@ class SPLCDataCollectionSimulation(
                 out.println()
               }
             } else if(this.mapekType == "ExchangeablePerformanceModel") {
-
-              val start = System.nanoTime()
-              val rootOperator: Query = queryGraph.mapek.asInstanceOf[ExchangeablePerformanceModelMAPEK].getQueryRoot
-              val qSize = if(querySize.isDefined) querySize.get else {
-                querySize = Some(Queries.getOperators(rootOperator).size)
-                querySize.get
-              }
-              val queryPerformancePredictor = cluster.system.actorSelection(queryGraph.mapek.planner.path.child("queryPerformancePredictor"))
               for {
-                publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
-                currentPlacement: Option[Map[Query, ActorRef]] <- (queryGraph.mapek.knowledge ? GetOperators).mapTo[CurrentOperators].map(e => Some(e.placement))
-                contextSample <- (queryGraph.mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
-                _ <- Future {
-                  val missing = contextSample.keySet.diff(currentPlacement.getOrElse(Map[Query, Address]()).keySet).toString()
-                  log.debug("logging sim data, context samples from {} operators and placements from {} operators received ({} ops in query),missing placements from {}", contextSample.size.toString, currentPlacement.getOrElse(Map.empty).size.toString, qSize.toString, missing)
-                }
-                currentPlacementStr <- (queryGraph.mapek.knowledge ? GetPlacementStrategyName).mapTo[String]
-                if contextSample.size >= qSize // only start logging after all operators have sent samples
-                queryPred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, currentPlacement.get.map(e => e._1 -> e._2.path.address), publisherEventRates, Some(contextSample), currentPlacementStr)).mapTo[EndToEndLatencyAndThroughputPrediction]
+                queryPred <- (queryGraph.mapek.knowledge ? GetQueryPerformancePrediction).mapTo[Option[EndToEndLatencyAndThroughputPrediction]]
               } yield {
-                val end = System.nanoTime()
-                out.append(
-                  s"$exchangeableTime" +
-                    s"\t$strategyName" +
-                    s"\t${avgLatency}" +
-                    s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
-                    s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
-                    s"\t$transitionStatus" +
-                    s"\t${queryPred.endToEndLatency.amount.toNanos.toDouble / 1e6}" +
-                    s"\t${queryPred.throughput.amount}"
-                )
-                exchangeableTime += interval.toSeconds
-                out.println()
+                if(queryPred.isDefined) {
+                  out.append(
+                    s"$exchangeableTime" +
+                      s"\t$strategyName" +
+                      s"\t${avgLatency}" +
+                      s"\t${cAllRecords.recordAverageLoad.lastLoadMeasurement.getOrElse(0)}" +
+                      s"\t${cAllRecords.recordFrequency.lastMeasurement.getOrElse(0)}" +
+                      s"\t$transitionStatus" +
+                      s"\t${queryPred.get.endToEndLatency.amount.toNanos.toDouble / 1e6}" +
+                      s"\t${queryPred.get.throughput.amount}"
+                  )
+                  exchangeableTime += interval.toSeconds
+                  out.println()
+                } else log.info("no query performance prediction available yet")
               }
 
             } else {

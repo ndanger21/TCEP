@@ -16,7 +16,7 @@ def predict_batch():
     if request.is_json:
         json_dict = request.get_json()
         op_sample_df = json_batch_to_df(json_dict)
-        logger.debug("sample data frame: \n%s" % op_sample_df)
+        logger.info("sample data frame: \n%s" % op_sample_df)
         online_start = time.time()
         online_predictions = predict_online_models(op_sample_df)
         online_end = time.time()
@@ -39,20 +39,20 @@ def predict_batch():
         offline_latencies = {}
         offline_throughputs = {}
         for i in range(0, int(len(json_dict))):
-            offline_latencies[i] = latency_prediction[i]
-            offline_throughputs[i] = throughput_prediction[i]
+            offline_latencies[i] = float(latency_prediction[i])
+            offline_throughputs[i] = float(throughput_prediction[i])
 
         # offline: Map(latency -> Map(op1 -> 0.0, op2 ->), throughput -> Map(...))
         # online: metric -> algo -> ops -> values
         #case class BatchPredictionResponse(offline: Map[String, Map[Long, Double]], online: Map[String, Map[String, Map[Long, Double]]])
-        logger.debug("latency is %s", latency_prediction)
-        logger.debug("throughput is %s", throughput_prediction)
-        logger.debug("online predictions are \n", online_predictions)
+        logger.info("latency is %s", latency_prediction)
+        logger.info("throughput is %s", throughput_prediction)
+        logger.info("online predictions are \n", online_predictions)
         predictions = {'offline': {'latency': offline_latencies, 'throughput': offline_throughputs},
                        'online': online_predictions }
         logger.info("json processing took %4.3fs online prediction took %4.3fs latency_offline took %4.3fs and throughput_offline took %4.3fs, total took %4.3fs",
                     float(online_start - start), float(online_end - online_start), float(latency_end - online_end), float(time.time() - latency_end), float(time.time() - start))
-
+        logger.info("predictions are \n%s" % predictions)
         return make_response(jsonify(predictions), 200)
     else:
         logger.info("expected json but got ", request)
@@ -153,7 +153,7 @@ def predict_online_models(sample):
                 #x_i_scaled = scaler.transform_one(x_i)
                 pred = model.predict_one(x_i)
                 p = time.time()
-                predictions_dict[target][str(model.steps)][i] = pred
+                predictions_dict[target][str(model.steps)][i] = float(pred)
                 predict_time = float(p - s)
                 logger.debug("online prediction for %i is %s" % (i, pred))
                 logger.info("%s: %s - time taken predict: %5.4fs", target, model, predict_time) if predict_time > 0.005 else None

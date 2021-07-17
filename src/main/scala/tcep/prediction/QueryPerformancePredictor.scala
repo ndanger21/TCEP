@@ -28,8 +28,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
   //val singleThreadDispatcher: ExecutionContext = scala.concurrent.ExecutionContext.fromExecutor(Executors.newSingleThreadExecutor())
   //var leadingOnlineModels: Map[String, Option[String]] = ALL_TARGET_METRICS.map(_ -> None).toMap // make this per-operator?
   val useOnlinePredictions: Boolean = ConfigFactory.load().getBoolean("constants.mapek.exchangeable-model.use-online-model-weighting")
-  val onlineWarmUpPhase: FiniteDuration = FiniteDuration(ConfigFactory.load().getInt("constants.mapek.exchangeable-model.online-model-warmup-phase"), TimeUnit.MINUTES)
-  val minOnlineSamples: Int = onlineWarmUpPhase.div(samplingInterval).toInt
+  val minOnlineSamples: Int = ConfigFactory.load().getInt("constants.mapek.exchangeable-model.online-model-warmup-phase")
 
 
   override def receive: Receive = {
@@ -132,9 +131,17 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
             else p._2.offline
           } else p._2.offline
         })
-        // store most recent prediction per operator, at most minOnlineSamples
-        val publisherDummys: Map[Query, Address] = queryDependencyMap.filterKeys(_.isInstanceOf[PublisherDummyQuery])
-          .map(p => p._1 -> publishers.find(_._1 == p._1.asInstanceOf[PublisherDummyQuery].p).get._2.address).toMap
+
+          val publisherDummys: Map[Query, Address] = queryDependencyMap.filterKeys(_.isInstanceOf[PublisherDummyQuery])
+            .map(p => {
+              try {
+              p._1 -> publishers.find(_._1 == p._1.asInstanceOf[PublisherDummyQuery].p.split("-").head).get._2.address
+              } catch {
+                case e: Throwable =>
+                    log.error(e, "failed to find publisher {} among \n{}", p._1.asInstanceOf[PublisherDummyQuery].toString(), publishers.mkString("\n"))
+                    throw e
+              }}).toMap
+
         for {
           nodeCoords <- TCEPUtils.makeMapFuture((publisherDummys ++ newPlacement).map(n => n._1 -> TCEPUtils.getCoordinatesOfNode(cluster, n._2)))
         } yield {
@@ -156,7 +163,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
             }
           })
           val combinedPrediction = combinePerOperatorPredictions(rootOperator, usedOperatorPredictions, networkLatencyToParents)
-          log.info("per-query prediction is {}", combinedPrediction)
+          log.debug("per-query prediction is {}", combinedPrediction)
           combinedPrediction
         }
       }
@@ -238,7 +245,7 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
         ) + combinePerOperatorPredictionsRec(u.sq)
           } catch {
             case e: Throwable =>
-              log.error(s"networkLatencyToParents contains op: ${networkLatencyToParents.get(u)}")
+              log.error(s"networkLatencyToParents contains op: ${networkLatencyToParents.contains(u)}")
               log.error(e, s"current op was ${u.getClass.getSimpleName}\n ${u.id}\n, predictionsPerOperator was (${predictionsPerOperator.size}) \n ${predictionsPerOperator.keys.map(e => e.getClass.getSimpleName + " | " + e.id).mkString("\n")} \n contains: ${predictionsPerOperator.get(u)}")
               throw e
           }

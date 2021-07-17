@@ -496,10 +496,17 @@ object Queries {
       case _ => super.equals(obj)
     }
     override def hashCode(): Int = p.hashCode()
-
     override def toString(): String = s"PublisherDummyQuery(${p} | $id"
   }
-  case class ClientDummyQuery(requirements: Set[Requirement] = Set()) extends LeafQuery { def estimateEventSize: Long = 0; val types = Vector() }
+  case class ClientDummyQuery(requirements: Set[Requirement] = Set()) extends LeafQuery {
+    def estimateEventSize: Long = 0; val types = Vector()
+
+    override def equals(obj: Any): Boolean = obj match {
+      case _: ClientDummyQuery => true
+      case _ => super.equals(obj)
+    }
+    override def hashCode(): Int = this.toString().hashCode()
+  }
 
 
 }
