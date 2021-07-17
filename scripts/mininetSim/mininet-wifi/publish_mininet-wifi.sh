@@ -151,10 +151,10 @@ fi
 #TODO update models
 if [ -z "$throughput_model" ]; then
   #throughput_model="h2o_StackedEnsemble_BestOfFamily_AutoML_20210714_182448_accident_5s_throughput"
-  throughput_model="tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_eventRateOut.joblib"
+  throughput_model=${work_dir}/prediction/"tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_eventRateOut.joblib"
 fi
 if [ -z "$latency_model" ]; then
-  latency_model="tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_processingLatencyMean.joblib"
+  latency_model=${work_dir}/prediction/"tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_processingLatencyMean.joblib"
 fi
 
 host=${u}@${machine}
@@ -202,7 +202,9 @@ setup() {
   ssh $host [ ! -d ~/tcep/mininet-wifi ] \
   && ssh $host 'cd ~/tcep && git clone https://github.com/intrig-unicamp/mininet-wifi.git && cd ~/tcep/mininet-wifi && git checkout e46a4eb74027842c1dd6d94a75775a7d011d3bde' \
   && ssh -t ${host} 'sudo ~/tcep/mininet-wifi/util/install.sh -Wln3fv && sudo apt-get update && sudo apt-get install openntpd' \
-  && echo "successfully installed mininet-wifi on ${host}" # && \
+  && echo "successfully installed mininet-wifi on ${host}" && \
+  ssh -t ${host} 'cd ~/ && git clone https://github.com/mininet/mininet.git && cd ~/mininet/ && git fetch --tags && git checkout tags/2.3.0 && cd util && sudo ./install.sh -f' && \
+  echo "patched latest mininet version"
   pwd
   scp -rd examples/ mn_wifi/ $host:~/tcep/mininet-wifi/ \
   && scp -r patches/ $host:~/tcep/mininet-wifi/ \
@@ -272,8 +274,8 @@ start_gui() {
 }
 
 setup_prediction_endpoint() {
-  scp ${work_dir}/prediction/${latency_model} ${host}:~/tcep/mininet-wifi/
-  scp ${work_dir}/prediction/${throughput_model} ${host}:~/tcep/mininet-wifi/
+  ssh $host [ ! -f ~/tcep/mininet-wifi/${latency_model} ] && scp ${latency_model} ${host}:~/tcep/mininet-wifi/
+  ssh $host [ ! -f ~/tcep/mininet-wifi/${throughput_model} ] && scp ${throughput_model} ${host}:~/tcep/mininet-wifi/
   scp ${work_dir}/prediction/run_prediction_endpoint.py ${host}:~/tcep/mininet-wifi
 }
 
@@ -303,8 +305,8 @@ run() {
   #ssh $host -t 'sudo pkill -f tcep -9'
    ssh $host -t 'echo '\
   ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
-  ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
-  ${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
+  #ssh $host -tt 'sudo mn -c && cd ~/tcep/mininet-wifi && sudo python wifi-sumo-simulation.py '\
+  #${duration} ${algorithm} ${nSpeedPublishers} ${u} ${sumo_gui} ${controller_ip} ${nRSUs} ${registry_user}'/'${gui_image} ${mapek} ${query} ${req} ${transitionStrategy} ${transitionExecutionMode} ${eventrate} ${gui_ip} ${latency_model} ${throughput_model}''
 }
 
 all() {

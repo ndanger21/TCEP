@@ -162,7 +162,8 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
                 throw e
             }
           })
-          val combinedPrediction = combinePerOperatorPredictions(rootOperator, usedOperatorPredictions, networkLatencyToParents)
+          val operatorSelectivityMap = lastContextFeatureSamplesAndPredictions.get.map(op => op._1 -> op._2._1.head._1.selectivity)
+          val combinedPrediction = combinePerOperatorPredictions(rootOperator, usedOperatorPredictions, networkLatencyToParents, operatorSelectivityMap)
           log.debug("per-query prediction is {}", combinedPrediction)
           combinedPrediction
         }
@@ -219,30 +220,32 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
     * @param predictionsPerOperator map of per-operator predictions: processing latency and throughput
     * @return prediction of end-to-end latency and throughput of the entire query
     */
-  def combinePerOperatorPredictions(rootOperator: Query, predictionsPerOperator: Map[Query, MetricPredictions], networkLatencyToParents: Map[Query, FiniteDuration]): EndToEndLatencyAndThroughputPrediction = {
+  def combinePerOperatorPredictions(rootOperator: Query, predictionsPerOperator: Map[Query, MetricPredictions], networkLatencyToParents: Map[Query, FiniteDuration], operatorSelectivity: Map[Query, Double]): EndToEndLatencyAndThroughputPrediction = {
     def combinePerOperatorPredictionsRec(curOp: Query): EndToEndLatencyAndThroughputPrediction = {
       curOp match {
         case b: BinaryQuery =>
           val parent1CombinedPredictions = combinePerOperatorPredictionsRec(b.sq1)
           val parent2CombinedPredictions = combinePerOperatorPredictionsRec(b.sq2)
+          implicit val selectivity: Double = operatorSelectivity(b)
           EndToEndLatencyAndThroughputPrediction(
-          EndToEndLatency(predictionsPerOperator(b).processingLatency.amount + networkLatencyToParents(b)),
-          predictionsPerOperator(b).throughput
-        ) + EndToEndLatencyAndThroughputPrediction(
-          // take critical path (highest predicted latency of two parents)
-          endToEndLatency = List(parent1CombinedPredictions.endToEndLatency, parent2CombinedPredictions.endToEndLatency).maxBy(_.amount),
+            EndToEndLatency(predictionsPerOperator(b).processingLatency.amount + networkLatencyToParents(b)),
+            predictionsPerOperator(b).throughput
+          ) + EndToEndLatencyAndThroughputPrediction(
+            // take critical path (highest predicted latency of two parents)
+            endToEndLatency = List(parent1CombinedPredictions.endToEndLatency, parent2CombinedPredictions.endToEndLatency).maxBy(_.amount),
             // this is the eventRateIn (total incoming events) the current operator will see
-          throughput = parent1CombinedPredictions.throughput + parent2CombinedPredictions.throughput
+            throughput = parent1CombinedPredictions.throughput + parent2CombinedPredictions.throughput
         )
           // this operators throughput depends on how + is defined (see EndToEndLatencyAndThroughputPrediction)
 
         case u: UnaryQuery =>
           try {
-          EndToEndLatencyAndThroughputPrediction(
-          EndToEndLatency(predictionsPerOperator(u).processingLatency.amount
-            + networkLatencyToParents(u)),
-          predictionsPerOperator(u).throughput
-        ) + combinePerOperatorPredictionsRec(u.sq)
+            implicit val selectivity: Double = operatorSelectivity(u)
+            EndToEndLatencyAndThroughputPrediction(
+              EndToEndLatency(predictionsPerOperator(u).processingLatency.amount
+              + networkLatencyToParents(u)),
+              predictionsPerOperator(u).throughput
+            ) + combinePerOperatorPredictionsRec(u.sq)
           } catch {
             case e: Throwable =>
               log.error(s"networkLatencyToParents contains op: ${networkLatencyToParents.contains(u)}")

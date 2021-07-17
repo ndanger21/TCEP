@@ -16,6 +16,7 @@ import tcep.graph.transition._
 import tcep.graph.transition.mapek.ExchangeablePerformanceModelMAPEK.{GetContextSample, GetQueryPerformancePrediction}
 import tcep.graph.transition.mapek.contrast.ContrastMAPEK.{GetCFM, GetContextData, RunPlanner}
 import tcep.graph.transition.mapek.contrast._
+import tcep.machinenodes.consumers.Consumer.{AllRecords, GetAllRecords}
 import tcep.placement.PlacementStrategy
 import tcep.prediction.PredictionHelper.{EndToEndLatencyAndThroughputPrediction, OfflineAndOnlinePredictions, Throughput}
 import tcep.prediction.QueryPerformancePredictor.GetPredictionForPlacement
@@ -28,7 +29,7 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.jdk.CollectionConverters.collectionAsScalaIterableConverter
 import scala.util.{Failure, Success}
 
-class ExchangeablePerformanceModelMAPEK(query: Query, mode: TransitionConfig, startingPlacementStrategy: String, consumer: ActorRef)(implicit cluster: Cluster, context: ActorContext)
+class ExchangeablePerformanceModelMAPEK(query: Query, mode: TransitionConfig, startingPlacementStrategy: String, val consumer: ActorRef)(implicit cluster: Cluster, context: ActorContext)
   extends MAPEK(context) {
   val log = LoggerFactory.getLogger(getClass)
   override val monitor: ActorRef = context.actorOf(Props(classOf[DecentralizedMonitor], this, cluster), "MonitorEndpoint")
@@ -36,6 +37,7 @@ class ExchangeablePerformanceModelMAPEK(query: Query, mode: TransitionConfig, st
   override val planner: ActorRef = context.actorOf(Props(classOf[ExchangeablePerformanceModelPlanner], this, cluster))
   override val executor: ActorRef = context.actorOf(Props(classOf[ExchangeablePerformanceModelExecutor], this))
   override val knowledge: ActorRef = context.actorOf(Props(classOf[ExchangeablePerformanceModelKnowledge], this, query, mode, startingPlacementStrategy), "knowledge")
+
   log.info("creating exchangeable performanceModel MAPEK")
 
   def getQueryRoot: Query = query
@@ -147,6 +149,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
           publisherEventRates: Map[String, Throughput] <- TCEPUtils.getPublisherEventRates()
           publishers: Map[String, ActorRef] <- TCEPUtils.getPublisherActors()
           contextSample <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
+          currentThroughput <- (mapek.consumer ? GetAllRecords).mapTo[AllRecords].map(_.recordFrequency.lastMeasurement)
         } yield {
           log.info("received context sample and current placement")
           val rootOperator: Query = mapek.getQueryRoot
@@ -160,7 +163,7 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
               pred <- (queryPerformancePredictor ? GetPredictionForPlacement(rootOperator, currentPlacement, placement, publisherEventRates, Some(contextSample), p.name)).mapTo[EndToEndLatencyAndThroughputPrediction]
             } yield p.name -> (pred, placement)
           }).map(p => {
-            SpecialStats.log(this.toString, "placement_performance_predictions", s"${p.map(e => s"${e._1};${e._2._1.endToEndLatency.amount.toNanos / 1e6};${e._2._1.throughput.amount})}").mkString(";")};took ${(System.nanoTime() - start) / 1e6}ms")
+            SpecialStats.log(this.toString, "placement_performance_predictions", s"${p.map(e => s"${e._1};${e._2._1.endToEndLatency.amount.toNanos / 1e6};${e._2._1.throughput.amount}").mkString(";")};took ${(System.nanoTime() - start) / 1e6}ms")
             log.info("received predictions \n{}", p.map(e => e._1 -> e._2._1).mkString("\n"))
             // check each requirement
             val qosFulfillingPlacements = p.filter(placement => {
@@ -180,9 +183,29 @@ class ExchangeablePerformanceModelPlanner(mapek: ExchangeablePerformanceModelMAP
               else throw new IllegalArgumentException(s"unknown optimization target metric $optimizationTarget")
 
               log.info("found requirement-fulfilling placement strategy {}:\n{}", transitionTarget._1, transitionTarget._2._1)
-              mapek.executor ! ExecuteTransitionWithPlacement(transitionTarget._1, transitionTarget._2._2)
+              val betterThanCurrent: Boolean = optimizationTarget match {
+                case "latency" => transitionTarget._2._1.endToEndLatency.amount.toMillis < currentLatency
+                case "throughput" => transitionTarget._2._1.throughput.getEventsPerSec > currentThroughput.getOrElse(0)
+                case _ => true
+              }
+              if(betterThanCurrent)
+                mapek.executor ! ExecuteTransitionWithPlacement(transitionTarget._1, transitionTarget._2._2)
+              else {
+                log.info("best predicted latency {},current average {}", transitionTarget._2._1.endToEndLatency, currentLatency)
+                log.info("best predicted throughput {}, current average {}", transitionTarget._2._1.throughput.getEventsPerSec, currentThroughput)
+                log.info("not executing transition because no improvement in {}", optimizationTarget)
+              }
             } else {
-              log.error("no placement strategy with sufficient predicted performance for the following requirements could be found: \n{}\n placement predictions were \n{}", qosRequirements.mkString("\n"), p.map(e => e._2._1).mkString("\n"))
+              log.warning("no placement strategy with sufficient predicted performance for the following requirements could be found: \n{}\n placement predictions were \n{}", qosRequirements.mkString("\n"), p.map(e => e._2._1).mkString("\n"))
+              val transitionTarget = qosRequirements.head match {
+                case LatencyRequirement(operator, latency, otherwise, name) =>  p.minBy(_._2._1.endToEndLatency.amount)
+                case f: FrequencyRequirement => p.maxBy(_._2._1.throughput.getEventsPerSec)
+                case r: Requirement =>
+                  log.warning("ignoring requirement {} since there is no prediction model for it", r)
+                  p.minBy(_._2._1.endToEndLatency.amount)
+              }
+              log.info("transiting to placement closest to fulfilling the requirement instead: {}", transitionTarget)
+              mapek.executor ! ExecuteTransitionWithPlacement(transitionTarget._1, transitionTarget._2._2)
             }
           })
         }

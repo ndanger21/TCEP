@@ -1,5 +1,5 @@
 // this must be the same as manager ip since requests are handled by route.js
-const SERVER = "10.2.1.40"
+const SERVER = "10.2.1.92"
 const GUI_PORT = 3000
 const INTERACTIVE_SIMULATION_ENABLED = false
 

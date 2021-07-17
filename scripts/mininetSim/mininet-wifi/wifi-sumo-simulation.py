@@ -57,6 +57,7 @@ def topology(enable_tcep=True):
     if mapek == "ExchangeablePerformanceModel":
         prediction_server = net.addHost('h1', ip='20.0.0.250')
         #some_cmd > some_file 2>&1 &
+        prediction_server.cmd("pkill -f 'run_prediction_endpoint*'")
         prediction_server.cmd("python3 run_prediction_endpoint.py -l %s -t %s > ../logs/predictionServerConsole.log 2>&1 &" %
                               (latency_model, throughput_model))
         info("started prediction endpoint on 20.0.0.250")
@@ -259,6 +260,8 @@ if __name__ == '__main__':
     gui_ip = sys.argv[15] if len(sys.argv) > 15 else "172.30.0.254"
     latency_model = sys.argv[16] if len(sys.argv) > 16 else "tpot_trained_pipeline_8_mininet_accident_1s_combined_samples.csv_processingLatencyMean.joblib"
     throughput_model = sys.argv[17] if len(sys.argv) > 17 else "autosklearn_trained_pipeline_8_mininet_accident_1s_combined_samples.csv_eventRateOut.joblib"
+    latency_model = latency_model.split("/")[-1]
+    throughput_model = throughput_model.split("/")[-1]
     homedir = '/home/' + user
     JARFILE = homedir + '/tcep/tcep_2.12-0.0.1-SNAPSHOT-one-jar.jar'
     with open(homedir + "/tcep/application.conf") as f:

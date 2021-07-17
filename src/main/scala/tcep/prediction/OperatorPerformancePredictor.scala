@@ -144,10 +144,12 @@ object PredictionHelper {
     }
   }
   case class EndToEndLatencyAndThroughputPrediction(endToEndLatency: EndToEndLatency, throughput: Throughput) {
-    def +(parentPrediction: EndToEndLatencyAndThroughputPrediction): EndToEndLatencyAndThroughputPrediction = {
+    def +(parentPrediction: EndToEndLatencyAndThroughputPrediction)(implicit operatorSelectivity: Double): EndToEndLatencyAndThroughputPrediction = {
+      val selectivityBasedEstimate = parentPrediction.throughput.amount * operatorSelectivity
+      val averagedThroughput = (selectivityBasedEstimate + throughput.amount) / 2 // combine parent throughput prediction and child prediction
       EndToEndLatencyAndThroughputPrediction(
         endToEndLatency + parentPrediction.endToEndLatency,
-        throughput // always keep the child output rate since we want the output at the root operator TODO could change this to be average based on parent throughput and child selectivity
+        Throughput(averagedThroughput, throughput.interval)
       )
     }
   }

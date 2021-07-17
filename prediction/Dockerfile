@@ -10,5 +10,5 @@ COPY tpot_trained_pipeline_8_yahoo_geni_5s_combined_samples.csv_eventRateOut.job
 COPY run_prediction_endpoint.py .
 
 CMD python3 run_prediction_endpoint.py \
-    -l h2o_yahoo_geni_5s_GBM_grid__1_AutoML_20210713_003150_model_485_processingLatencyMean \
-    -t tpot_trained_pipeline_8_yahoo_geni_5s_combined_samples.csv_eventRateOut.joblib > /app/logs/predictionServerConsole.log 2>&1
+    -l autosklearn_trained_pipeline_8_yahoo_geni_5s_combined_samples.csv_processingLatencyMean.joblib \
+    -t autosklearn_trained_pipeline_8_yahoo_geni_5s_combined_samples.csv_eventRateOut.joblib > /app/logs/predictionServerConsole.log 2>&1

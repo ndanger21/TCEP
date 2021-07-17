@@ -28,8 +28,8 @@ case class RegularPublisher(eventRate: Throughput, createEventFromId: Integer =>
 
   val eventSizeOut: Long = SizeEstimator.estimate(createEventFromId(0))
   var eventRateOut: Throughput = eventRate // events/s
-  var nextEventRates: List[Throughput] = 1 to 3 map(i => Throughput(eventRate.getEventsPerSec + i * 20, FiniteDuration(1, TimeUnit.SECONDS))) toList
-  val eventRateChangeDelay: FiniteDuration = FiniteDuration(150, TimeUnit.MINUTES)
+  var nextEventRates: List[Throughput] = 1 to 4 map(i => Throughput(eventRate.getEventsPerSec + i * 20, FiniteDuration(1, TimeUnit.SECONDS))) toList
+  val eventRateChangeDelay: FiniteDuration = FiniteDuration(30, TimeUnit.MINUTES)
 
   override def preStart() = {
     log.info(s"starting regular publisher with publishing rate $eventRate and roles ${cluster.getSelfRoles}; event rate increases to ${nextEventRates} each hour")

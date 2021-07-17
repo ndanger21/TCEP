@@ -64,10 +64,10 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   val samplingInterval = new FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
   val requirementChangeDelay = new FiniteDuration(300, TimeUnit.SECONDS)
   val ws = slidingWindow(1.seconds) // join window size
-  val latencyRequirement = latency < timespan(30.milliseconds) otherwise None
+  val latencyRequirement = latency < timespan(100.milliseconds) otherwise None
   val messageHopsRequirement = hops < 3 otherwise None
   val loadRequirement = load < MachineLoad(10.0d) otherwise None
-  val frequencyRequirement = frequency > Frequency(500, 1) otherwise None
+  val frequencyRequirement = frequency > Frequency(2000, samplingInterval.toSeconds.toInt) otherwise None
   var graphs: Map[Int, QueryGraph] = Map()
   //val query = ConfigFactory.load().getStringList("constants.query")
   // performance influence model paths for LearnOn
@@ -714,12 +714,12 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       case Mode.LINEAR_ROAD =>
         this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("LinearRoad simulation ended"),
-          Set(latencyRequirement), Some(Set()))
+          Set(latencyRequirement), None, true)
 
       case Mode.YAHOO_STREAMING =>
         this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("YahooStreaming simulation ended"),
-          Set(latencyRequirement), None, true)
+          Set(frequencyRequirement), None, true)
     }
 
   } catch {
