@@ -21,7 +21,6 @@ import tcep.prediction.PredictionHelper.Throughput
 import tcep.simulation.tcep.GUIConnector
 import tcep.utils.SpecialStats
 
-import java.util.UUID
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.{Failure, Success}
@@ -63,20 +62,23 @@ class QueryGraph(query: Query,
     log.info(s"Creating and starting new QueryGraph with placement ${
       if (startingPlacementStrategy.isDefined) startingPlacementStrategy.get else "default (depends on MAPEK implementation)"} and publishers \n ${publishers.mkString("\n")}")
     val queryDependencies = extractOperatorsAndThroughputEstimates(query)
-    for {
-      rootOperator <- startDeployment(eventCallback, queryDependencies)
-    } yield {
+    startDeployment(eventCallback, queryDependencies) flatMap { rootOperator =>
       consumer ! SetQosMonitors
-      clientNode = context.system.actorOf(Props(classOf[ClientNode], rootOperator, mapek, consumer, transitionConfig, queryDependencies(query)._4),
-        s"ClientNode-${UUID.randomUUID.toString}")
-      mapek.knowledge ! SetClient(clientNode)
-      mapek.knowledge ! SetTransitionMode(transitionConfig)
-      mapek.knowledge ! SetDeploymentStatus(true)
-      Thread.sleep(100) // wait a bit here to avoid glitch where last addOperator msg arrives at knowledge AFTER
-      // StartExecution msg is sent
-      mapek.knowledge ! NotifyOperators(StartExecution(startingPlacementStrategy.getOrElse(PietzuchAlgorithm.name)))
-      log.info(s"started query ${query} \n in mode ${transitionConfig} with PlacementAlgorithm ${placementStrategy.name} and placement \n${deployedOperators.mkString("\n")}")
-      rootOperator
+      val clientProps = Props(classOf[ClientNode], rootOperator, mapek, consumer, transitionConfig, queryDependencies(query)._4)
+      for {
+        clientN <- NodeFactory.createOperator(HostInfo(cluster.state.members.find(_.hasRole("Consumer")).get, ClientDummyQuery()), clientProps, brokerQoSMonitor)
+      } yield {
+        clientNode = clientN
+        //clientNode = context.system.actorOf(Props(clientProps),s"ClientNode-${UUID.randomUUID.toString}")
+        mapek.knowledge ! SetClient(clientNode)
+        mapek.knowledge ! SetTransitionMode(transitionConfig)
+        mapek.knowledge ! SetDeploymentStatus(true)
+        Thread.sleep(100) // wait a bit here to avoid glitch where last addOperator msg arrives at knowledge AFTER
+        // StartExecution msg is sent
+        mapek.knowledge ! NotifyOperators(StartExecution(startingPlacementStrategy.getOrElse(PietzuchAlgorithm.name)))
+        log.info(s"started query ${query} \n in mode ${transitionConfig} with PlacementAlgorithm ${placementStrategy.name} and placement \n${deployedOperators.mkString("\n")}")
+        rootOperator
+      }
     }
   }
 

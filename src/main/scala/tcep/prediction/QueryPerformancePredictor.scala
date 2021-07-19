@@ -258,8 +258,13 @@ class QueryPerformancePredictor(cluster: Cluster) extends PredictionHttpClient {
         case _ => throw new IllegalArgumentException(s"unknown operator type $curOp")
       }
     }
-
-    combinePerOperatorPredictionsRec(rootOperator)
+    val clientOpPred = predictionsPerOperator(ClientDummyQuery())
+    val clientPred = EndToEndLatencyAndThroughputPrediction(EndToEndLatency(clientOpPred.processingLatency.amount), clientOpPred.throughput)
+    val queryPred = combinePerOperatorPredictionsRec(rootOperator)
+    implicit val sel = 1.0d
+    val combined = clientPred + queryPred
+    log.info("client prediction is {}, query prediction is {}, combined is {}", clientPred, queryPred, combined)
+    combined
   }
 
   /**

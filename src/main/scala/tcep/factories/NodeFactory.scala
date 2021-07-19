@@ -34,6 +34,7 @@ object NodeFactory {
       case cn: ConverterQuery =>            classOf[ConverterNode]
       case sf: ShrinkingFilterQuery =>      classOf[ShrinkingFilterNode]
       case winStat: WindowStatisticQuery => classOf[WindowStatisticNode]
+      case c: ClientDummyQuery =>           classOf[ClientNode]
       case _ => throw new IllegalArgumentException(s"cannot create unknown operator type: $query")
     }
   }

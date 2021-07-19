@@ -67,7 +67,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   val latencyRequirement = latency < timespan(100.milliseconds) otherwise None
   val messageHopsRequirement = hops < 3 otherwise None
   val loadRequirement = load < MachineLoad(10.0d) otherwise None
-  val frequencyRequirement = frequency > Frequency(2000, samplingInterval.toSeconds.toInt) otherwise None
+  val frequencyRequirement = frequency > Frequency(200, samplingInterval.toSeconds.toInt) otherwise None
   var graphs: Map[Int, QueryGraph] = Map()
   //val query = ConfigFactory.load().getStringList("constants.query")
   // performance influence model paths for LearnOn

@@ -151,7 +151,7 @@ fi
 #TODO update models
 if [ -z "$throughput_model" ]; then
   #throughput_model="h2o_StackedEnsemble_BestOfFamily_AutoML_20210714_182448_accident_5s_throughput"
-  throughput_model=${work_dir}/prediction/"tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_eventRateOut.joblib"
+  throughput_model=${work_dir}/prediction/"autosklearn_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_eventRateOut.joblib"
 fi
 if [ -z "$latency_model" ]; then
   latency_model=${work_dir}/prediction/"tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_processingLatencyMean.joblib"

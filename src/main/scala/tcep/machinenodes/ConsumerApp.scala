@@ -4,6 +4,7 @@ import akka.actor.{ActorSystem, Props}
 import org.discovery.vivaldi.DistVivaldiActor
 import tcep.config.ConfigurationParser
 import tcep.machinenodes.consumers.{AccidentConsumer, AnalysisConsumer, AvgSpeedConsumer, TollComputingConsumer}
+import tcep.machinenodes.helper.actors.TaskManagerActor
 
 /**
   * Startup Subscriber Application and Creates TaskManagerActor
@@ -20,7 +21,7 @@ object ConsumerApp extends ConfigurationParser with App {
   val actorSystem: ActorSystem = ActorSystem(config.getString("clustering.cluster.name") , config)
   DistVivaldiActor.createVivIfNotExists(actorSystem)
   logger.info("Adding Consumer")
-  //actorSystem.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
+  actorSystem.actorOf(Props(classOf[TaskManagerActor]), "TaskManager")
   val loadTestMax = options.getOrElse('loadTestMax, "1").toInt
   0 until loadTestMax map { i =>
     val consumer = options.getOrElse('kind, "none") match {
