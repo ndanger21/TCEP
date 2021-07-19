@@ -12,7 +12,7 @@ transitionStrategy = sys.argv[5]
 transitionExecutionMode = sys.argv[6]
 eventRate = sys.argv[7]
 
-dockerStackPath = os.path.join(project_root, "docker-stack.yml")
+dockerStackPath = os.path.join(project_root, "docker-stack_maki.yml")
 
 with open(dockerStackPath) as f:
     modeStr = re.sub('--mode \d+', '--mode ' + mode , f.read())

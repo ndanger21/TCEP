@@ -156,6 +156,10 @@ fi
 if [ -z "$latency_model" ]; then
   latency_model=${work_dir}/prediction/"tpot_trained_pipeline_8_mininet_accident_5s_combined_samples.csv_processingLatencyMean.joblib"
 fi
+IFS='/' read -ra throughput_arr <<< "$throughput_model"
+IFS='/' read -ra latency_arr <<< "$latency_model"
+latency_model_name=${latency_arr[-1]}
+throughput_model_name=${throughput_arr[-1]}
 
 host=${u}@${machine}
 #if [[ ${controller_ip} == "localhost" ]] || [[ ${controller_ip} == "127.0.0.1" ]]; then
@@ -274,8 +278,8 @@ start_gui() {
 }
 
 setup_prediction_endpoint() {
-  ssh $host [ ! -f ~/tcep/mininet-wifi/${latency_model} ] && scp ${latency_model} ${host}:~/tcep/mininet-wifi/
-  ssh $host [ ! -f ~/tcep/mininet-wifi/${throughput_model} ] && scp ${throughput_model} ${host}:~/tcep/mininet-wifi/
+  ssh $host [ ! -f ~/tcep/mininet-wifi/${latency_model_name} ] && scp ${latency_model} ${host}:~/tcep/mininet-wifi/
+  ssh $host [ ! -f ~/tcep/mininet-wifi/${throughput_model_name} ] && scp ${throughput_model} ${host}:~/tcep/mininet-wifi/
   scp ${work_dir}/prediction/run_prediction_endpoint.py ${host}:~/tcep/mininet-wifi
 }
 

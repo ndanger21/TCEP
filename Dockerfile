@@ -1,4 +1,6 @@
-FROM ibmjava:8-sfj-alpine
+# only openjdk works for profiling with visualvm
+FROM openjdk:8-alpine3.9
+#FROM ibmjava:8-sfj-alpine
 #FROM ibmjava:8-sdk-alpine
 # install zulu openjdk11-jre for alpine
 #RUN mkdir /usr/lib/jvm

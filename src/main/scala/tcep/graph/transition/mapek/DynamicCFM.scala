@@ -46,8 +46,9 @@ class DynamicCFM(rootOperator: Query) extends CFM {
     * @param context most recent feature samples of each operator
     * @return the current context config with the given sample values for each operator
     */
-  def getCurrentContextConfigFromSamples(context: Map[Query, Sample]): Config = {
-    try {
+  def getCurrentContextConfigFromSamples(context: Map[Query, Sample]): Option[Config] = {
+    if(context.isEmpty) None
+    else try {
       val root: Feature = FmUtil.findFeatureByName(cfm, ROOT).get
       val contextFeatureGroup: Feature = FmUtil.findFeatureByName(cfm, CONTEXT).get
       val queryFeatureGroup: Feature = FmUtil.findFeatureByName(cfm, QUERY).get
@@ -74,11 +75,11 @@ class DynamicCFM(rootOperator: Query) extends CFM {
         })
       })
       ConfigUtil.checkConfig(contextConfig)
-      contextConfig
+      Some(contextConfig)
     } catch {
       case e: Throwable =>
         log.error(s"failed to build current context config from context \n${context} \n for CFM $cfm", e)
-        throw e
+        None
     }
 
   }

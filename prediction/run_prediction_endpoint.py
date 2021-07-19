@@ -229,6 +229,11 @@ if __name__ == '__main__':
         selected_features_throughput.remove("brokerCPULoad")
         selected_features_throughput.remove("networkParentLatencyMean")
 
+    if "linearRoad" in args.throughputModel or (("accident" in args.throughputModel) and ("autosklearn" in args.throughputModel)):
+        # slightly different order
+        selected_features_throughput = ['Relaxation', 'Rizou', 'ProducerConsumer', 'Random', 'GlobalOptimalBDP', 'MDCEP',
+                                        'operatorSelectivity', 'eventRateIn', 'processingLatencyMean', 'processingLatencyStdDev', 'networkParentLatencyMean', 'brokerCPULoad']
+
     selected_features_processing_latency = ["Relaxation", "Rizou", "ProducerConsumer", "Random", "GlobalOptimalBDP", "MDCEP",
                                             "eventSizeInKB", "operatorSelectivity", "interArrivalMean", "interArrivalStdDev",
                                             "brokerCPULoad", "eventRateOut"]

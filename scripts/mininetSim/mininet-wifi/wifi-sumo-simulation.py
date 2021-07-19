@@ -136,6 +136,8 @@ def topology(enable_tcep=True):
             time.sleep(0.05)
         subprocess.call(['util/m', car.name, 'wpa_cli', '-i %s' % car.wintfs[0].name, 'roam %s' % ap.wintfs[0].mac])
 
+    #net.pingAllFull()
+
     # Draw the network and write traces to files
     if enable_gui:
         nodes = net.cars + net.aps
@@ -235,7 +237,7 @@ def topology(enable_tcep=True):
 
 
 if __name__ == '__main__':
-    assert os.path.exists('/opt/ibm/java-x86_64-80/bin')
+    #assert os.path.exists('/opt/ibm/java-x86_64-80/bin')
     setLogLevel('info')
     info("python args: %s" % sys.argv)
     # global constants

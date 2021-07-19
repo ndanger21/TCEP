@@ -23,18 +23,21 @@ class TollComputingConsumer extends Consumer {
 
 object TollComputingConsumer {
   def tollComputingQuery(eventStreams: Seq[Vector[Stream1[_ <: StreamDataType]]], requirements: Set[Requirement]): Query = {
-    val streams = eventStreams(0).asInstanceOf[Vector[Stream1[LinearRoadDataNew]]]
-    val and01 = streams(0).and(streams(1))
-    val and23 = streams(2).and(streams(3))
-    val and45 = streams(4).and(streams(5))
-    val and0123 = and01.and(and23)
-    val and012345 = and0123.and(and45)
-    val sectionAvgSpeeds = 50 to 52 map (section => { //One less than actual sections because last cant generate toll
-      val window = SlidingWindow6(and012345, Set(), windowSize=5*60, sectionFilter = Some(section))
+    def streams = eventStreams(0).asInstanceOf[Vector[Stream1[LinearRoadDataNew]]].map(s => Stream1[LinearRoadDataNew](s.publisherName, s.requirements))
+    def conjunctions = {
+      val and01 = streams(0).and(streams(1))
+      val and23 = streams(2).and(streams(3))
+      val and45 = streams(4).and(streams(5))
+      val and0123 = and01.and(and23)
+      val and012345 = and0123.and(and45)
+      and012345
+    }
+    def sectionAvgSpeeds(section: Int) = { //One less than actual sections because last cant generate toll
+      val window = SlidingWindow6(conjunctions, Set(), windowSize=5*60, sectionFilter = Some(section))
       NewAverage1(window)
-    })
-    val observer = ObserveChange6(and012345)
-    val avg01 = sectionAvgSpeeds(0).and(sectionAvgSpeeds(1))
+    }
+    val observer = ObserveChange6(conjunctions)
+    val avg01 = sectionAvgSpeeds(50).and(sectionAvgSpeeds(51))
     val join = avg01.join(observer, slidingWindow(1.seconds), slidingWindow(1.seconds), requirements.toSeq :_*)
     join
 

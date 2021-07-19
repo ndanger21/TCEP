@@ -66,11 +66,12 @@ class ContrastAnalyzer(mapek: MAPEK, delay: FiniteDuration = 1 minute, interval:
             currentLatency <- (mapek.knowledge ? GetAverageLatency(mapek.samplingInterval.toMillis)).mapTo[Double]
             cfm <- (mapek.knowledge ? GetCFM).mapTo[CFM]
             contextConfig <- getCurrentContextConfig(cfm)
+            if contextConfig.isDefined
             requirements <- (mapek.knowledge ? GetRequirements).mapTo[List[Requirement]]
           } yield {
             val qosRequirements: Set[Requirement] = requirements.toSet
             log.info("sending context config to Planner ")
-            mapek.planner ! RunPlanner(cfm, contextConfig, currentLatency, qosRequirements)
+            mapek.planner ! RunPlanner(cfm, contextConfig.get, currentLatency, qosRequirements)
           }
         } catch {
           case e: Throwable => log.error(e, "failed to collect data and send RunPlanner")
@@ -78,12 +79,12 @@ class ContrastAnalyzer(mapek: MAPEK, delay: FiniteDuration = 1 minute, interval:
       } else log.info("not generating and sending context config since transitions are disabled in application.conf")
   }
 
-  def getCurrentContextConfig(cfm: CFM): Future[Config] = {
+  def getCurrentContextConfig(cfm: CFM): Future[Option[Config]] = {
     log.info("calling UN-overridden getCurrentContextConfig")
     for {
       contextData <- (mapek.knowledge ? GetContextData).mapTo[Map[String, AnyVal]]
       if contextData.nonEmpty
-    } yield cfm.getCurrentContextConfig(contextData)
+    } yield Some(cfm.getCurrentContextConfig(contextData))
   }
 
   case object GenerateAndSendContextConfig

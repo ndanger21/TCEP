@@ -62,9 +62,9 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
   val totalDuration = if(durationInMinutes.isDefined) FiniteDuration(durationInMinutes.get, TimeUnit.MINUTES) else FiniteDuration(defaultDuration, TimeUnit.MINUTES)
   val startDelay = new FiniteDuration(5, TimeUnit.SECONDS)
   val samplingInterval = new FiniteDuration(ConfigFactory.load().getInt("constants.mapek.sampling-interval"), TimeUnit.MILLISECONDS)
-  val requirementChangeDelay = new FiniteDuration(300, TimeUnit.SECONDS)
+  val requirementChangeDelay = new FiniteDuration(30, TimeUnit.MINUTES)
   val ws = slidingWindow(1.seconds) // join window size
-  val latencyRequirement = latency < timespan(100.milliseconds) otherwise None
+  val latencyRequirement = latency < timespan(30.milliseconds) otherwise None
   val messageHopsRequirement = hops < 3 otherwise None
   val loadRequirement = load < MachineLoad(10.0d) otherwise None
   val frequencyRequirement = frequency > Frequency(200, samplingInterval.toSeconds.toInt) otherwise None
@@ -697,7 +697,7 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
         val used_mapek = ConfigFactory.load().getString("constants.mapek.type")
         this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info(s"$transitionMode $startingPlacementAlgorithm algorithm Simulation with SPLC data collection enabled ended"),
-          Set(latencyRequirement), Some(Set(messageHopsRequirement)), true)
+          Set(latencyRequirement), Some(Set(latencyRequirement, frequencyRequirement)), true)
 
       case Mode.TEST_GUI => this.testGUI(0, 0, 1)
       case Mode.DO_NOTHING => log.info("simulation ended!")
@@ -714,12 +714,12 @@ class SimulationSetup(mode: Int, transitionMode: TransitionConfig, durationInMin
       case Mode.LINEAR_ROAD =>
         this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("LinearRoad simulation ended"),
-          Set(latencyRequirement), None, true)
+          Set(), Some(Set(frequencyRequirement)), true)
 
       case Mode.YAHOO_STREAMING =>
         this.runSimulation(0, startingPlacementAlgorithm, transitionMode,
           () => log.info("YahooStreaming simulation ended"),
-          Set(frequencyRequirement), None, true)
+          Set(latencyRequirement, frequencyRequirement), Some(Set(latencyRequirement, frequencyRequirement)), true)
     }
 
   } catch {

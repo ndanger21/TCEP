@@ -47,7 +47,7 @@ abstract class QueryPerformancePredictorTest extends MultiJVMTestSetup(3) {
           filter -> (50 milliseconds)
         )
         val queryPredictor: TestActorRef[QueryPerformancePredictor] = TestActorRef.create(system, Props(classOf[QueryPerformancePredictor], cluster))
-        val perQueryPredictions = queryPredictor.underlyingActor.combinePerOperatorPredictions(filter, perOperatorPredictions, networkLatencies)
+        val perQueryPredictions = queryPredictor.underlyingActor.combinePerOperatorPredictions(filter, perOperatorPredictions, networkLatencies, Map(streamA -> 1, streamB -> 1, conjunction -> 1, filter -> 1))
         assert(perQueryPredictions.endToEndLatency == EndToEndLatency(1563 milliseconds), "predicted end-to-end latency must equal longest path among all parents")
         assert(perQueryPredictions.throughput == Throughput(10, 1 second), "query throughput must equal root operator throughput")
       }

@@ -102,7 +102,7 @@ class DecentralizedMonitor(mapek: MAPEK)(implicit cluster: Cluster) extends Moni
 }
 
 class ExchangeablePerformanceModelAnalyzer(mapek: ExchangeablePerformanceModelMAPEK) extends ContrastAnalyzer(mapek) {
-  override def getCurrentContextConfig(cfm: CFM): Future[Config] = {
+  override def getCurrentContextConfig(cfm: CFM): Future[Option[Config]] = {
     for {
       contextData <- (mapek.knowledge ? GetContextSample).mapTo[Map[Query, (Samples, List[OfflineAndOnlinePredictions])]]
     } yield cfm.asInstanceOf[DynamicCFM].getCurrentContextConfigFromSamples(contextData.map(e => e._1 -> e._2._1.head))
@@ -284,10 +284,11 @@ class ExchangeablePerformanceModelKnowledge(mapek: MAPEK, rootOperator: Query, t
         } else mostRecentSamples = mostRecentSamples.updated(operator, sample :: List())
       } else {
         mostRecentSamples = mostRecentSamples.updated(operator, sample :: prevSamples)
-        log.debug("received new sample {},\n most recent sample count: {} of {}", sample, mostRecentSamples(operator).size, minOnlineSamples)
+        log.debug("received new sample from {},\n most recent sample count: {} of min {} for online predictions, got samples from {} operators", operator.getClass.getSimpleName, mostRecentSamples(operator).size, minOnlineSamples, mostRecentSamples.size)
       }
 
     case GetBatchPredictionTick =>
+      log.info("got prediction tick, {} of {} ({}) samples", mostRecentSamples.size, operators.size, qSize)
       if(mostRecentSamples.size >= operators.size && mostRecentSamples.size >= qSize ) {
         val lastSamples = mostRecentSamples.map(s => s._1 -> s._2.head)
         for {
